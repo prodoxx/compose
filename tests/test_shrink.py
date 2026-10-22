@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import contextlib, hashlib, io, os, subprocess, sys, tempfile, unittest
+import contextlib, hashlib, importlib.machinery, importlib.util, io, os, subprocess, sys, tempfile, unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -112,7 +112,42 @@ class Command(unittest.TestCase):
 
 
 class Args(unittest.TestCase):
-    pass
+    @classmethod
+    def setUpClass(cls):
+        bin_dir = Path(__file__).resolve().parents[1] / "bin"
+        spec = importlib.util.spec_from_loader("fc", importlib.machinery.SourceFileLoader("fc", str(bin_dir / "compose.py")))
+        cls.fc = importlib.util.module_from_spec(spec)
+        for m in [m for m in sys.modules if m.startswith("fc_") and m not in ("fc_cost", "fc_mcp", "fc_sessions")]:
+            del sys.modules[m]
+        spec.loader.exec_module(cls.fc)
+
+    def _args(self, *argv):
+        with mock.patch.object(sys, "argv", ["compose", "shrink", *argv]), mock.patch.object(self.fc.fc_shrink, "cmd_shrink") as cmd:
+            self.fc.main()
+        return cmd.call_args.args[0]
+
+    def test_the_defaults_reach_cmd_shrink(self):
+        a = self._args("a.png", "b.png")
+        self.assertEqual((a.images, a.out, a.max_edge, a.quality), (["a.png", "b.png"], None, 1000, 72))
+
+    def test_each_flag_reaches_cmd_shrink(self):
+        a = self._args("--out", "d", "--max-edge", "500", "--quality", "60", "a.png")
+        self.assertEqual((a.images, a.out, a.max_edge, a.quality), (["a.png"], "d", 500, 60))
+
+    def test_a_flag_before_the_images_still_takes_them(self):
+        self.assertEqual(self._args("--quality", "60", "a.png").images, ["a.png"])
+
+    def test_a_non_integer_size_or_quality_is_a_usage_error(self):
+        self.assertEqual(self._args("--max-edge", "500", "--quality", "60", "a.png").max_edge, 500)
+        for argv in (["--max-edge", "big", "a.png"], ["--quality", "high", "a.png"]):
+            with self.subTest(argv=argv), self.assertRaises(SystemExit) as cm, contextlib.redirect_stderr(io.StringIO()):
+                self._args(*argv)
+            self.assertEqual(cm.exception.code, 2)
+
+    def test_no_image_is_a_usage_error(self):
+        with self.assertRaises(SystemExit) as cm, contextlib.redirect_stderr(io.StringIO()):
+            self._args()
+        self.assertEqual(cm.exception.code, 2)
 
 
 if __name__ == "__main__":
