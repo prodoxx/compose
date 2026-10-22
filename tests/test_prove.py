@@ -392,7 +392,7 @@ class KeepRecord(Repo):
         self.config(e2e=[jev_case("c", spec)])
         report, out = {"e2e": []}, io.StringIO()
         with mock.patch.object(fc.fc_shrink, "shrink", side_effect=fake) as shrink, contextlib.redirect_stdout(out):
-            ok = fc.fc_verify.e2e_stage(self.repo, json.loads((self.proj / "verify.json").read_text()), {}, report, [], rec, keep=keep)
+            ok = fc.fc_verify.e2e_stage(self.repo, json.loads((self.proj / "verify.json").read_text()), {}, report, [], rec, keep=keep, retry=False)
         return ok, report["e2e"][0], shrink, out.getvalue()
 
     def test_a_failed_case_keeps_its_screenshots_shrunk_in_place(self):
