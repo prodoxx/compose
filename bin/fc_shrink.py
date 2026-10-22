@@ -4,6 +4,7 @@ import hashlib
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import NamedTuple, Optional
@@ -50,4 +51,10 @@ def shrink(path: Path, out_dir: Optional[Path] = None, max_edge: int = 1000, qua
 
 def cmd_shrink(a: argparse.Namespace) -> None:
     """Print one line per image `a` names: its pixels and bytes before and after."""
-    raise NotImplementedError("cmd_shrink")
+    for image in a.images:
+        r = shrink(Path(image), Path(a.out) if a.out else None, a.max_edge, a.quality)
+        if r.warning:
+            print(f"{image}  unchanged")
+            print(r.warning, file=sys.stderr)
+        else:
+            print(f"{r.path}  {r.before.width}x{r.before.height} {r.before.bytes} B -> {r.after.width}x{r.after.height} {r.after.bytes} B")
