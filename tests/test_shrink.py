@@ -1,6 +1,7 @@
 import hermetic  # first: no test sees the real home
 import contextlib, hashlib, io, os, subprocess, sys, tempfile, unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 os.environ["HERDR_ENV"] = ""
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bin"))
@@ -73,7 +74,41 @@ class Shrink(unittest.TestCase):
 
 
 class Command(unittest.TestCase):
-    pass
+    def _run(self, images, returns, out=None, max_edge=1000, quality=72):
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with mock.patch.object(fc_shrink, "shrink", side_effect=returns) as sh, contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            result = fc_shrink.cmd_shrink(SimpleNamespace(images=images, out=out, max_edge=max_edge, quality=quality))
+        return result, stdout.getvalue(), stderr.getvalue(), sh
+
+    def test_each_shrunk_image_prints_one_line_in_argument_order(self):
+        first = fc_shrink.Shrunk(Path("/tmp/compose-shrink/shot-1a2b3c4d.jpg"), fc_shrink.Size(2400, 1600, 812345), fc_shrink.Size(1000, 667, 98765), "")
+        second = fc_shrink.Shrunk(Path("/tmp/compose-shrink/side-5e6f7a8b.jpg"), fc_shrink.Size(3000, 2000, 900000), fc_shrink.Size(1000, 667, 120000), "")
+        _, out, err, sh = self._run(["a.png", "b.png"], [first, second])
+        self.assertEqual(out, "/tmp/compose-shrink/shot-1a2b3c4d.jpg  2400x1600 812345 B -> 1000x667 98765 B\n"
+                              "/tmp/compose-shrink/side-5e6f7a8b.jpg  3000x2000 900000 B -> 1000x667 120000 B\n")
+        self.assertEqual(err, "")
+        self.assertEqual(sh.call_args_list, [mock.call(Path("a.png"), None, 1000, 72), mock.call(Path("b.png"), None, 1000, 72)])
+
+    def test_a_pass_through_prints_unchanged_and_its_warning_on_stderr(self):
+        warning = "compose shrink: sips not found, using the original a.png"
+        passed = fc_shrink.Shrunk(Path("a.png"), fc_shrink.Size(0, 0, 5), fc_shrink.Size(0, 0, 5), warning)
+        shrunk = fc_shrink.Shrunk(Path("/tmp/compose-shrink/b-5e6f7a8b.jpg"), fc_shrink.Size(3000, 2000, 900000), fc_shrink.Size(1000, 667, 120000), "")
+        _, out, err, _ = self._run(["a.png", "b.png"], [passed, shrunk])
+        self.assertEqual(out, "a.png  unchanged\n/tmp/compose-shrink/b-5e6f7a8b.jpg  3000x2000 900000 B -> 1000x667 120000 B\n")
+        self.assertEqual(err, warning + "\n")
+
+    def test_the_flags_reach_shrink_for_every_image(self):
+        shrunk = fc_shrink.Shrunk(Path("/tmp/x.jpg"), fc_shrink.Size(1, 1, 1), fc_shrink.Size(1, 1, 1), "")
+        _, _, _, sh = self._run(["a.png", "b.png"], [shrunk, shrunk], out="d", max_edge=500, quality=60)
+        self.assertEqual(sh.call_args_list, [mock.call(Path("a.png"), Path("d"), 500, 60), mock.call(Path("b.png"), Path("d"), 500, 60)])
+
+    def test_the_command_returns_normally_when_every_image_passed_through(self):
+        warning = "compose shrink: sips could not shrink a.png, using the original"
+        passed = fc_shrink.Shrunk(Path("a.png"), fc_shrink.Size(0, 0, 5), fc_shrink.Size(0, 0, 5), warning)
+        result, out, err, _ = self._run(["a.png"], [passed])
+        self.assertIsNone(result)
+        self.assertEqual(out, "a.png  unchanged\n")
+        self.assertEqual(err, warning + "\n")
 
 
 class Args(unittest.TestCase):
