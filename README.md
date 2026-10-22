@@ -195,6 +195,7 @@ You only run them yourself in [manual mode](docs/cli.md#manual-mode).
 | `compose away --project <name> [--push] [words]\|--clear-words\|digest\|off` | Lets the engineering manager answer for you while you are away, until your first message, and prints a digest when you turn it off |
 | `compose yolo --project <name> [--push] [words]\|--clear-words\|digest\|off` | Lets the engineering manager answer for you until you send `yolo:off`, while you still steer, and prints a digest when you turn it off |
 | `compose workspace [<name>]` | Lists or switches billing workspaces; `workspace key` sets a key in `~/.compose/auth.json` |
+| `compose shrink <image>... [--out <dir>]` | Writes a small JPEG copy of each image so an LLM pays fewer tokens, and leaves the original alone |
 
 Every command is documented in [docs/cli.md](docs/cli.md).
 
