@@ -386,7 +386,7 @@ class KeepRecord(Repo):
         def fake(path, out_dir=None, *a, **kw):
             if warning:
                 return fc.fc_shrink.Shrunk(path, fc.fc_shrink.Size(2400, 1600, 3), fc.fc_shrink.Size(2400, 1600, 3), warning)
-            copy = Path(getattr(out_dir, "name", out_dir)) / f"shrunk-{path.name}"
+            copy = (Path(out_dir.name) if isinstance(out_dir, tempfile.TemporaryDirectory) else Path(out_dir)) / f"shrunk-{path.name}"
             copy.write_bytes(b"small")
             return fc.fc_shrink.Shrunk(copy, fc.fc_shrink.Size(2400, 1600, 3), fc.fc_shrink.Size(1000, 667, 5), "")
         self.config(e2e=[jev_case("c", spec)])
