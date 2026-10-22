@@ -1,0 +1,4 @@
+Size
+Shrunk
+shrink
+cmd_shrink

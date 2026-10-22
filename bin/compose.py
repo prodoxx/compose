@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fc_cost, fc_mcp  # noqa: E402
-import fc_core, fc_proc, fc_readguard, fc_libapi, fc_gate, fc_config, fc_tasks, fc_linear, fc_linear_cmd, fc_claude, fc_models, fc_route, fc_quick, fc_herdr, fc_worktree, fc_layers, fc_blockers, fc_stack, fc_change, fc_frame0, fc_f0pages, fc_ask, fc_crew, fc_hooks, fc_toolbug, fc_init, fc_clean, fc_figma, fc_briefs, fc_implement, fc_jev, fc_accept, fc_verify, fc_ship, fc_prove, fc_run, fc_status, fc_tiers, fc_tierpin, fc_budget, fc_spec, fc_watch, fc_yolo, fc_bench, fc_setup, fc_update  # noqa: E402
+import fc_core, fc_proc, fc_readguard, fc_libapi, fc_gate, fc_config, fc_tasks, fc_linear, fc_linear_cmd, fc_claude, fc_models, fc_route, fc_quick, fc_herdr, fc_worktree, fc_layers, fc_blockers, fc_stack, fc_change, fc_frame0, fc_f0pages, fc_ask, fc_crew, fc_hooks, fc_toolbug, fc_init, fc_clean, fc_figma, fc_briefs, fc_implement, fc_shrink, fc_jev, fc_accept, fc_verify, fc_ship, fc_prove, fc_run, fc_status, fc_tiers, fc_tierpin, fc_budget, fc_spec, fc_watch, fc_yolo, fc_bench, fc_setup, fc_update  # noqa: E402
 
 DETACHED = ("run", "verify", "resume")  # the long commands: a closed tab or a crashed session must not end them
 
@@ -135,6 +135,7 @@ def main():
                             ("rewake", fc_watch.cmd_rewake, "Claude Code Stop hook: park a watch after each team lead turn; its event wakes the session"),
                             ("reenter", fc_watch.cmd_reenter, "Claude Code SessionStart hook: after a compaction, point the teammate back at its brief, the board, and Linear"),
                             ("skillcheck", fc_hooks.cmd_skillcheck, "Claude Code UserPromptSubmit and PostToolUse(Skill) hook: tell a compose session the skill changed since it read it"),
+                            ("shrink", fc_shrink.cmd_shrink, "make a small JPEG copy of each image so an LLM reads it for fewer tokens; prints its pixels and bytes before and after"),
                             ("workspace", fc_config.cmd_workspace, f"show workspaces, or switch: `workspace personal` (config: {fc_config.CONFIG_PATH})")):
         s = sub.add_parser(name, help=help_)
         s.add_argument("--repo", default=".")

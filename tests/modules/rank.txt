@@ -58,6 +58,7 @@ fc_briefs
 fc_libapi
 fc_gate
 fc_implement
+fc_shrink
 fc_jev
 fc_accept
 fc_reroute
