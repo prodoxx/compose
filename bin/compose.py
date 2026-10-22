@@ -169,6 +169,11 @@ def main():
         if name == "route":
             s.add_argument("--only", help="comma-separated task ids")
             s.add_argument("--recalculate", action="store_true", help="recompute every route, even one whose context is unchanged")
+        if name == "shrink":
+            s.add_argument("images", nargs="+", help="image files to shrink")
+            s.add_argument("--out", default=None, help="directory for the copies (default: <system temp>/compose-shrink)")
+            s.add_argument("--max-edge", type=int, default=1000, help="longest edge in pixels")
+            s.add_argument("--quality", type=int, default=72, help="JPEG quality, 1-100")
         if name == "quick":
             s.add_argument("ids", nargs="+", help="task ids, task or story Linear ids, or the feature id")
         if name == "spec-check":
