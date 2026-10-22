@@ -381,6 +381,52 @@ class KeepRecord(Repo):
             self.assertTrue(ok)
             self.assertEqual("screenshots" in report["e2e"][0], kept)
 
+    def run_case(self, spec, rec, keep=False, warning=""):
+        """Run one jev case through e2e_stage; fc_shrink.shrink is a stand-in that writes a smaller copy, or passes the source through."""
+        def fake(path, out_dir=None, *a, **kw):
+            if warning:
+                return fc.fc_shrink.Shrunk(path, fc.fc_shrink.Size(2400, 1600, 3), fc.fc_shrink.Size(2400, 1600, 3), warning)
+            copy = Path(getattr(out_dir, "name", out_dir)) / f"shrunk-{path.name}"
+            copy.write_bytes(b"small")
+            return fc.fc_shrink.Shrunk(copy, fc.fc_shrink.Size(2400, 1600, 3), fc.fc_shrink.Size(1000, 667, 5), "")
+        self.config(e2e=[jev_case("c", spec)])
+        report, out = {"e2e": []}, io.StringIO()
+        with mock.patch.object(fc.fc_shrink, "shrink", side_effect=fake) as shrink, contextlib.redirect_stdout(out):
+            ok = fc.fc_verify.e2e_stage(self.repo, json.loads((self.proj / "verify.json").read_text()), {}, report, [], rec, keep=keep)
+        return ok, report["e2e"][0], shrink, out.getvalue()
+
+    def test_a_failed_case_keeps_its_screenshots_shrunk_in_place(self):
+        ok, row, shrink, out = self.run_case({"statuses": ["blocked"], "reason": "x"}, self.proj / "results" / "fail")
+        rec = Path(row["screenshots"])
+        self.assertFalse(ok)
+        self.assertNotEqual(row["exit"], 0)
+        self.assertEqual(shrink.call_count, 1)
+        self.assertEqual(shrink.call_args.args[0].name, "000000.jpg")
+        self.assertEqual(sorted(os.listdir(rec)), ["000000.jpg"])  # same name and count, and no temp dir left behind
+        self.assertEqual((rec / "000000.jpg").read_bytes(), b"small")
+        self.assertNotIn("shrunk", out)  # nothing printed per screenshot
+
+    def test_a_keep_record_pass_is_shrunk_in_place(self):
+        ok, row, shrink, _ = self.run_case({"statuses": ["done"]}, self.proj / "results" / "keep", keep=True)
+        rec = Path(row["screenshots"])
+        self.assertTrue(ok)
+        self.assertEqual(shrink.call_count, 1)
+        self.assertEqual(sorted(os.listdir(rec)), ["000000.jpg"])
+        self.assertEqual((rec / "000000.jpg").read_bytes(), b"small")
+
+    def test_a_pass_through_leaves_the_screenshot_as_jev_wrote_it(self):
+        ok, row, shrink, _ = self.run_case({"statuses": ["blocked"], "reason": "x"}, self.proj / "results" / "pass",
+                                           warning="compose shrink: sips could not shrink 000000.jpg, using the original")
+        self.assertEqual(shrink.call_count, 1)
+        self.assertEqual(sorted(os.listdir(Path(row["screenshots"]))), ["000000.jpg"])
+        self.assertEqual((Path(row["screenshots"]) / "000000.jpg").read_bytes(), b"jpg")
+
+    def test_a_passed_case_whose_record_is_deleted_is_not_shrunk(self):
+        ok, row, shrink, _ = self.run_case({"statuses": ["done"]}, self.proj / "results" / "gone")
+        self.assertTrue(ok)
+        shrink.assert_not_called()
+        self.assertNotIn("screenshots", row)
+
 
 if __name__ == "__main__":
     unittest.main()
