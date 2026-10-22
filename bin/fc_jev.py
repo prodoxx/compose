@@ -1,7 +1,7 @@
-import contextlib, shlex, json, os, re, shutil, signal, subprocess, threading, time
+import contextlib, shlex, json, os, re, shutil, signal, subprocess, tempfile, threading, time
 from pathlib import Path
 from urllib.parse import urlsplit
-import fc_core, fc_proc, fc_config, fc_models
+import fc_core, fc_proc, fc_config, fc_models, fc_shrink
 
 
 JEV_TIMEOUT = 150  # seconds one jev e2e case may run; a wandering jev used its whole 60-action budget in run 6
@@ -258,6 +258,11 @@ def jev_e2e(case, repo):
     if record and r["exit"] == 0 and not case.get("keep_record"):  # a prototype capture keeps its steps: they are the point
         shutil.rmtree(record, ignore_errors=True)
     elif record and Path(record).is_dir():
+        with tempfile.TemporaryDirectory(dir=record) as tmp:
+            for p in sorted(Path(record).glob("*.jpg")):
+                small = fc_shrink.shrink(p, Path(tmp)).path
+                if small != p:
+                    os.replace(small, p)
         r["screenshots"] = str(record)
     return r
 
