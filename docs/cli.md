@@ -73,9 +73,9 @@ These commands load the tasks, dispatch them, and steer the run.
 | `reflect` | Screens the settled decisions against evidence with Jev, using `--evidence -` and `--against "<line>"`. `--dismiss "<why>"` marks the evidence so far as answered, so later screens skip it |
 | `hold` | Holds tasks back from dispatch with `--only <ids> --reason "<why>"`. A task the run is still preparing (clone, base, install) goes back to pending before its first turn; one already running finishes. `--release <ids>` or `all` releases them |
 | `change start\|done\|undo` | Records a change of course. `undo C<n>` puts back what it touched |
-| `spec-check` | Prints one `PASS|FAIL <id> <level>: <gaps>` line per issue of a feature's tree. A task fails when its brief names a file another task owns and it has no `after` on that task. `--stdin` reads sync JSON with no project. Exits 1 on any FAIL |
+| `spec-check` | Prints one `PASS|FAIL <id> <level>: <gaps>` line per issue of a feature's tree. A task fails when its brief names a file another task owns and it has no `after` on that task. `--stdin` reads sync JSON with no project. A task whose `scenarios` block lacks a required key, or whose scenario ids do not match its criteria, fails too. Exits 1 on any FAIL |
 | `ready` | Labels `Ready` each story, and each feature of the epic, that is Todo or Backlog with every blocker Done or Canceled (a Design blocker counts at In Review); it writes `results/ready.json` and prints `can start now:`, and `compose linear labels --create Ready` creates the label. `sync`, the end of `run`, a `verify` PASS, and `clean` refresh the marks too |
-| `bench` | Runs a frozen task set across models and reports pass rate, attempts, p50/p95 time, and cost |
+| `bench` | Runs a frozen task set across models and reports pass rate, attempts, p50/p95 time, and cost. `--tests --base <rev>` measures test writers instead: each model writes each protected task's test from `<rev>`, and the test is scored (green on the task's files, red on `<rev>`'s, lines against the budget, cases, holdouts); it prints one summary row per model and saves `results/bench-tests-<ts>.json` |
 
 ### Verify and stack
 
