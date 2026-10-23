@@ -422,3 +422,39 @@ class DesignAndHandTasks(unittest.TestCase):
         lines, e = SpecCheck.run_cli(self, json.dumps(data([task("ENG-3", "001"), lowfi])))
         self.assertIn("PASS ENG-5 hand task", lines)
 
+
+
+FULL = "scenario: s\ngiven: g\nwhen: w\nthen: t\ntest_type: unit\noracle: o"
+
+
+def with_block(issue, *scenarios):
+    block = "```scenarios\n" + "\n".join(f"id: {n}\n{s}" for n, s in scenarios) + "\n```"
+    return {**issue, "description": issue["description"].replace("```compose", "## Test plan\n\n" + block + "\n\n```compose")}
+
+
+class ScenarioGaps(unittest.TestCase):
+    def gaps(self, *scenarios, crit="- a\n- b"):
+        return check([with_block(task("ENG-3", "001", crit=crit), *scenarios)])["ENG-3"]
+
+    def test_a_complete_block_passes_and_negative_cases_are_optional(self):
+        self.assertEqual(self.gaps((1, FULL), (2, FULL + "\nnegative_cases: n")), (True, "task", []))
+
+    def test_a_task_without_a_block_gets_no_new_gap(self):
+        self.assertEqual(check([task("ENG-3", "001", crit="- a\n- b")])["ENG-3"][2], [])
+
+    def test_missing_and_empty_keys_are_named_in_order_per_scenario(self):
+        no_given_oracle = FULL.replace("given: g\n", "").replace("oracle: o", "oracle:")
+        ok, _, gaps = self.gaps((1, FULL), (2, no_given_oracle))
+        self.assertEqual((ok, gaps), (False, ["scenario 2 lacks given, oracle"]))
+        self.assertEqual(self.gaps((1, FULL.replace("scenario: s\n", "")))[2][0], "scenario 1 lacks scenario")
+
+    def test_ids_not_one_to_k_fail_with_the_criteria_count(self):
+        ok, _, gaps = self.gaps((1, FULL), (3, FULL))
+        self.assertEqual((ok, gaps), (False, ["scenario ids 1, 3 do not match the 2 criteria (expected 1 to 2)"]))
+        self.assertEqual(self.gaps((2, FULL), (1, FULL))[2], ["scenario ids 2, 1 do not match the 2 criteria (expected 1 to 2)"])
+        self.assertEqual(self.gaps((1, FULL), crit="- a\n- b\n- c")[2], ["scenario ids 1 do not match the 3 criteria (expected 1 to 3)"])
+
+    def test_a_scenario_without_an_id_shows_a_question_mark_and_both_gaps_come_in_order(self):
+        gaps = self.gaps((1, FULL), ("", "scenario: s"))[2]
+        self.assertEqual(gaps[0], "scenario 2 lacks id, given, when, then, test_type, oracle")
+        self.assertEqual(gaps[1], "scenario ids 1, ? do not match the 2 criteria (expected 1 to 2)")
