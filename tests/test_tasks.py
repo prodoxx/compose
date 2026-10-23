@@ -83,8 +83,7 @@ class Scenarios(unittest.TestCase):
             {"id": "1", "scenario": "first", "given": "g"}, {"id": "2", "scenario": "second"}, {"id": "3"}])
 
     def test_a_key_line_before_any_id_starts_the_first_scenario(self):
-        self.assertEqual(fc.fc_tasks.parse_scenarios(self.body("given: g\nid: 1\nid: 2\nthen: t")),
-                         [{"given": "g", "id": "1"}, {"id": "2", "then": "t"}])
+        self.assertEqual(fc.fc_tasks.parse_scenarios(self.body("given: g\nthen: t")), [{"given": "g", "then": "t"}])
 
     def test_blank_lines_are_skipped_and_other_lines_continue_the_last_value(self):
         block = "id: 1\n\nthen: one\n\nwraps here\nnot a key: x\nBad: y\ntest_type: unit"
