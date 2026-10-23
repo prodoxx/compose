@@ -55,5 +55,50 @@ class ModelAuto(unittest.TestCase):
         self.assertIs(task(tier="cheap")["model_auto"], True)
 
 
+class Scenarios(unittest.TestCase):
+    F = "`" * 3
+    CRIT = "## Acceptance criteria\n\n* a\n* b\n\n"
+
+    def body(self, block, pre="", post=""):
+        return f"{self.CRIT}## Test plan\n\n{pre}{self.F}scenarios{post}\n{block}\n{self.F}\n\n{self.F}compose\nid: 001\n{self.F}\n"
+
+    def test_the_block_is_the_stripped_text_of_the_scenarios_fence(self):
+        self.assertEqual(fc.fc_tasks.scenarios_block(self.body("\n  id: 1\ngiven: a\n\n")), "id: 1\ngiven: a")
+        self.assertEqual(fc.fc_tasks.scenarios_block(self.body("id: 1", post="  ")), "id: 1")
+
+    def test_a_missing_fence_gives_none(self):
+        only_compose = f"{self.CRIT}{self.F}compose\nid: 001\n{self.F}\n"
+        for text in (None, "", self.CRIT, only_compose):
+            with self.subTest(text=text):
+                self.assertIsNone(fc.fc_tasks.scenarios_block(text))
+                self.assertIsNone(fc.fc_tasks.parse_scenarios(text))
+
+    def test_the_fence_stops_at_the_first_closing_line(self):
+        text = f"{self.F}scenarios\nid: 1\n{self.F}\nid: 2\n{self.F}\n"
+        self.assertEqual(fc.fc_tasks.parse_scenarios(text), [{"id": "1"}])
+
+    def test_each_id_line_starts_a_scenario_in_order_with_string_values(self):
+        block = "id: 1\nscenario: first\ngiven: g\nid: 2\nscenario:   second  \nid: 3"
+        self.assertEqual(fc.fc_tasks.parse_scenarios(self.body(block)), [
+            {"id": "1", "scenario": "first", "given": "g"}, {"id": "2", "scenario": "second"}, {"id": "3"}])
+
+    def test_a_key_line_before_any_id_starts_the_first_scenario(self):
+        self.assertEqual(fc.fc_tasks.parse_scenarios(self.body("given: g\nid: 1\nid: 2\nthen: t")),
+                         [{"given": "g", "id": "1"}, {"id": "2", "then": "t"}])
+
+    def test_blank_lines_are_skipped_and_other_lines_continue_the_last_value(self):
+        block = "id: 1\n\nthen: one\n\nwraps here\nnot a key: x\nBad: y\ntest_type: unit"
+        self.assertEqual(fc.fc_tasks.parse_scenarios(self.body(block)),
+                         [{"id": "1", "then": "one wraps here not a key: x Bad: y", "test_type": "unit"}])
+
+    def test_an_empty_block_gives_an_empty_list(self):
+        self.assertEqual(fc.fc_tasks.parse_scenarios(self.body("")), [])
+
+    def test_criteria_are_the_same_with_or_without_the_block(self):
+        plain = f"{self.CRIT}## Test plan\n\nRun it.\n"
+        self.assertEqual(fc.fc_tasks.parse_criteria(self.body("id: 1\ngiven: * x")), fc.fc_tasks.parse_criteria(plain))
+        self.assertEqual(fc.fc_tasks.parse_criteria(plain), ["a", "b"])
+
+
 if __name__ == "__main__":
     unittest.main()
