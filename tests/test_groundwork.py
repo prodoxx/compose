@@ -986,5 +986,27 @@ class NoTestToWrite(unittest.TestCase):
         self.assertEqual(self.testcrews(only="003", print_=False)[1], ["tests-003"])
 
 
+class ScenarioPlannerLine(unittest.TestCase):
+    NEW = "   How to run (the `test:` command), what is covered in words, unlisted holdouts, then a `scenarios` block (SKILL.md)."
+    OLD = "   How to run (the `test:` command), what is covered in words, and that the test has holdout cases not listed."
+    BRIEF = fc.fc_briefs.PLANNER_BRIEF
+
+    def test_the_new_line_follows_the_test_plan_heading(self):
+        lines = self.BRIEF.splitlines()
+        self.assertEqual(lines[lines.index("   ## Test plan") + 1], self.NEW)
+        self.assertEqual(lines[lines.index("   ## Test plan") + 2], "   ## Constraints")
+
+    def test_the_new_line_appears_once_and_the_old_line_is_gone(self):
+        self.assertEqual(self.BRIEF.splitlines().count(self.NEW), 1)
+        self.assertNotIn(self.OLD, self.BRIEF)
+        self.assertNotIn("holdout cases not listed", self.BRIEF)
+
+    def test_the_brief_still_formats_with_its_four_fields_and_the_line(self):
+        fields = {f for _, f, _, _ in string.Formatter().parse(self.BRIEF) if f}
+        self.assertEqual(fields, {"issue", "name", "slug", "wt"})
+        printed = self.BRIEF.format(issue="NEB-9", name="n", slug="s", wt="/w")
+        self.assertIn(self.NEW + "\n", printed)
+
+
 if __name__ == "__main__":
     unittest.main()
