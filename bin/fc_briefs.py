@@ -348,7 +348,6 @@ def cmd_toolsmith(a):
     print(TOOLSMITH_BRIEF.format(project=proj.name, reporter=entry["reporter"], at=entry["at"], cli_commit=entry["cli_commit"],
                                  cli_repo=entry["cli_repo"], message=entry["message"], repo=repo, variant=variant))
 
-
 TEST_BUDGET = 60  # lines of test per task, unless the task's block sets `test_lines:`; run 5's test-writing teammates wrote 2044 lines for 727 of code
 
 def test_brief(meta, contract, budget=None, conv=None, rebuilt=False):
@@ -367,7 +366,8 @@ def test_brief(meta, contract, budget=None, conv=None, rebuilt=False):
             "Assert only what the TASK BRIEF states or the code already shows: its implementer gets the brief, the stubs, and your test, "
             "never the contract, so a line or value only the contract gives is not asserted.\n"
             "Cover the brief's acceptance criteria plus holdout cases it does not list. One file, proportional to the code it tests; "
-            "no CSS values, no tooling tests: never a test that asserts dependency lists, lint or tool configuration, or the contents of a config file; test behavior only.\n"
+            "no CSS values, no tooling tests: never a test that asserts dependency lists, lint or tool configuration, or the contents of a config file; test behavior only.\n" +
+            ("The TASK BRIEF's `scenarios` block gives one scenario per criterion: write a case for each scenario and for each of its negative_cases, then add holdout cases none of them lists, within the budget.\n" if fc_tasks.scenarios_block(meta.get("body")) else "") +
             f"Budget: at most {budget} lines, holdouts included. Pick the cases that would catch a wrong implementation; drop the rest.\n"
             "You work in your own worktree on your own branch; the CLI collects every test-writing teammate's commits onto the project branch. "
             "Run that command, never the whole suite, and confirm it fails for the right reason, format the file, then commit only your file: "
