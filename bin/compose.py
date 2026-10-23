@@ -234,6 +234,8 @@ def main():
             s.add_argument("--runs", type=int, default=1, help="repeats per task per model")
             s.add_argument("--attempts", type=int, default=3)
             s.add_argument("--parallel", type=int, default=4)
+            s.add_argument("--tests", action="store_true", help="measure test writers instead: each model writes each task's protected test")
+            s.add_argument("--base", help="with --tests: the revision the protected tests are reset to and scored against")
         if name in ("groundwork", "wayfinder", "explore", "planner", "designer"):
             s.add_argument("--extra", help="project-specific notes appended to the brief; `-` reads them from stdin")
         if name == "planner":

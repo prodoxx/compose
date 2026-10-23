@@ -1,7 +1,8 @@
 import json, re, sys, time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-import fc_core, fc_tasks, fc_implement, fc_briefs
+import shutil
+import fc_core, fc_tasks, fc_implement, fc_briefs, fc_worktree
 
 
 # ---------- bench ----------
@@ -32,10 +33,54 @@ def score_test(wt, meta, base):
             "holdouts": max(0, cases - len(fc_tasks.parse_criteria(meta["body"]))), "green": green, "red": red}
 
 def bench_tests(a):
-    raise NotImplementedError
+    if not a.base:
+        sys.exit("bench --tests needs --base <rev>: the revision the protected tests are reset to")
+    proj = fc_core.project_dir(a); repo = Path(a.repo).resolve()
+    only = set(a.only.split(",")) if a.only else None
+    tasks = [m for m in fc_tasks.load_tasks(proj, required=True) if (not only or m["id"] in only) and m.get("protected")]
+
+    def one(job):
+        meta, run, model = job
+        wt = proj / "worktrees" / f"{meta['id']}-tests-{re.sub(r'[^a-z0-9]+', '-', model.lower())}-r{run}"
+        try:
+            fc_core.sh(["git", "clone", "-q", str(repo), str(wt)], repo)
+            fc_worktree.ready_checkout(repo, wt)
+            for f in meta["protected"]:
+                if fc_core.sh(["git", "cat-file", "-e", f"{a.base}:{f}"], wt, check=False).returncode:
+                    (wt / f).unlink(missing_ok=True)
+                else:
+                    fc_core.sh(["git", "checkout", a.base, "--", f], wt)
+            prompt = fc_briefs.test_brief(meta, "(none)") + "\nThis is a bench run: there is no contract and no team lead; write and commit the test, report nothing, then stop."
+            usage = fc_implement.implementer(wt, model, prompt)[3] or {}
+            return {"task": meta["id"], "run": run, "model": model, **score_test(wt, meta, a.base),
+                    "cost": usage.get("cost", 0) + usage.get("reference_cost", 0)}
+        except Exception as e:
+            return {"task": meta["id"], "run": run, "model": model, "error": repr(e)}
+        finally:
+            shutil.rmtree(wt, ignore_errors=True)
+
+    rows, raw = [], []
+    for model in a.models.split(","):
+        with ThreadPoolExecutor(max_workers=a.parallel) as ex:
+            results = list(ex.map(one, [(t, r, model) for t in tasks for r in range(a.runs)]))
+        raw.extend(results)
+        ok = [r for r in results if "error" not in r]
+        n = len(ok) or 1
+        rows.append({"model": model, "runs": len(results), "errors": len(results) - len(ok),
+                     "red_rate": sum(r["red"] for r in ok) / n, "green_rate": sum(r["green"] for r in ok) / n,
+                     "both_rate": sum(r["red"] and r["green"] for r in ok) / n, "lines_mean": sum(r["lines"] for r in ok) / n,
+                     "over_budget": sum(r["over_budget"] for r in ok), "holdouts_mean": sum(r["holdouts"] for r in ok) / n,
+                     "cost_per_test": sum(r["cost"] for r in ok) / n})
+    for r in rows:
+        print(r)
+    out = proj / "results" / f"bench-tests-{time.strftime('%Y%m%d-%H%M%S')}.json"
+    fc_core.atomic_write(out, json.dumps({"summary": rows, "runs": raw}, indent=2))
+    print(f"saved {out}")
 
 def cmd_bench(a):
     """Frozen task set x models. Each task is reset to red in its worktree, then implemented from scratch by each model."""
+    if a.tests:
+        return bench_tests(a)
     proj = fc_core.project_dir(a); repo = Path(a.repo).resolve()
     only = set(a.only.split(",")) if a.only else None
     if fc_core.sh(["git", "status", "--porcelain"], repo).stdout.strip():
