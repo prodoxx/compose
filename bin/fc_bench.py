@@ -1,7 +1,7 @@
 import json, re, sys, time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-import fc_core, fc_tasks, fc_implement
+import fc_core, fc_tasks, fc_implement, fc_briefs
 
 
 # ---------- bench ----------
@@ -15,7 +15,21 @@ def pct(xs, q):
 CASE_RE = re.compile(r"^\+\s*(?:async\s+)?(?:def test_|func Test|(?:it|test)\()")
 
 def score_test(wt, meta, base):
-    raise NotImplementedError
+    paths = meta["protected"]
+    green = fc_implement.run_test(meta, wt).returncode == 0
+    for f in meta["files"]:
+        if fc_core.sh(["git", "cat-file", "-e", f"{base}:{f}"], wt, check=False).returncode:
+            (wt / f).unlink(missing_ok=True)
+        else:
+            fc_core.sh(["git", "checkout", base, "--", f], wt)
+    red = fc_implement.run_test(meta, wt).returncode != 0
+    fc_core.sh(["git", "add", "-A", "--"] + paths, wt)
+    lines = sum(int(x) for l in fc_core.sh(["git", "diff", "--numstat", base, "--"] + paths, wt).stdout.splitlines() for x in l.split("\t")[:2] if x != "-")
+    diff = fc_core.sh(["git", "diff", base, "--"] + paths, wt).stdout.splitlines()
+    cases = sum(1 for l in diff if CASE_RE.match(l))
+    budget = int(meta.get("test_lines") or fc_briefs.TEST_BUDGET)
+    return {"lines": lines, "budget": budget, "over_budget": lines > budget, "cases": cases,
+            "holdouts": max(0, cases - len(fc_tasks.parse_criteria(meta["body"]))), "green": green, "red": red}
 
 def bench_tests(a):
     raise NotImplementedError
