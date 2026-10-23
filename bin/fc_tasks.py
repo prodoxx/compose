@@ -188,10 +188,26 @@ def parse_criteria(text):
     return [join(parts) for parts in out]
 
 def scenarios_block(text):
-    raise NotImplementedError
+    m = re.search(r"^```scenarios *\n(.*?)^```$", text or "", re.S | re.M)
+    return m.group(1).strip() if m else None
 
 def parse_scenarios(text):
-    raise NotImplementedError
+    block = scenarios_block(text)
+    if block is None:
+        return None
+    out, key = [], None
+    for line in block.splitlines():
+        if not line.strip():
+            continue
+        m = re.match(r"^([a-z_]+):\s*(.*)$", line)
+        if m:
+            key = m.group(1)
+            if key == "id" or not out:
+                out.append({})
+            out[-1][key] = m.group(2).strip()
+        elif out and key:
+            out[-1][key] += " " + line.strip()
+    return out
 
 def criteria_from_tasks(proj):
     """(task id, criterion text) for every criterion in every task file."""
