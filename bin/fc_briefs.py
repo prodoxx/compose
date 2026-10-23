@@ -182,7 +182,7 @@ Every teammate you start runs in its own pane (`compose crew start`); never do i
    ## Acceptance criteria
    One bullet per behavior, each checked by the test.
    ## Test plan
-   How to run (the `test:` command), what is covered in words, and that the test has holdout cases not listed.
+   How to run (the `test:` command), what is covered in words, unlisted holdouts, then a `scenarios` block (SKILL.md).
    ## Constraints
    No new dependencies beyond what the goal names. Do not edit protected files.
    and last, the block the CLI reads:
