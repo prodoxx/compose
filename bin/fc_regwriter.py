@@ -5,7 +5,7 @@ import re
 import time
 from pathlib import Path
 
-import fc_config, fc_core, fc_crew, fc_herdr, fc_worktree
+import fc_config, fc_core, fc_crew, fc_herdr, fc_tasks, fc_worktree
 
 
 def writer_branch(proj, tid):
@@ -21,11 +21,13 @@ def writer_brief(meta, diff):
         head = next(n for n, l in enumerate(lines) if l == "## Acceptance criteria")
     end = next((n for n in range(head + 1, len(lines)) if lines[n].startswith("## ")), len(lines))
     text = "\n".join(lines[head + 1:end]).strip()
+    block = fc_tasks.scenarios_block(meta.get("body"))
+    scenarios = f"\n\n## Scenarios\n```scenarios\n{block}\n```" if block else ""
     return (f"Write one regression test for task {meta['id']}: {meta['title']}.\n"
             "The fix below passed. Your test must fail on the base and pass on the fix.\n"
             "Change only test files, in one commit; never edit the fix.\n"
             'Then report working "test ready: <commit> <command>", where <command> runs only your test.\n'
-            f"\n## Expected behavior\n{text}\n\n## The fix\n```diff\n{diff}\n```")
+            f"\n## Expected behavior\n{text}{scenarios}\n\n## The fix\n```diff\n{diff}\n```")
 
 
 def start_writer(repo, proj, meta, result):
