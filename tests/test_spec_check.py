@@ -103,11 +103,11 @@ class SpecCheck(unittest.TestCase):
 
     def test_story_and_task_gaps(self):
         r = check([task("ENG-3", "001"), task("ENG-4", "002", files="x.go, y.go, z.go"), task("ENG-5", "003", crit="- a\n" * 6),
-                   task("ENG-6", "004", files=""), task("ENG-7", "005", protected=""),
+                   task("ENG-6", "004", files=""),
                    task("ENG-9", "007", crit="- prints the line\n\nSignatures and exact lines come from the contract."),
                    {**STORY, "id": "ENG-10"}, {**STORY, "id": "ENG-11", "description": "## Acceptance criteria\n\nTBD"}])
         self.assertEqual((r["ENG-1"][0], r["ENG-2"][0], r["ENG-3"]), (True, True, (True, "task", [])))  # its test is not written yet
-        for i, *kws in (("ENG-4", "owns 3 files"), ("ENG-5", "Acceptance criteria"), ("ENG-6", "files"), ("ENG-7", "protected"),
+        for i, *kws in (("ENG-4", "owns 3 files"), ("ENG-5", "Acceptance criteria"), ("ENG-6", "files"),
                         ("ENG-9", "implementers never see"), ("ENG-10", "task"), ("ENG-11", "Acceptance criteria")):
             self.assertTrue(not r[i][0] and has(r[i][2], *kws), (i, r[i]))
         self.assertTrue(check([{**STORY, "id": "ENG-10"}])["ENG-10"][0])  # no issue has parentId: a story needs no task
@@ -115,6 +115,15 @@ class SpecCheck(unittest.TestCase):
         r = check([task("ENG-3", "001"), bare, marked])
         self.assertTrue(not r["ENG-12"][0] and has(r["ENG-12"][2], "task"), r["ENG-12"])
         self.assertTrue(not r["ENG-13"][0] and has(r["ENG-13"][2], "task"), r["ENG-13"])  # a Groundwork line never excuses a story
+
+    def test_a_task_whose_proof_is_its_command_names_no_protected_file(self):
+        """A config or tooling task has no test file to protect: `protected:` left empty, or the whole line out,
+        passes spec-check; `run` already fails only the paths a block does name that are not on the branch."""
+        bare = {"id": "ENG-3", "title": "T", "status": "Todo", "blockedBy": [], "parentId": "ENG-2",
+                "description": "## Acceptance criteria\n\n* the flag is on by default\n\n```compose\n"
+                               "id: 001\nfiles: config/flags.yaml\ntest: grep -q flag config/flags.yaml\n```\n"}
+        self.assertEqual(check([bare])["ENG-3"], (True, "task", []))
+        self.assertEqual(check([task("ENG-3", "001", protected="")])["ENG-3"], (True, "task", []))
 
     def test_criteria_fold_nested_bullets_and_continuations(self):
         parse = lambda body: fc.fc_tasks.parse_criteria("## Acceptance criteria\n" + body)
@@ -295,11 +304,9 @@ class DeleteLine(unittest.TestCase):
             self.assertFalse(got[i][0])
             self.assertTrue(has(got[i][2], "empty `files:`"), got[i])
 
-    def test_a_delete_only_task_still_reports_its_other_gaps(self):
-        ok, _, gaps = check([task("ENG-3", "001", files="", protected="", delete="old.go")])["ENG-3"]
-        self.assertFalse(ok)
-        self.assertTrue(has(gaps, "empty `protected:`"), gaps)
-        self.assertFalse(has(gaps, "empty `files:`"), gaps)
+    def test_a_delete_only_task_whose_proof_is_its_command_passes(self):
+        """The delete names the change and the `test:` the proof: no file to own and no test to protect is no gap."""
+        self.assertEqual(check([task("ENG-3", "001", files="", protected="", delete="old.go")])["ENG-3"], (True, "task", []))
 
     def test_delete_paths_never_count_toward_the_file_cap(self):
         many = ", ".join(f"old/{n}.go" for n in range(6))

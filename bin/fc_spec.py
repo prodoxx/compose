@@ -146,8 +146,8 @@ def spec_check(data, checks=()):
             else:
                 if not meta["files"] and not meta["delete"]:
                     gaps.append("empty `files:`")
-                if not meta["protected"]:
-                    gaps.append("empty `protected:`")
+                # `protected:` may stay empty: a task whose proof is its `test:` command alone names no test file.
+                # testcrews then starts no writer for it (fc_briefs), and run checks only the paths a task names.
             if " ".join(meta["test"].split()) in suite:
                 gaps.append(f"`test:` is the verify check `{meta['test']}`, the whole suite: run only this task's test (its file, or a name filter)")
             if re.search(r"(?i)contract\.md|\b(?:from|in|per|see) the (?:groundwork )?contract\b", desc):
