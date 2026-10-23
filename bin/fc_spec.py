@@ -192,6 +192,7 @@ def spec_check(data, checks=()):
                 gaps.append(f"`test:` is the verify check `{meta['test']}`, the whole suite: run only this task's test (its file, or a name filter)")
             if re.search(r"(?i)contract\.md|\b(?:from|in|per|see) the (?:groundwork )?contract\b", desc):
                 gaps.append("the brief points at the contract, which implementers never see: state its signatures and exact lines in the brief")
+            gaps += scenario_gaps(desc)
             out.append((not gaps, i["id"], "task", gaps))
         elif fc_tasks.hand_task(i):
             out.append((True, i["id"], "hand task", []))
@@ -229,7 +230,18 @@ def cmd_spec_check(a):
         sys.exit(1)
 
 def scenario_gaps(desc):
-    raise NotImplementedError
+    """The gaps a task's ```scenarios block has against its acceptance criteria: each scenario's required keys and the ids."""
+    scenarios = fc_tasks.parse_scenarios(desc)
+    if scenarios is None:
+        return []
+    keys = ("id", "scenario", "given", "when", "then", "test_type", "oracle")
+    gaps = [f"scenario {n} lacks {', '.join(k for k in keys if not sc.get(k))}"
+            for n, sc in enumerate(scenarios, 1) if any(not sc.get(k) for k in keys)]
+    ids = [sc.get("id") or "?" for sc in scenarios]
+    k = len(fc_tasks.parse_criteria(desc))
+    if ids != [str(n) for n in range(1, k + 1)]:
+        gaps.append(f"scenario ids {', '.join(ids) or 'none'} do not match the {k} criteria (expected 1 to {k})")
+    return gaps
 
 MAX_TASK_FILES, MAX_TASK_BRIEF = 2, 2500  # the size the fast implementers pass first try; bigger ones are where they miss
 
