@@ -7,6 +7,7 @@ cmd_tasks
 run_waves
 spec_check
 cmd_spec_check
+scenario_gaps
 MAX_TASK_FILES
 MAX_TASK_BRIEF
 too_big

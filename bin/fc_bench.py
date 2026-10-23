@@ -12,6 +12,14 @@ def pct(xs, q):
     xs = sorted(xs)
     return xs[min(len(xs) - 1, int(round(q * (len(xs) - 1))))]
 
+CASE_RE = re.compile(r"^\+\s*(?:async\s+)?(?:def test_|func Test|(?:it|test)\()")
+
+def score_test(wt, meta, base):
+    raise NotImplementedError
+
+def bench_tests(a):
+    raise NotImplementedError
+
 def cmd_bench(a):
     """Frozen task set x models. Each task is reset to red in its worktree, then implemented from scratch by each model."""
     proj = fc_core.project_dir(a); repo = Path(a.repo).resolve()

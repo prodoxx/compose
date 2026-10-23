@@ -187,6 +187,12 @@ def parse_criteria(text):
         return s
     return [join(parts) for parts in out]
 
+def scenarios_block(text):
+    raise NotImplementedError
+
+def parse_scenarios(text):
+    raise NotImplementedError
+
 def criteria_from_tasks(proj):
     """(task id, criterion text) for every criterion in every task file."""
     return [(meta["id"], c) for meta in load_tasks(proj) for c in parse_criteria(meta["body"])]

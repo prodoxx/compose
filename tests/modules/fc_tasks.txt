@@ -15,6 +15,8 @@ code_tasks
 FINISHED
 task_finished
 parse_criteria
+scenarios_block
+parse_scenarios
 criteria_from_tasks
 _hold_warned
 held

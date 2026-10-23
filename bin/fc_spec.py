@@ -228,6 +228,9 @@ def cmd_spec_check(a):
     if bad:
         sys.exit(1)
 
+def scenario_gaps(desc):
+    raise NotImplementedError
+
 MAX_TASK_FILES, MAX_TASK_BRIEF = 2, 2500  # the size the fast implementers pass first try; bigger ones are where they miss
 
 def too_big(meta):
