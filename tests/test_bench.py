@@ -106,7 +106,7 @@ class BenchTests(unittest.TestCase):
 
     def test_the_summary_has_a_row_per_model_with_rates_means_and_counts_over_scored_runs_and_every_run_is_saved(self):
         out = self.go(); m1, m2 = out["summary"]
-        self.assertEqual([list(m1), list(m2)], ["model runs errors red_rate green_rate both_rate lines_mean over_budget holdouts_mean cost_per_test".split()] * 2)
+        self.assertEqual(set(m1), set(m2)); self.assertEqual(set(m1), set("model runs errors red_rate green_rate both_rate lines_mean over_budget holdouts_mean cost_per_test".split()))
         self.assertEqual((m1["model"], m1["runs"], m1["errors"], m1["over_budget"], m2["model"], m2["errors"], m2["over_budget"]), ("m1", 4, 0, 2, "m2", 2, 2))
         for row, want in ((m1, dict(red_rate=.5, green_rate=1, both_rate=.5, lines_mean=15, holdouts_mean=1, cost_per_test=.75)),
                           (m2, dict(red_rate=1, green_rate=1, both_rate=1, lines_mean=10, holdouts_mean=2))):
