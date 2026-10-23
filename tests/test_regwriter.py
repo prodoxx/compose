@@ -51,6 +51,31 @@ class Brief(unittest.TestCase):
         self.assertTrue(self.brief(BODY, "-a\n+b").endswith(f"## The fix\n{FENCE}diff\n-a\n+b\n{FENCE}"))
 
 
+class ScenarioBrief(unittest.TestCase):
+    """The regression writer's brief carries the task's scenarios block between the expected behavior and the fix."""
+    BLOCK = "id: 1\ngiven: g\n\nid: 2\ngiven: h\nnegative_cases: n"
+    PLAN = f"## Test plan\nRun it.\n\n{FENCE}scenarios\n{BLOCK}\n{FENCE}\n"
+
+    def brief(self, body, diff="D"):
+        return fc_regwriter.writer_brief({"id": "007", "title": "T", "body": body}, diff)
+
+    def test_the_section_sits_between_expected_behavior_and_the_fix(self):
+        body = BODY.split("## Test plan")[0] + self.PLAN
+        self.assertTrue(self.brief(body, "-a\n+b").endswith(
+            f"\n## Expected behavior\n* a\n* b\n\n## Scenarios\n{FENCE}scenarios\n{self.BLOCK}\n{FENCE}\n\n## The fix\n{FENCE}diff\n-a\n+b\n{FENCE}"))
+
+    def test_the_block_does_not_leak_into_the_reproduction_text(self):
+        text = self.brief(REPRO.split("## Constraints")[0] + self.PLAN)
+        self.assertIn("## Expected behavior\nrun x\nsee y\n\n## Scenarios\n", text)
+        self.assertEqual(text.count("id: 1"), 1)
+
+    def test_a_body_without_a_block_keeps_today_brief(self):
+        for body in (BODY, BODY + f"\n{FENCE}compose\nfiles: [a]\n{FENCE}\n"):
+            text = self.brief(body)
+            self.assertNotIn("## Scenarios", text)
+            self.assertTrue(text.endswith(f"## Expected behavior\n* a\n* b\n\n## The fix\n{FENCE}diff\nD\n{FENCE}"))
+
+
 class Writer(unittest.TestCase):
     """The regression test writer starts on its own branch and checkout off the task's tip."""
 
