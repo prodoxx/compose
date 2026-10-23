@@ -31,7 +31,6 @@ def want(**kv):
 class Score(unittest.TestCase):
     def setUp(self):
         mock.patch.dict(os.environ, ENV).start(); self.addCleanup(mock.patch.stopall)
-
     def test_a_test_that_fails_at_base_is_green_and_red_and_leaves_files_at_base(self):
         r, got = score({"impl.txt": "0\n"}, {"impl.txt": "1\n", "test_impl.py": CASES}, "grep -qx 1 impl.txt")
         self.assertEqual(got, want())
