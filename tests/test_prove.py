@@ -86,6 +86,18 @@ class ProveCase(unittest.TestCase):
             row = fc.fc_prove.prove_case({}, {"name": "c", "url": "http://a/"}, r)
         self.assertEqual((row["verdict"], row["kind"]), ("environment", "login"))
 
+    def test_a_deliberate_assert_failure_is_the_missing_feature_without_asking_a_model(self):
+        r = {"exit": 1, "assert_exit": 1, "stdout": "ASSERT FAILED (c):\n- expected a new investigation at /, tab is at /chat\n",
+             "run": {"status": "done", "stop_reason": "", "url": "http://a/chat", "steps": 0, "history": []}}
+        with mock.patch.object(fc.fc_models, "fast_object", return_value={"verdict": "environment", "kind": "assert", "why": "seed"}) as m:
+            row = fc.fc_prove.prove_case({}, {"name": "c", "url": "http://a/"}, r)
+        self.assertEqual((row["verdict"], row["kind"]), ("feature_missing", "feature"))
+        m.assert_not_called()
+        r["stdout"] = "ASSERT FAILED (c):\n" + "x" * 3000  # a long block still counts
+        self.assertEqual(fc.fc_prove.prove_case({}, {"name": "c", "url": "http://a/"}, r)["verdict"], "feature_missing")
+        r["stdout"] += "\nTraceback (most recent call last):"  # a crash is the environment, whatever else it printed
+        self.assertEqual(fc.fc_prove.prove_case({}, {"name": "c", "url": "http://a/"}, r)["kind"], "assert")
+
     def test_the_judge_decides_the_rest(self):
         r = {"exit": 1, "run": {"status": "blocked", "stop_reason": "no change", "url": "http://a/", "steps": 2,
                                 "history": [{"step": 1, "kind": "click", "label": "Settings", "page_changed": True}]}}
