@@ -309,6 +309,14 @@ class Decide(unittest.TestCase):
         self.assertIn(f'- D3: two stores (product owner, {TODAY}; said: "two")', body)
         self.assertIn("- D2: dark", body)
 
+    def test_new_numbers_on_from_star_bullets_linear_writes(self):
+        # Linear saves `- ` list items as `* `: NEB-2181 got a second and third D1 next to D1-D4
+        self.recorded('* D1: one store (product owner, 2026-10-20; said: "ok")', '* Q1: A. dark (product owner, 2026-10-20; said: "ok")',
+                      '* ~~D4: two stores (product owner, 2026-10-20; said: "ok")~~ (replaced by D5)', '* D5: three stores (product owner, 2026-10-20; said: "ok")')
+        out = self.decide(new=["one shop page"], quote="yes")
+        self.assertIn(f'- D6: one shop page (product owner, {TODAY}; said: "yes")', self.linear.body)
+        self.assertNotIn("D1: one shop page", out)
+
     def test_replaces_may_name_an_old_q_line(self):
         self.decide(new=["Paddle"], replaces="Q0", quote="paddle")
         self.assertIn('- ~~Q0: Stripe (product owner, 2026-10-20; said: "stripe")~~ (replaced by D5)', self.linear.body)

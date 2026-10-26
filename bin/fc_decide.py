@@ -171,7 +171,7 @@ def record_new(body, items, tag):
     """The map with one `- D<n>: <text> (closes <ids>) <tag>` line appended under Decisions so far per (text, closed ids), and the closed
     questions gone from Not yet specified; <n> runs on from the highest D id the section holds, struck lines included. Returns (body, the lines written)."""
     dec = fc_change.map_section(body, DECIDED).splitlines()
-    top = max((int(n) for n in re.findall(r"^\s*- (?:~~)?D(\d+)\b", "\n".join(dec), re.M)), default=0)
+    top = max((int(n) for n in re.findall(r"^\s*[-*]\s+(?:~~)?D(\d+)\b", "\n".join(dec), re.M)), default=0)  # Linear saves `- ` items as `* `
     lines = [f"D{top + i}: {' '.join(t.split())}" + (f" (closes {', '.join(ids)})" if ids else "") + f" {tag}" for i, (t, ids) in enumerate(items, 1)]
     dec = [l for l in dec if l.strip()] + [f"- {l}" for l in lines]
     body = fc_plan.replace_section(body, heading_line(body, DECIDED), "\n".join(dec))

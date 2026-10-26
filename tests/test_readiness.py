@@ -255,6 +255,13 @@ class StoryReadiness(unittest.TestCase):
         r = fc_readiness.story_readiness(self.repo, "ENG-7")
         self.assertEqual((r["ready"], r["specced"], r["unblocked"], r["blocked_by"]), (False, True, False, ["ENG-3"]))
 
+    def test_a_story_whose_task_waits_on_another_storys_task_is_not_ready(self):
+        blocker = {"type": "blocks", "issue": {"identifier": "ENG-31", "state": {"name": "Todo"}, "labels": labels([]), "parent": {"identifier": "ENG-3"}}}
+        task = {"identifier": "ENG-71", "state": {"name": "Todo"}, "description": "```compose\nid: t\n```", "inverseRelations": {"nodes": [blocker]}}
+        self.tree = tree(tasks=[task])
+        r = fc_readiness.story_readiness(self.repo, "ENG-7")
+        self.assertEqual((r["ready"], r["specced"], r["unblocked"], r["blocked_by"]), (False, True, False, ["ENG-3"]))
+
     def test_gate_gaps_skip_the_model_and_only_the_storys_own_are_written(self):
         self.tree = tree(story="## Intent\n\nPay.\n", feature="## Intent\n\nA shop.\n")
         r = fc_readiness.story_readiness(self.repo, "ENG-7")

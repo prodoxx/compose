@@ -371,14 +371,29 @@ def linear_reconcile(proj, verified=False):
 
 NEEDS_SHAPING = "needs-shaping"
 
+def task_holds(issue):
+    """The unfinished blockers outside the issue that hold back any of its children (a story's tasks), each named by its
+    parent story (by itself when it has none), in first-seen order. A child read without its relations holds nothing."""
+    kids = [c for c in ((issue.get("children") or {}).get("nodes") or ()) if ((c.get("state") or {}).get("name") or "").lower() not in fc_tasks.CANCELED]
+    own, out = {c.get("identifier") for c in kids} | {issue.get("identifier")}, []
+    for r in (r for c in kids for r in ((c.get("inverseRelations") or {}).get("nodes") or ())):
+        b = r["issue"]
+        who = (b.get("parent") or {}).get("identifier") or b["identifier"]
+        if (r["type"] == "blocks" and b["identifier"] not in own and who not in own and who not in out
+                and not fc_tasks.blocker_finished(b["state"]["name"], [l["name"] for l in b["labels"]["nodes"]])):
+            out.append(who)
+    return out
+
 def ready_ids(issues):
     """The identifiers, in input order, of the issues that can start now: state Todo or Backlog and every `blocks`
-    blocker finished (Done or Canceled, or In Review carrying the Design label), and none carries the needs-shaping label."""
+    blocker finished (Done or Canceled, or In Review carrying the Design label), none of their tasks waiting on another
+    story's (task_holds), and none carries the needs-shaping label."""
     return [i["identifier"] for i in issues
             if (i["state"]["name"] or "").lower() in ("todo", "backlog")
             and NEEDS_SHAPING not in [l["name"].lower() for l in i["labels"]["nodes"]]
             and all(fc_tasks.blocker_finished(r["issue"]["state"]["name"], [l["name"] for l in r["issue"]["labels"]["nodes"]])
-                    for r in i["inverseRelations"]["nodes"] if r["type"] == "blocks")]
+                    for r in i["inverseRelations"]["nodes"] if r["type"] == "blocks")
+            and not task_holds(i)]
 
 def open_questions(description):
     """The list items (`-` or `*` bullets) of the `## Open questions` section: an H2 heading with an optional suffix, running to the
@@ -391,7 +406,8 @@ def open_questions(description):
 LINEAR_READY_TREE = """query($id: String!) { issue(id: $id) { team { labels { nodes { id name } } }
   children { nodes { ...ReadyNode } } parent { children { nodes { ...ReadyNode } } }
   inverseRelations(first: 50) { nodes { type issue { identifier state { name } labels { nodes { name } } } } } } }
-fragment ReadyNode on Issue { id identifier title description state { name } labels { nodes { id name } } children { nodes { state { name } } }
+fragment ReadyNode on Issue { id identifier title description state { name } labels { nodes { id name } }
+  children { nodes { identifier state { name } inverseRelations(first: 50) { nodes { type issue { identifier state { name } labels { nodes { name } } parent { identifier } } } } } }
   inverseRelations(first: 250) { nodes { type issue { identifier state { name } labels { nodes { name } } } } } }"""
 
 def linear_mark_ready(feature):

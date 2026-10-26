@@ -460,6 +460,19 @@ class MarkReady(unittest.TestCase):
                                              {"id": "id-ENG-3", "labels": ["l-bug", "l-area"]}, {"id": "id-ENG-6", "labels": ["l-ready"]}])
         self.assertCountEqual(self.said, ["linear ENG-2 -> Ready", "linear ENG-3 -> not Ready", "linear ENG-6 -> Ready"])
 
+    def test_a_story_whose_tasks_wait_on_another_storys_tasks_is_not_ready(self):
+        # NEB-2188: every task of the last story waited on tasks of earlier stories, with no story-level block, and it went Ready
+        task = lambda ident, *rels: {"identifier": ident, "state": {"name": "Todo"}, "inverseRelations": {"nodes": list(rels)}}
+        outside = lambda ident, state, story: {"type": "blocks", "issue": {"identifier": ident, "state": {"name": state}, "labels": {"nodes": []},
+                                                                          "parent": {"identifier": story}}}
+        held, inside, done = self.node("ENG-2", "Todo"), self.node("ENG-3", "Todo"), self.node("ENG-4", "Todo")
+        held["children"]["nodes"] = [task("ENG-21", outside("ENG-31", "In Progress", "ENG-3")), task("ENG-22")]
+        inside["children"]["nodes"] = [task("ENG-31"), task("ENG-32", outside("ENG-31", "Todo", "ENG-3"))]  # a block inside the story holds nothing
+        done["children"]["nodes"] = [task("ENG-41", outside("ENG-31", "Done", "ENG-3"), outside("ENG-91", "Canceled", "ENG-9"))]
+        self.children = [held, inside, done]
+        self.mark("ENG-3", "ENG-4")
+        self.assertEqual(fc.fc_linear.task_holds(held), ["ENG-3"])
+
     def test_a_child_labeled_needs_shaping_loses_ready_and_keeps_the_label(self):
         self.team.append({"id": "l-needs-shaping", "name": "needs-shaping"})
         self.children = [self.node("ENG-2", "Todo", "Ready", "needs-shaping")]
@@ -785,7 +798,8 @@ class FeatureAfterLink(unittest.TestCase):
 
 
 class ReadyTreeQuery(unittest.TestCase):
-    FRAGMENT = """fragment ReadyNode on Issue { id identifier title description state { name } labels { nodes { id name } } children { nodes { state { name } } }
+    FRAGMENT = """fragment ReadyNode on Issue { id identifier title description state { name } labels { nodes { id name } }
+  children { nodes { identifier state { name } inverseRelations(first: 50) { nodes { type issue { identifier state { name } labels { nodes { name } } parent { identifier } } } } } }
   inverseRelations(first: 250) { nodes { type issue { identifier state { name } labels { nodes { name } } } } } }"""
 
     @staticmethod
