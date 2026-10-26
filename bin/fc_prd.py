@@ -1,10 +1,10 @@
 """`compose prd`: the product's PRD, one Linear document titled PRD in the repo's project, planned with the product owner before the
-delivery plan (sections/0r.md): status, a seed that scans the project, and a write that needs their words. It never plans stories."""
-import hashlib, json, re, sys, time
+delivery plan (sections/0q.md): status, a seed that scans the project, and a write that needs their words. It never plans stories."""
+import hashlib, json, re, subprocess, sys, time
 from collections import Counter
 from pathlib import Path
 
-import fc_core, fc_config, fc_linear, fc_linear_cmd, fc_plan, fc_tasks
+import fc_core, fc_claude, fc_config, fc_linear, fc_linear_cmd, fc_plan, fc_tasks
 
 PRD_TITLE = "PRD"
 PRD_ID = "PRD"  # what `compose factory plan` and night prep call it
@@ -26,6 +26,22 @@ DOC_CREATE = "mutation($title: String!, $content: String!, $projectId: String!) 
 GROUP_LABELS = ("feature", "epic")
 PLAIN_LABELS = GROUP_LABELS + ("task", "ready")
 STOP_WORDS = set("a an and the of to for in on with by from into as at is be it its or not no new add make use can when after before via all their this that".split())
+CHECK_SECONDS = 900
+NOTHING_LEFT = "nothing important left"
+CHECK_ASK = """A talented builder reads this PRD draft cold, with the repo and the `compose prd seed` output below as context.
+Keep only the questions whose wrong guess would change what gets built, ranked, the most important first, each with why.
+Skip what is rightly left to later layers (features, stories) and wording nitpicks.
+Never write files: read the repo with Read, Grep and Glob only.
+Reply with the ranked questions alone, one per line, as `1. <question> - why: <what a wrong guess would change>`,
+or with the one line `nothing important left` when no such question is left.
+
+## The PRD draft
+
+{draft}
+
+## The compose prd seed
+
+{seed}"""
 HINT_FILES = ("README.md", "README", "README.rst", "DESIGN.md")
 
 def is_prd_title(title):
@@ -179,7 +195,7 @@ def seed_text(repo):
     tickets = []
     for g, kids in groups:
         tickets += ["- " + _line(g)] + ["  - " + _line(k) for k in kids]
-    body = "\n".join([f"PRD seed for {proj['name']} ({proj['url']}): read it, then play back a guess at the PRD (sections/0r.md).", "",
+    body = "\n".join([f"PRD seed for {proj['name']} ({proj['url']}): read it, then play back a guess at the PRD (sections/0q.md).", "",
                       "## Project", "", f"Name: {info.get('name') or proj['name']}", f"Description: {info.get('description') or 'none'}",
                       "Content:", (info.get("content") or "none").strip(), "",
                       "## Existing PRD", "", f"{prd['title']} ({prd['url']}):\n{(prd['content'] or '').strip()}" if prd else "No PRD yet.", "",
@@ -239,6 +255,30 @@ def verb_write(a):
         doc = fc_linear.linear_gql(DOC_CREATE, {"title": PRD_TITLE, "content": build(text, "", words), "projectId": proj["id"]})["documentCreate"]["document"]
     stamp(a.repo)
     print(f"prd written: {doc['url']}")
+
+def check_reply(reply):
+    """The ranked question lines of the builder check's reply, [] for nothing important left, or None for a reply that is neither."""
+    if reply.strip().strip(".").lower() == NOTHING_LEFT:
+        return []
+    return re.findall(r"^\d+\. .+$", reply, re.M) or None
+
+def verb_check(a):
+    if not a.file:
+        sys.exit("prd check needs --file <the PRD draft>")
+    draft = Path(a.file).read_text()
+    prompt = CHECK_ASK.format(draft=draft.strip(), seed=seed_text(a.repo).strip())
+    model, effort = fc_config.READINESS_MODEL
+    fail = "prd check: the builder check could not run ({}); show the draft without it"
+    try:
+        reply = fc_claude.claude_once(a.repo, prompt, timeout=CHECK_SECONDS, model=fc_claude.claude_id(model), tools="Read,Grep,Glob", effort=effort, keep=8000)[1]
+    except subprocess.TimeoutExpired:
+        sys.exit(fail.format(f"no reply within {CHECK_SECONDS}s"))
+    except (OSError, RuntimeError, ValueError) as e:
+        sys.exit(fail.format(e))
+    found = check_reply(reply or "")
+    if found is None:
+        sys.exit(fail.format(f"a reply with no ranked questions: {' '.join((reply or 'empty').split())[:200]}"))
+    print("\n".join(found) if found else NOTHING_LEFT)
 
 def cmd_prd(a):
     if not fc_config.LINEAR_KEY:

@@ -99,7 +99,7 @@ def main():
                             ("spec-check", fc_spec.cmd_spec_check, "check the synced feature, its stories, and its tasks against the spec; --stdin reads the sync JSON"),
                             ("ready", fc_linear.cmd_ready, "mark the stories and features that can start now with the Ready label in Linear, and print them"),
                             ("delivery", fc_delivery.cmd_delivery, "the product delivery plan across features: seed | order | reconcile | tracks; reconcile makes Linear follow it"),
-                            ("prd", fc_prd.cmd_prd, "the product's PRD, planned before the delivery plan: status | seed | write; write needs the product owner's words"),
+                            ("prd", fc_prd.cmd_prd, "the product's PRD, planned before the delivery plan: status | seed | check | write; check runs the builder check on a draft, write needs the product owner's words"),
                             ("factory", fc_factory.cmd_factory, "the build loop over the repo's Linear project: start | stop | status | watch | pace | plan | decline | night | day | digest; it builds ready stories in roadmap order, by day at a set pace and overnight within your limits"),
                             ("readiness", fc_readiness.cmd_readiness, "judge whether stories are specced well enough to build (Jev, a stronger model for technical ones) and unblocked; what is missing is asked under each story's ## Open questions"),
                             ("projects", fc_status.cmd_projects, "list every project (feature) with its task progress"),
@@ -174,7 +174,7 @@ def main():
             for flag in ("--dry-run", "--json"):
                 s.add_argument(flag, action="store_true")
         if name == "prd":
-            s.add_argument("action", choices=("status", "seed", "write"))
+            s.add_argument("action", choices=("status", "seed", "check", "write"))
             s.add_argument("--file")
             s.add_argument("--quote")
         if name == "factory":

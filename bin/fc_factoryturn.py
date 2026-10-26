@@ -9,8 +9,8 @@ MOVE_UP_JUDGES = 2  # judges a turn spends on out-of-order tickets, beyond pick'
 BACKOFF_TURNS = 3  # turns a story whose dispatch failed waits before it is tried again
 PLANNING_HOURS = 24  # a planning conversation older than this no longer holds offers back
 PRD_FIRST = ("event factory=prd-missing  (no PRD and no product delivery plan yet: plan the PRD with the product owner from compose prd seed "
-             "(sections/0r.md), then the delivery plan from it; nothing is dispatched before they exist)")
-PRD_OFFER = "event factory=prd-missing  (no PRD yet: offer to plan it with the product owner from compose prd seed (sections/0r.md); building goes on)"
+             "(sections/0q.md), then the delivery plan from it; nothing is dispatched before they exist)")
+PRD_OFFER = "event factory=prd-missing  (no PRD yet: offer to plan it with the product owner from compose prd seed (sections/0q.md); building goes on)"
 OPEN = ("todo", "backlog")
 FREED = ("in review", "done", "canceled")
 SHAPING = "needs-shaping"

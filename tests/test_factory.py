@@ -631,7 +631,7 @@ class Turn(unittest.TestCase):
         self.product_plan.side_effect = None; self.product_plan.return_value = None
         lines = ft.turn(self.repo, self.state, 100.0) + ft.turn(self.repo, self.state, 500.0)
         self.assertEqual(lines, [ft.PRD_FIRST])
-        self.assertIn("event factory=prd-missing", ft.PRD_FIRST); self.assertIn("compose prd seed (sections/0r.md)", ft.PRD_FIRST)
+        self.assertIn("event factory=prd-missing", ft.PRD_FIRST); self.assertIn("compose prd seed (sections/0q.md)", ft.PRD_FIRST)
         self.reconcile.assert_not_called(); self.dispatch.assert_not_called()
         self.assertEqual(self.find_prd.call_count, 2)  # missing: looked up again after 5 minutes
 

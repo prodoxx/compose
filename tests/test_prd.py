@@ -144,6 +144,43 @@ class Write(Fake):
         self.assertIn('- 2026-01-01: written; the product owner said: "first"\n- ' + TODAY + ': written; the product owner said: "second"', write["content"])
 
 
+class Check(Fake):
+    """`compose prd check`: the builder check reads the draft cold in one claude_once call, with the repo and the seed as context."""
+    def check(self, reply=None, error=None, text=FULL):
+        self.once = mock.Mock(side_effect=error) if error else mock.Mock(return_value=(None, reply, 3, {}))
+        with mock.patch.object(fc.fc_prd.fc_claude, "claude_once", self.once):
+            return self.run_verb("check", file=self.prd_file(text))
+
+    def test_check_prints_the_ranked_questions_with_their_why(self):
+        reply = "Here is what matters.\n1. Who pays, the runner or the club? - why: it changes checkout.\n2. Is it web only? - why: it changes the build.\n"
+        out = self.check(reply)
+        self.assertEqual(out.strip().splitlines(), ["1. Who pays, the runner or the club? - why: it changes checkout.", "2. Is it web only? - why: it changes the build."])
+        (call,) = self.once.call_args_list
+        prompt = call.args[1]
+        self.assertEqual(call.args[0], str(self.repo))
+        self.assertEqual(call.kwargs["tools"], "Read,Grep,Glob")
+        self.assertEqual((call.kwargs["model"], call.kwargs["effort"]), (fc.fc_claude.claude_id(fc.fc_config.READINESS_MODEL[0]), fc.fc_config.READINESS_MODEL[1]))
+        self.assertTrue(0 < call.kwargs["timeout"] <= 1800)
+        for need in ("talented builder", "cold", "wrong guess would change what gets built", "ranked", "why", "features, stories", "wording", "Never write files",
+                     "nothing important left", "About goals.", "PRD seed for Shop"):
+            self.assertIn(need, prompt)
+        self.assertEqual(self.mutations(), [])
+
+    def test_check_says_when_nothing_important_is_left(self):
+        self.assertEqual(self.check("Nothing important left.\n").strip(), "nothing important left")
+
+    def test_check_fails_clearly_when_claude_cannot_run_times_out_or_replies_badly(self):
+        import subprocess
+        for kw in (dict(error=FileNotFoundError("claude")), dict(error=subprocess.TimeoutExpired("claude", 900)),
+                   dict(error=RuntimeError("claude -p error: overloaded")), dict(reply="I think it is fine overall."), dict(reply="")):
+            with self.assertRaises(SystemExit) as e:
+                self.check(**kw)
+            self.assertIn("prd check: the builder check could not run", str(e.exception.code), kw)
+
+    def test_check_needs_a_file(self):
+        self.assertIn("--file", self.refused("check"))
+
+
 class Seed(Fake):
     def test_seed_scans_the_project_and_closes_with_a_guess_and_writes_nothing(self):
         self.docs.append({"id": "d2", "title": "PRD", "url": "u/prd", "content": "> Draft\n\n## Problem\n\nRunners lack shoes."})

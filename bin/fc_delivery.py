@@ -11,7 +11,7 @@ ISSUE_QUERY = "query($id: String!) { issue(id: $id) { %s url project { id } } }"
 DOCS_QUERY = """query($p: String!, $after: String) { project(id: $p) { documents(first: 50, after: $after) {
   pageInfo { hasNextPage endCursor } nodes { id title url } } } }"""
 DOC_QUERY = "query($id: String!) { document(id: $id) { id title url content } }"
-NO_PRD = "No PRD yet: plan it first with the product owner (compose prd seed, sections/0r.md); the delivery plan is planned from it."
+NO_PRD = "No PRD yet: plan it first with the product owner (compose prd seed, sections/0q.md); the delivery plan is planned from it."
 NOT_FOUND = "Entity not found: Issue"  # Linear's whole answer for an issue id it does not know
 
 def _issue(n):
