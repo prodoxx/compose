@@ -115,7 +115,7 @@ def self_contained(docs):
 NODE_ID = re.compile(r"I?\d+:\d+(?:;\d+:\d+)*")
 
 def tree_node_ids(text):
-    """(every node id, the ids marked `inInstance`) of a saved tree file; a section that is not a JSON document holds none."""
+    """(every node id, the ids marked `inInstance` or of type INSTANCE) of a saved tree file; a section that is not a JSON document holds none."""
     every, inside = set(), set()
     for sec in re.split(r"\n\n(?=NODE |WRITE RESULT)", text.strip("\n")):
         try:
@@ -125,12 +125,12 @@ def tree_node_ids(text):
         for n in walk(doc.get("nodes") or []) if isinstance(doc, dict) else []:
             if "id" in n:
                 every.add(n["id"])
-                if n.get("inInstance"):
+                if n.get("inInstance") or n.get("type") == "INSTANCE":  # an instance is no hand-drawn node either
                     inside.add(n["id"])
     return every, inside
 
 def names_only_instance_contents(evidence, text):
-    """True when `evidence` names tree nodes and every one of them is inside a component instance (marked `inInstance`)."""
+    """True when `evidence` names tree nodes and every one of them is a component instance or inside one (marked `inInstance`)."""
     every, inside = tree_node_ids(text)
     named = {t for t in NODE_ID.findall(evidence) if t in every}
     return bool(named) and named <= inside

@@ -302,6 +302,9 @@ class FigmaJudge(unittest.TestCase):
         self.assertTrue(second["confirmed"])  # a criterion that is not about instances keeps the verdict
         res = self.judge("004", {"Pay": [("NOT_MET", 0.9), ("MET", 0.9)]}, confirm=loose, blocks=True)
         self.assertEqual((res["criteria"][0]["confirmed"], res["status"]), (True, "failed"))
+        both = {"violated": True, "evidence": "Node 5:1 is an INSTANCE but I5:1;7:2 is type RECTANGLE, not INSTANCE or FRAME"}  # the instance itself is named too
+        res = self.judge("004", {"Pay": [("NOT_MET", 0.9), ("NOT_MET", 0.9)]}, confirm=both, reask="MET", blocks=True)
+        self.assertEqual(res["criteria"][0]["confirmed"], False)
 
     def test_a_confirm_error_blocks_with_no_re_ask(self):
         res = self.judge("004", {"Pay": [("NOT_MET", 0.9)]}, fail=RuntimeError("down"), reask="MET", blocks=True)
