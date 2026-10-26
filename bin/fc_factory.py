@@ -2,7 +2,7 @@
 import copy, fcntl, json, os, signal, subprocess, sys, time, traceback
 from pathlib import Path
 
-import fc_core, fc_config, fc_herdr, fc_change, fc_watch, fc_factorystate, fc_factoryturn, fc_night
+import fc_core, fc_config, fc_herdr, fc_change, fc_watch, fc_factorystate, fc_factoryturn, fc_night, fc_prd
 
 POLL = 2.0  # seconds between looks at the event log in one watch
 
@@ -272,13 +272,14 @@ def verb_plan(a, repo):
         print("factory: planning done; offers resume")
         return
     if not a.target:
-        sys.exit("factory plan takes the ticket being planned (compose factory plan NEB-30) or --done")
+        sys.exit("factory plan takes the ticket being planned (compose factory plan NEB-30), PRD for the PRD, or --done")
+    target = fc_prd.PRD_ID if a.target.upper() == fc_prd.PRD_ID else a.target
     with fc_factorystate.edit(repo) as state:
-        state["planning"] = {"id": a.target, "at": time.time()}
-        out_of_order = a.target != (state["offer"] or {}).get("id")
-        if out_of_order and a.target not in state["out_of_order"]:
-            state["out_of_order"].append(a.target)
-    print(f"factory: planning {a.target}" + (" (out of order: once it is specced you are asked whether to move it up)" if out_of_order else ""))
+        state["planning"] = {"id": target, "at": time.time()}
+        out_of_order = target != fc_prd.PRD_ID and target != (state["offer"] or {}).get("id")  # the PRD sits ahead of every ticket
+        if out_of_order and target not in state["out_of_order"]:
+            state["out_of_order"].append(target)
+    print(f"factory: planning {target}" + (" (out of order: once it is specced you are asked whether to move it up)" if out_of_order else ""))
 
 def verb_decline(a, repo):
     with fc_factorystate.edit(repo) as state:

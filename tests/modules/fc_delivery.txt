@@ -4,6 +4,7 @@ FEATURES_QUERY
 ISSUE_QUERY
 DOCS_QUERY
 DOC_QUERY
+NO_PRD
 NOT_FOUND
 _issue
 _paged
@@ -16,6 +17,7 @@ entry_line
 unusable
 report_unusable
 verb_order
+prd_lines
 verb_seed
 DOC_UPDATE
 DOC_CREATE

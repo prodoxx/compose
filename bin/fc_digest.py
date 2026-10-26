@@ -134,6 +134,7 @@ def ready_to_plan(repo, state, now=None) -> list:
     """The prepared tickets and how each other prep ended. The status comes from the worker outcomes, not from a tick that may not have run yet."""
     now = time.time() if now is None else now
     out, recs = [], {i: r for i, r in (state.get("prep") or {}).items() if r.get("print") is not None or r.get("gave_up")}
+    recs = dict(sorted(recs.items(), key=lambda kv: kv[0] != "PRD"))  # the PRD first: every plan starts from it
     if recs:
         try:
             doc = fc_nightprep.find_doc(repo)  # find only: the digest changes nothing

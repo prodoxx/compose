@@ -1155,7 +1155,7 @@ class ReadinessDocs(unittest.TestCase):
 
 
 class ReadyDocs(unittest.TestCase):
-    TASKS = ["sync", "linear <verb>", "tasks", "route", "quick <id>...", "run", "done", "triage", "resume", "reflect", "hold", "change start\\|done\\|undo", "spec-check", "ready", "delivery", "factory", "readiness", "bench"]
+    TASKS = ["sync", "linear <verb>", "tasks", "route", "quick <id>...", "run", "done", "triage", "resume", "reflect", "hold", "change start\\|done\\|undo", "spec-check", "ready", "delivery", "prd", "factory", "readiness", "bench"]
 
     def tasks_rows(self):
         sec = read("docs/cli.md").split("### Tasks\n", 1)[1].split("### Verify and stack", 1)[0]
@@ -2307,7 +2307,7 @@ class ReconcileFlow(unittest.TestCase):
     LINES = (
         "### 0k. Reconcile an existing project",
         "A reconcile is the one-time cleanup of a messy Linear project: every open ticket ends up kept, canceled, merged into the ticket it joins, or left for the product owner to verify.",
-        "It never fixes build order or blockers, and a missing design, PRD, or delivery plan is not its job: say so in the report and leave it to planning.",
+        "It never fixes build order or blockers, and a missing design, PRD, or delivery plan is not its job: say so in the report and leave it to planning, and a missing PRD to the factory, which plans it first.",
         "Research first, in parallel, with one helper per source: the code (the trunk and every unmerged `compose/*` branch), the designs, and Linear (every open ticket from `compose reconcile list`, its body, and the project's documents).",
         "Write what they found to a Linear document titled `<project name>: reconcile research <date>`: what the product is, what is built, designed, and planned, the contradictions, and the tickets that look stale.",
         "Sort with the product owner one question at a time, a group of tickets per question; a ticket a recorded decision already settles is your call, named with that decision.",
@@ -2438,6 +2438,39 @@ class ProductDeliveryPlan(unittest.TestCase):
             self.assertNotIn("\u2014", read(rel), rel)
         for rel in ("sections/0p.md", "commands/delivery.md"):
             for line in self.body(rel)[1 if rel.startswith("sections") else 0:]:
+                self.assertNotRegex(line, r"[.!?] [A-Z]", line)
+
+
+class PrdFlow(unittest.TestCase):
+    """The PRD flow: sections/0q.md, /compose:prd, and the lines pointing at it."""
+    def test_section_0r_says_the_flow(self):
+        lines = read("sections/0q.md").splitlines()
+        self.assertEqual(lines[0], "### 0q. The PRD comes before the delivery plan")
+        text = "\n".join(lines)
+        for need in ("`compose prd seed`", "one question at a time", "sections/0b.md", "`compose prd check --file .compose/prd/prd.md`", "`nothing important left`", "could not run", "--file .compose/prd/prd.md --quote",
+                     "under away and yolo too", "sections/0p.md", "never plans stories", "`## PRD: product requirements`"):
+            self.assertIn(need, text)
+        for h in ("Problem", "Who it is for", "Goals", "Non-goals", "Anti-goals", "The product at a glance", "Open questions"):
+            self.assertIn(f"`## {h}`", text)
+
+    def test_command_file_and_pointers(self):
+        head = read("commands/prd.md").split("---\n", 2)[1].splitlines()
+        self.assertEqual(head[1], 'argument-hint: "[seed]"')
+        self.assertIn("Write(.compose/prd/**)", head[2])
+        self.assertNotIn("buildercheck", head[2]); self.assertNotIn("compose crew", head[2])
+        self.assertNotIn("buildercheck", read("sections/0q.md"))
+        self.assertIn("Follow sections/0q.md.", read("commands/prd.md").splitlines())
+        self.assertEqual(len([l for l in read("README.md").splitlines() if l.startswith("- `/compose:prd [seed]`")]), 1)
+        self.assertEqual(len([l for l in read("sections/0f.md").splitlines() if l.startswith("On `event factory=prd-missing`")]), 1)
+        for rel, need in (("sections/0n.md", "PRD: product requirements"), ("sections/0p.md", "sections/0q.md"), ("sections/0k.md", "to the factory, which plans it first")):
+            self.assertIn(need, read(rel), rel)
+        self.assertEqual(len([l for l in read("docs/cli.md").splitlines() if l.startswith("| `prd` |")]), 1)
+
+    def test_house_rules(self):
+        for rel in ("sections/0q.md", "commands/prd.md"):
+            self.assertNotIn("\u2014", read(rel), rel)
+            body = read(rel).split("---\n", 2)[2].splitlines() if rel.startswith("commands") else read(rel).splitlines()[1:]
+            for line in body:
                 self.assertNotRegex(line, r"[.!?] [A-Z]", line)
 
 

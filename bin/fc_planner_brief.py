@@ -98,3 +98,9 @@ Cut only this ticket's feature. Teammates you start run in own panes; never do t
 
 7. Report the cut with each story's task issue ids.
 """
+
+def with_prd(brief, prd):
+    """The brief with the PRD's content, when the project has one: the product the feature is planned within."""
+    if not prd:
+        return brief
+    return brief + f"\nThe PRD ({prd['url']}): the product this feature serves; plan within its goals and never against its non-goals or anti-goals.\n{(prd.get('content') or '').strip()}\n"

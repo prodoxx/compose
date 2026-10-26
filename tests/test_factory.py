@@ -620,6 +620,77 @@ class Turn(unittest.TestCase):
             ft.turn(self.repo, self.state, 100.0)
         self.assertEqual(len([s for s, write in seen if write is False]), ft.MOVE_UP_JUDGES)
 
+    def prd(self, found):
+        """Patch the PRD lookup: found True, False, or an exception to raise."""
+        doc = {"id": "d", "title": "PRD", "url": "u/prd"}
+        kw = {"side_effect": found} if isinstance(found, Exception) else {"return_value": doc if found else None}
+        self.find_prd = unittest.mock.patch.object(ft.fc_prd, "find_prd", **kw).start(); self.addCleanup(unittest.mock.patch.stopall)
+
+    def test_no_prd_and_no_plan_dispatches_nothing_and_says_prd_missing_once(self):
+        self.prd(False)
+        self.product_plan.side_effect = None; self.product_plan.return_value = None
+        lines = ft.turn(self.repo, self.state, 100.0) + ft.turn(self.repo, self.state, 500.0)
+        self.assertEqual(lines, [ft.PRD_FIRST])
+        self.assertIn("event factory=prd-missing", ft.PRD_FIRST); self.assertIn("compose prd seed (sections/0q.md)", ft.PRD_FIRST)
+        self.reconcile.assert_not_called(); self.dispatch.assert_not_called()
+        self.assertEqual(self.find_prd.call_count, 2)  # missing: looked up again after 5 minutes
+
+    def test_the_prd_is_looked_up_before_the_delivery_plan(self):
+        self.prd(False)
+        self.find_prd.side_effect = lambda repo: self.calls.append("prd") or None
+        ft.turn(self.repo, self.state, 100.0)
+        self.assertLess(self.calls.index("prd"), self.calls.index("product_plan:1"))
+
+    def test_once_the_prd_is_found_a_missing_plan_offers_the_bootstrap(self):
+        self.prd(False)
+        self.product_plan.side_effect = None; self.product_plan.return_value = None
+        ft.turn(self.repo, self.state, 100.0)
+        self.find_prd.return_value = {"id": "d", "title": "PRD", "url": "u/prd"}
+        self.assertEqual([l.split("  ")[0] for l in ft.turn(self.repo, self.state, 500.0)], ["event factory=bootstrap"])
+        self.assertNotIn("prd-missing", self.state["said"])
+
+    def test_no_prd_but_a_plan_keeps_building_and_offers_the_prd_once_a_day_first(self):
+        self.prd(False)
+        lines = ft.turn(self.repo, self.state, 100.0)
+        self.assertEqual([c.args[2]["id"] for c in self.dispatch.call_args_list], ["NEB-10", "NEB-11"])
+        self.assertIn(ft.PRD_OFFER, lines)
+        self.assertIn("event factory=prd-missing", ft.PRD_OFFER); self.assertIn("building goes on", ft.PRD_OFFER)
+        self.assertNotIn(ft.PRD_OFFER, ft.turn(self.repo, self.state, 1000.0))
+        self.assertIn(ft.PRD_OFFER, ft.turn(self.repo, self.state, 100.0 + 86400))
+
+    def test_the_prd_offer_comes_ahead_of_any_ticket_offer(self):
+        self.prd(False)
+        self.make_nothing_ready(missing="scope: What is out?")
+        lines = ft.turn(self.repo, self.state, 100.0)
+        self.assertEqual([l.split("  ")[0].split(" ticket=")[0] for l in lines], ["event factory=prd-missing", "event factory=offer"])
+
+    def test_the_prd_offer_waits_while_planning_or_declined(self):
+        self.prd(False)
+        self.state["planning"] = {"id": "PRD", "at": 50.0}
+        self.assertNotIn(ft.PRD_OFFER, ft.turn(self.repo, self.state, 100.0))
+        self.state["planning"], self.state["declined_until"] = None, 3700.0
+        self.assertNotIn(ft.PRD_OFFER, ft.turn(self.repo, self.state, 200.0))
+        self.assertIn(ft.PRD_OFFER, ft.turn(self.repo, self.state, 3701.0))
+
+    def test_a_found_prd_offers_nothing_more(self):
+        self.prd(True)
+        self.assertEqual([l for l in ft.turn(self.repo, self.state, 100.0) if "prd" in l], [])
+
+    def test_a_failed_prd_lookup_never_blocks_building(self):
+        self.prd(RuntimeError("linear down"))
+        lines = ft.turn(self.repo, self.state, 100.0)
+        self.assertEqual([c.args[2]["id"] for c in self.dispatch.call_args_list], ["NEB-10", "NEB-11"])
+        self.assertEqual([l for l in lines if "prd" in l], [])
+        self.assertEqual(self.state["prd"], {})
+        ft.turn(self.repo, self.state, 101.0)
+        self.assertEqual(self.find_prd.call_count, 2)  # tried again on the next turn
+
+    def test_a_failed_prd_lookup_with_no_plan_still_offers_the_bootstrap(self):
+        self.prd(SystemExit("no .compose/linear.json"))
+        self.product_plan.side_effect = None; self.product_plan.return_value = None
+        self.assertEqual([l.split("  ")[0] for l in ft.turn(self.repo, self.state, 100.0)], ["event factory=bootstrap"])
+
+
 
 class Verbs(unittest.TestCase):
     def setUp(self):
@@ -845,6 +916,15 @@ class Verbs(unittest.TestCase):
         self.assertIsNone(st.load_state(self.repo)["planning"])
         self.assertEqual(self.verb("plan", "NEB-10"), "factory: planning NEB-10\n")
         self.assertEqual(st.load_state(self.repo)["out_of_order"], ["NEB-30"])
+
+    def test_plan_prd_pauses_offers_and_is_never_out_of_order(self):
+        self.save(offer={"id": "NEB-10", "layer": "story", "at": 1.0})
+        self.assertEqual(self.verb("plan", "PRD"), "factory: planning PRD\n")
+        s = st.load_state(self.repo)
+        self.assertEqual((s["planning"]["id"], s["out_of_order"]), ("PRD", []))
+        self.assertEqual(self.verb("plan", "prd"), "factory: planning PRD\n")
+        self.verb("plan", done=True)
+        self.assertIsNone(st.load_state(self.repo)["planning"])
 
     def test_status_names_the_pace_what_is_in_flight_and_the_offer(self):
         self.hold_lock()

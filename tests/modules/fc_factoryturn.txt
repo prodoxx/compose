@@ -2,6 +2,8 @@ JUDGE_LIMIT
 MOVE_UP_JUDGES
 BACKOFF_TURNS
 PLANNING_HOURS
+PRD_FIRST
+PRD_OFFER
 OPEN
 FREED
 SHAPING
@@ -39,6 +41,7 @@ hold_changed
 offer_day
 ORDER_FILTER
 IDLE
+PRD_IDLE
 _settle
 _watch
 _move_up
@@ -46,4 +49,5 @@ _stopped
 _dispatch_all
 _expire
 turn
+_day
 _turn

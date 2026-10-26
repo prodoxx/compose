@@ -17,7 +17,6 @@ fc_linear
 fc_evidence
 fc_ledger
 fc_linear_cmd
-fc_delivery
 fc_policy
 fc_routectx
 fc_routerec
@@ -27,6 +26,8 @@ fc_tierpin
 fc_costevent
 fc_fast
 fc_claude
+fc_prd
+fc_delivery
 fc_notify
 fc_models
 fc_credit

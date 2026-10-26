@@ -8,6 +8,8 @@ WORKER_SECONDS
 RETRY_SECONDS
 ERRORS
 ASK
+PRD_TITLE
+PRD_ASK
 prep_print
 _q
 _line
@@ -31,8 +33,14 @@ parse_reply
 _strings
 _clean
 prep_prompt
+prd_prompt
+_subject
 run_prep
 refresh
+prd_found
+_refresh_prd
 _settle
 prep_idle
+prep_prd
+fc_factoryturn
 fc_factoryturn

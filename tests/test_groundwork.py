@@ -88,6 +88,17 @@ class Groundwork(unittest.TestCase):
             fc.fc_briefs.cmd_planner(SimpleNamespace(repo=str(self.repo), project="p", issue=issue, extra=extra))
         return out.getvalue()
 
+    def test_planner_brief_includes_the_prd_when_it_exists(self):
+        prd = {"id": "d", "title": "PRD", "url": "u/prd", "content": "## Problem\n\nRunners lack shoes.\n"}
+        with mock.patch.object(fc.fc_briefs.fc_prd, "read_prd", return_value=prd) as read, mock.patch.object(fc.fc_briefs.fc_config, "LINEAR_KEY", "k"):
+            brief = self.planner()
+        self.assertIn("The PRD (u/prd)", brief); self.assertIn("Runners lack shoes.", brief)
+        self.assertEqual(read.call_args.args[0], self.repo)
+        for found in (None, RuntimeError("linear down"), SystemExit("no .compose/linear.json")):
+            kw = {"side_effect": found} if isinstance(found, BaseException) else {"return_value": found}
+            with mock.patch.object(fc.fc_briefs.fc_prd, "read_prd", **kw), mock.patch.object(fc.fc_briefs.fc_config, "LINEAR_KEY", "k"):
+                self.assertNotIn("The PRD (", self.planner())
+
     def test_planner_brief_names_the_feature_and_routes_every_gap(self):
         brief = self.planner()
         for s in ("NEB-9", str(self.repo), "p-planner", "### Codebase brief", "## Plan", "needs-user", "blocked",
