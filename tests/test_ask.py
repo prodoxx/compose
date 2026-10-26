@@ -98,6 +98,12 @@ class Ask(unittest.TestCase):
         q = fc.fc_ask.questions_in("- Q5: Which auth? - Recommendation: Clerk - the hosted one - every screen signs in\n")["Q5"]
         self.assertEqual((q["recommendation"], q["why"]), ("Clerk - the hosted one", "every screen signs in"))
 
+    def test_a_recommendation_keeps_its_inline_code_and_emphasis_whole(self):
+        qs = fc.fc_ask.questions_in("- Q6: Where? - Recommendation: move it to `src/server/stripe-webhook.test.ts` - it follows the webhook\n"
+                                    "- Q7: Which? - Recommendation: **Clerk** - hosted\n- Q8: Which? - Recommendation: `vi.mock`* - same as today\n")
+        self.assertEqual([qs[i]["recommendation"] for i in ("Q6", "Q7", "Q8")],
+                         ["move it to `src/server/stripe-webhook.test.ts`", "**Clerk**", "`vi.mock`"])
+
     def test_a_question_span_takes_its_continuation_lines_in_both_formats(self):
         qs = fc.fc_ask.questions_in("- Q1: Which auth? - Recommendation: Clerk - every screen\n  signs in\nsee NEB-9\n- Q2: Colors? - Recommendation: warm - brand\n"
                                     "Q3. Database?\nA. Postgres - affects: hosting\nRecommendation: A\nmore notes on hosting\n")

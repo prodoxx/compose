@@ -99,6 +99,16 @@ def old_card(q, lines):
             q["supersedes"] = sup.group(1).strip()
     q["recommendation"] = f"{letter}. {q['options'][letter][0]}" if letter in q["options"] else letter
 
+def unwrapped(text):
+    """`text` without the markdown marks left dangling at its ends (`**` or a backtick the recommendation regex cut from its pair);
+    a pair that closes inside the text, like inline code ending the line, stays whole."""
+    t = text.strip()
+    while t and t[-1] in "*_`" and t.count(t[-1]) % 2:
+        t = t[:-1].rstrip()
+    while t and t[0] in "*_`" and t.count(t[0]) % 2:
+        t = t[1:].lstrip()
+    return t
+
 def questions_in(section):
     """The open questions written in a map's Not yet specified, by id: question, recommendation, why, replaces (the decision a
     change-of-course question would replace), options and supersedes (an old card's letters and `Supersedes:` line), and span, the
@@ -114,7 +124,7 @@ def questions_in(section):
         if r := INLINE_RECOMMENDATION.search(text):
             q["question"] = text[:r.start()].strip()
             rec, dash, why = text[r.end():].rpartition(" - ")  # the why follows the last dash: a recommendation may hold one
-            q["recommendation"], q["why"] = (rec if dash else why).strip(" *_`"), why.strip() if dash else ""
+            q["recommendation"], q["why"] = unwrapped(rec if dash else why), why.strip() if dash else ""
         else:
             old_card(q, lines[i + 1:end])
         if p := REPLACES.search(q["question"]):
