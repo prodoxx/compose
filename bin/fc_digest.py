@@ -127,23 +127,39 @@ def _sections(content) -> dict:
             found[cur][1] += 1
     return {k: tuple(v) for k, v in found.items()}
 
-def ready_to_plan(repo, state) -> list:
-    out, prepared = [], {i: r for i, r in (state.get("prep") or {}).items() if r.get("print") is not None}
-    if prepared:
+PREP_LINES = {"cut": "prep was cut off when the night ended; it runs again next night", "failed": "prep failed; it is tried once more next night",
+              "gave-up": "prep failed twice; see .compose/night-prep.log", "running": "still being prepared"}
+
+def ready_to_plan(repo, state, now=None) -> list:
+    """The prepared tickets and how each other prep ended. The status comes from the worker outcomes, not from a tick that may not have run yet."""
+    now = time.time() if now is None else now
+    out, recs = [], {i: r for i, r in (state.get("prep") or {}).items() if r.get("print") is not None or r.get("gave_up")}
+    if recs:
         try:
-            doc_id, content = fc_nightprep._find_doc(repo)  # find only: the digest changes nothing
-            found, err = _sections(content), "" if doc_id else "document missing"
+            doc = fc_nightprep.find_doc(repo)  # find only: the digest changes nothing
+            found, err = _sections(doc["content"]), "" if doc["id"] else "document missing"
         except ERRORS as e:
-            found, err = {}, _why(e)
-        for ident, rec in prepared.items():
+            doc, found, err = {}, {}, _why(e)
+        for ident, rec in recs.items():
             layer = rec.get("layer", "story")
-            if ident in found:
+            try:
+                status = fc_nightprep.prep_status(repo, ident, rec, now)
+            except ERRORS as e:
+                out.append(f"{ident} ({layer}): prep status unavailable ({_why(e)})")
+                continue
+            if status in PREP_LINES:
+                out.append(f"{ident} ({layer}): {PREP_LINES[status]}")
+            elif status != "prepared":
+                continue
+            elif ident in found:
                 title, n = found[ident]
                 out.append(f"{ident} {title} ({layer}): {n} question{'' if n == 1 else 's'} prepared")
             elif err:
                 out.append(f"{ident} ({layer}): prepared questions unavailable ({err})")
             else:
                 out.append(f"{ident} ({layer}): prepared, but its section is not in the document")
+        if out and doc.get("id") and doc.get("url"):
+            out.insert(0, f"Prep document: {doc['url']}")
     night = state.get("night") or {}
     for held in night.get("morning_msgs") or []:
         slug, _, message = held.partition("|")
@@ -171,7 +187,7 @@ def render(repo, state, now) -> str:
             return fn(*args)
         except ERRORS as e:
             return [f"unavailable: {_why(e)}"]
-    items = [part(verified, repo, lines), part(review, repo, state, lines), part(ready_to_plan, repo, state)]
+    items = [part(verified, repo, lines), part(review, repo, state, lines), part(ready_to_plan, repo, state, now)]
     if events_err:
         items[0] = items[1] = [f"night events unavailable: {events_err}"]
     for h, its in zip(HEADS, items):

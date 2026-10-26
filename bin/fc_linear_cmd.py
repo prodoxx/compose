@@ -358,15 +358,19 @@ def verb_doc(a):
                                    {"in": {"title": a.title, "content": read_body(a), "projectId": p["id"]}})["documentCreate"]["document"]
         print(doc["url"])
     elif a.target == ["list"]:
-        p, after = linear_project(a.repo), None
+        p, after, docs = linear_project(a.repo), None, []
         while True:
-            page = fc_linear.linear_gql("query($id: String!, $after: String) { project(id: $id) { documents(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { id title updatedAt } } } }",
+            page = fc_linear.linear_gql("query($id: String!, $after: String) { project(id: $id) { documents(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { id title updatedAt url } } } }",
                                         {"id": p["id"], "after": after})["project"]["documents"]
-            for d in page["nodes"]:
-                print(f"{d['id']} {d['updatedAt'][:10]} {d['title']}")
+            docs += page["nodes"]
             if not page["pageInfo"]["hasNextPage"]:
                 break
             after = page["pageInfo"]["endCursor"]
+        if a.json:
+            print(json.dumps([{"id": d["id"], "updatedAt": d["updatedAt"], "title": d["title"], "url": d.get("url") or ""} for d in docs]))
+        else:
+            for d in docs:
+                print(f"{d['id']} {d['updatedAt'][:10]} {d['title']}")
     elif len(a.target) == 2 and a.target[0] == "update":
         writes = writes_body(a, "doc update")
         if not writes and not a.title:

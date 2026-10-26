@@ -6,7 +6,6 @@ GONE
 MAX_QUESTIONS
 WORKER_SECONDS
 RETRY_SECONDS
-DONE
 ERRORS
 ASK
 prep_print
@@ -14,12 +13,13 @@ _q
 _line
 outcomes_path
 _outcome
-_done_since
+_last_outcome
+prep_status
 _issue
 _texts
 candidates
 render
-_find_doc
+find_doc
 _body
 prep_doc
 _heading
@@ -33,6 +33,6 @@ _clean
 prep_prompt
 run_prep
 refresh
-_requeue_stuck
+_settle
 prep_idle
 fc_factoryturn
