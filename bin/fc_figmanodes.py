@@ -114,26 +114,35 @@ def self_contained(docs):
 
 NODE_ID = re.compile(r"I?\d+:\d+(?:;\d+:\d+)*")
 
-def tree_node_ids(text):
-    """(every node id, the ids marked `inInstance` or of type INSTANCE) of a saved tree file; a section that is not a JSON document holds none."""
-    every, inside = set(), set()
+def tree_index(text):
+    """{node id: (name, inside, ancestors)} of a saved tree file: `inside` is true for a node marked `inInstance` or of type INSTANCE
+    (an instance is no hand-drawn node either), `ancestors` the ids above it. A section that is not a JSON document holds none."""
+    index = {}
+    def visit(nodes, above):
+        for n in nodes:
+            if "id" in n:
+                index[n["id"]] = (n.get("name"), bool(n.get("inInstance") or n.get("type") == "INSTANCE"), above)
+            visit(n.get("children") or [], above + (n["id"],) if "id" in n else above)
     for sec in re.split(r"\n\n(?=NODE |WRITE RESULT)", text.strip("\n")):
         try:
             doc = json.loads(sec.partition("\n")[2])
         except ValueError:
             continue
-        for n in walk(doc.get("nodes") or []) if isinstance(doc, dict) else []:
-            if "id" in n:
-                every.add(n["id"])
-                if n.get("inInstance") or n.get("type") == "INSTANCE":  # an instance is no hand-drawn node either
-                    inside.add(n["id"])
-    return every, inside
+        visit(doc.get("nodes") or [] if isinstance(doc, dict) else [], ())
+    return index
+
+QUOTED_NAME = re.compile(r"\"([^\"]+)\"|'([^']+)'|`([^`]+)`")
 
 def names_only_instance_contents(evidence, text):
-    """True when `evidence` names tree nodes and every one of them is a component instance or inside one (marked `inInstance`)."""
-    every, inside = tree_node_ids(text)
-    named = {t for t in NODE_ID.findall(evidence) if t in every}
-    return bool(named) and named <= inside
+    """True when `evidence` names tree nodes, by id or by a quoted node name, and every one that is not just a container of another named
+    node is a component instance or inside one (marked `inInstance`). A name stands for every node of that name, so one hand-drawn
+    node of the same name keeps the violation."""
+    index = tree_index(text)
+    named = {t for t in NODE_ID.findall(evidence) if t in index}
+    quoted = {q for m in QUOTED_NAME.findall(evidence) for q in m if q}
+    named |= {i for i, (name, _, _) in index.items() if name in quoted}
+    named -= {a for i in named for a in index[i][2]}  # a container named for context is no node the evidence blames
+    return bool(named) and all(index[i][1] for i in named)
 
 
 TREE_CHUNK_CHARS = 30000  # one judge request's share of a tree; the whole tree is judged in as many requests as it takes

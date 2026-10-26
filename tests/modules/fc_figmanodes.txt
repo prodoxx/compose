@@ -9,7 +9,8 @@ restore_hidden
 mark_instance_contents
 self_contained
 NODE_ID
-tree_node_ids
+tree_index
+QUOTED_NAME
 names_only_instance_contents
 TREE_CHUNK_CHARS
 hard_split
