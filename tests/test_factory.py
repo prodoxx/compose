@@ -116,7 +116,7 @@ class Pick(unittest.TestCase):
         plan = plan_of(NEB_9=[story("NEB-10", "Todo", "Ready"), story("NEB-11", "Todo", "Ready"), story("NEB-14", "In Progress")])
         entries = [entry("NEB-14", "NEB-9", state="In Progress"), entry("NEB-10", "NEB-9"), entry("NEB-11", "NEB-9"),
                    entry("NEB-20", "NEB-12", waits_on=("NEB-9",))]
-        j = judge({"NEB-10": rd("NEB-10"), "NEB-11": rd("NEB-11")})
+        j = judge({"NEB-10": rd("NEB-10"), "NEB-11": rd("NEB-11"), "NEB-20": rd("NEB-20")})  # NEB-20 waits on NEB-9: ready or not, never started
         out = ft.pick(entries, plan, {"dispatched": {}}, 1, j)
         self.assertEqual(([(e["id"], k) for e, k in out["picks"]], out["ready_waiting"], out["offer"]), ([("NEB-10", "build")], True, None))
         self.assertEqual(ft.pick(entries, plan, {"dispatched": {}}, 0, j)["picks"], [])
@@ -128,6 +128,23 @@ class Pick(unittest.TestCase):
         self.assertEqual(out["offer"], {"id": "NEB-10", "layer": "story", "why": "scope: What is out?"})
         out = ft.pick([entry("NEB-12", "NEB-12", kind="feature")], plan_of(), {"dispatched": {}}, 2, judge({}))
         self.assertEqual(out["offer"], {"id": "NEB-12", "layer": "stories", "why": "no stories yet"})
+
+    def test_a_story_whose_feature_waits_is_offered_for_planning_while_others_build_but_never_started(self):
+        plan = plan_of(NEB_9=[story("NEB-10", "Todo", "Ready"), story("NEB-11", "Todo", "Ready")], NEB_12=[story("NEB-20", "Todo", "Ready"), story("NEB-21")])
+        entries = [entry("NEB-10", "NEB-9"), entry("NEB-11", "NEB-9"), entry("NEB-20", "NEB-12", waits_on=("NEB-9",)), entry("NEB-21", "NEB-12", waits_on=("NEB-9",))]
+        missing = [{"item": "scope", "issue": "NEB-21", "question": "What is out?"}]
+        j = judge({"NEB-10": rd("NEB-10"), "NEB-11": rd("NEB-11"), "NEB-20": rd("NEB-20"), "NEB-21": rd("NEB-21", ready=False, specced=False, missing=missing)})
+        out = ft.pick(entries, plan, {"dispatched": {}}, 1, j)
+        self.assertEqual(([(e["id"], k) for e, k in out["picks"]], out["ready_waiting"], out["offer"]),
+                         ([("NEB-10", "build")], True, {"id": "NEB-21", "layer": "story", "why": "scope: What is out?"}))
+        self.assertEqual([e["id"] for e, _ in ft.pick(entries, plan, {"dispatched": {}}, 4, j)["picks"]], ["NEB-10", "NEB-11"])
+
+    def test_a_kept_verdict_spends_nothing_of_the_judge_limit(self):
+        entries = [entry(f"NEB-{n}", "NEB-9") for n in range(30, 40)] + [entry("NEB-40", "NEB-9")]
+        kept = {e["id"]: {**rd(e["id"], ready=False), "cached": True} for e in entries}
+        kept["NEB-40"] = rd("NEB-40", ready=False, specced=False)
+        out = ft.pick(entries, plan_of(NEB_9=[story(e["id"]) for e in entries]), {"dispatched": {}}, 0, judge(kept))
+        self.assertEqual(out["offer"], {"id": "NEB-40", "layer": "story", "why": "not specced"})
 
     def test_pick_calls_the_judge_with_the_id_alone_so_the_caller_binds_the_repo(self):
         seen = []
@@ -434,6 +451,15 @@ class Turn(unittest.TestCase):
         self.assertEqual((ft.turn(self.repo, self.state, 200.0), len(ft.turn(self.repo, self.state, 3701.0))), ([], 1))
         self.state["said"].pop("offer"); self.state["planning"] = {"id": "NEB-30", "at": 1.0, "out_of_order": True}
         self.assertEqual(ft.turn(self.repo, self.state, 3800.0), [])
+
+    def test_planning_is_offered_in_the_same_turn_stories_start(self):
+        self.add_entry("NEB-20", "NEB-12", waits_on=("NEB-9",))
+        self.results["NEB-20"] = rd("NEB-20", ready=False, specced=False, missing=[{"item": "scope", "question": "What is out?"}])
+        lines = ft.turn(self.repo, self.state, 100.0)
+        self.assertEqual([c.args[2]["id"] for c in self.dispatch.call_args_list], ["NEB-10", "NEB-11"])
+        self.assertIn('event factory=offer ticket=NEB-20 layer=story why="scope: What is out?"  '
+                      "(offer to plan it with the product owner (sections/0f.md); they may pick another ticket or decline)", lines)
+        self.assertEqual(self.state["offer"]["id"], "NEB-20")
 
     def test_an_out_of_order_ticket_asks_once_to_move_up_when_specced(self):
         self.state["out_of_order"] = ["NEB-31"]

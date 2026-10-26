@@ -1,5 +1,5 @@
 ---
-description: Start the factory - it builds ready stories in delivery plan order at a day pace and offers planning when nothing is ready
+description: Start the factory - it builds ready stories in delivery plan order at a day pace and offers what to plan next while it builds
 argument-hint: "[stop [--now] [--hold <why>] | status | pace <n> | night [--until HH:MM] [--budget <dollars>] [--stop-when <words>] | day | digest]"
 allowed-tools: Bash(compose:*), Bash(herdr:*)
 ---

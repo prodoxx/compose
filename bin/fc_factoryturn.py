@@ -51,31 +51,35 @@ def backed_off(state, ident):
     return isinstance(b, dict) and b.get("until_turn", 0) >= state.get("turns", 0)
 
 def pick(entries, plan, state, free, judge):
-    """Walk the entries in order and start up to free ready stories. judge(id, write=True) is the caller's readiness check; the caller binds the repo."""
+    """Walk the entries in order and start up to free ready stories, and find the first ticket to offer for planning: planning goes on
+    while stories build, and reaches stories whose feature waits on another, which are never started. judge(id, write=True) is the
+    caller's readiness check; the caller binds the repo. Only a fresh verdict counts toward JUDGE_LIMIT: a kept one costs nothing."""
     flying = set(in_flight(plan, state))
     out = {"picks": [], "ready_waiting": False, "offer": None, "failed": [], "specced": set()}
     candidate, judged = None, 0
     for e in entries:
-        if judged >= JUDGE_LIMIT or (len(out["picks"]) == free and (out["ready_waiting"] or candidate)):
+        if judged >= JUDGE_LIMIT or (len(out["picks"]) == free and candidate):
             break
-        if e["id"] in flying or e["state"].lower() not in OPEN or e["waits_on"] or backed_off(state, e["id"]):
+        if e["id"] in flying or e["state"].lower() not in OPEN or backed_off(state, e["id"]):
             continue
         if e["kind"] == "feature":
             candidate = candidate or {"id": e["id"], "layer": "stories", "why": "no stories yet"}
             continue
+        if e["waits_on"] and candidate:  # it can only be planned, and a ticket to plan is found
+            continue
         labels = (story_of(plan, e["id"]) or {}).get("labels", [])
-        judged += 1
         try:
             r = judge(e["id"], write=True)
         except (fc_readiness.NotAStory, RuntimeError, OSError) as ex:
             out["failed"].append((e["id"], str(ex)))
             continue
+        judged += not r.get("cached")
         if r.get("error"):
             out["failed"].append((e["id"], r["error"]))
             continue
         if r.get("specced"):
             out["specced"].add(e["id"])
-        kind = classify(labels, r)
+        kind = None if e["waits_on"] else classify(labels, r)
         if kind:
             if len(out["picks"]) < free:
                 out["picks"].append((e, kind))
@@ -83,8 +87,7 @@ def pick(entries, plan, state, free, judge):
                 out["ready_waiting"] = True
         elif r.get("specced") is False or SHAPING in labels:
             candidate = candidate or {"id": e["id"], "layer": "story", "why": _why(r.get("missing") or [], labels)}
-    if not out["picks"] and not out["ready_waiting"]:
-        out["offer"] = candidate
+    out["offer"] = candidate
     return out
 
 CLI_TIMEOUT = 1800  # crew start waits while the machine is loaded
@@ -259,7 +262,7 @@ def hold_changed(repo, proj_dir, story, refs, why):
             "(re-plan it with the product owner: keep, part, or discard each held task with compose change, step 8)")
 
 def offer_day(repo, state, offer, now, out):
-    """What a day turn does when nothing can be started: offer the product owner the next ticket to shape."""
+    """What a day turn does with a ticket to plan, whether or not stories build: offer it to the product owner to shape."""
     state["offer"] = {"id": offer["id"], "layer": offer["layer"], "at": now}
     fc_factorystate.say_once(state, "offer", f'event factory=offer ticket={offer["id"]} layer={offer["layer"]} why="{offer["why"]}"  '
                              "(offer to plan it with the product owner (sections/0f.md); they may pick another ticket or decline)", out)
@@ -454,7 +457,7 @@ def _turn(repo, state, now, stopping, saved, out):
     if prd is False and offers and fc_factorystate.pace(state)["mode"] == "day" and said.get("prd-day") != _day(now):
         said["prd-day"] = _day(now)  # once a day, ahead of any ticket offer
         out.append(PRD_OFFER)
-    if got["picks"] or got["ready_waiting"] or not got["offer"]:
+    if not got["offer"]:
         said.pop("offer", None)
         state["offer"] = None
     elif offers:

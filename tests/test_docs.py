@@ -2529,7 +2529,7 @@ class FactoryLoop(unittest.TestCase):
         "With no arguments, do not ask which project as 0j does for a bare project link: the factory works on the repo's Linear project from step 0, so run `compose factory start` and follow sections/0f.md.",
         "In this session, never write code, stories, or tasks yourself.",
     ]
-    HOW = "The factory (`/compose:factory`) runs in the background: it builds every ready story in delivery plan order at a day pace you set, pauses work a plan change rests on, and offers the next thing to plan when nothing is ready."
+    HOW = "The factory (`/compose:factory`) runs in the background: it builds every ready story in delivery plan order at a day pace you set, pauses work a plan change rests on, and offers the next thing to plan while it builds, ahead into later waves."
 
     def body(self, rel):
         text = read(rel)
@@ -2550,7 +2550,7 @@ class FactoryLoop(unittest.TestCase):
     def test_command_file(self):
         text = read("commands/factory.md")
         head = text.split("---\n", 2)[1].splitlines()
-        self.assertEqual(head, ["description: Start the factory - it builds ready stories in delivery plan order at a day pace and offers planning when nothing is ready",
+        self.assertEqual(head, ["description: Start the factory - it builds ready stories in delivery plan order at a day pace and offers what to plan next while it builds",
                                 'argument-hint: "[stop [--now] [--hold <why>] | status | pace <n> | night [--until HH:MM] [--budget <dollars>] [--stop-when <words>] | day | digest]"',
                                 "allowed-tools: Bash(compose:*), Bash(herdr:*)"])
         body = self.body("commands/factory.md")

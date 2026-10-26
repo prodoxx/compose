@@ -107,7 +107,7 @@ Like the team lead, the planner's tab is denied edits, so it plans and never wri
 
 One product delivery plan in Linear sets the order across features, in parallel tracks; `compose delivery reconcile` makes Linear follow it and proposes anything destructive.
 
-The factory (`/compose:factory`) runs in the background: it builds every ready story in delivery plan order at a day pace you set, pauses work a plan change rests on, and offers the next thing to plan when nothing is ready.
+The factory (`/compose:factory`) runs in the background: it builds every ready story in delivery plan order at a day pace you set, pauses work a plan change rests on, and offers the next thing to plan while it builds, ahead into later waves.
 At night (`/compose:factory night`) it keeps building inside the end time and dollar budget you set, answers questions on approved tickets with a one-time frontier answerer, prepares questions for your next planning session, and greets you with one morning digest.
 
 You can also start it yourself from the engineering manager with `/compose:planner <issue or Linear project link>`.
