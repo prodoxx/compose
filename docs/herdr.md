@@ -50,7 +50,7 @@ A `contradiction` report always wakes the team lead as a teammate event.
 It also screens the feature's decisions with Jev, which adds a `reflect=` event when it flags a decision line.
 
 A `needs-user` or `blocked` report badges the pane `needs you`.
-A `needs-user` that names a Lavish page is refused unless it carries the page's one working link, and cards already asked and not answered are not asked again.
+A `needs-user` that names a Lavish page is refused unless it carries the page's one working link, and questions already asked and not answered are not asked again.
 The desktop notification pops only when such a report wakes the engineering manager's `watch`, so you are alerted once, for what the engineering manager brings you, and not by every teammate or the team lead.
 The CLI sends it itself (macOS `osascript` run through `launchctl asuser` in the GUI session, since herdr panes sit in launchd's Background session where Notification Center drops notifications; elsewhere `notify-send`), not through herdr: herdr's own toast and sound fire for every agent that finishes or needs input, so set `[ui.toast] delivery = "off"` and `[ui.sound] enabled = false` in `~/.config/herdr/config.toml`; `compose doctor` warns while either is on.
 Nothing steals focus.

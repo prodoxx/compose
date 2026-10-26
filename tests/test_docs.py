@@ -346,7 +346,7 @@ class PlanWritingRules(unittest.TestCase):
 
     def test_the_engineering_manager_plays_stories_back_and_records_the_go(self):
         text = read("sections/0h.md")
-        self.assertIn("plays it back to the product owner as one chunk of 200 to 300 words ending with what is wrong or missing, never as a card list", text)
+        self.assertIn("plays it back to the product owner as one chunk of 200 to 300 words ending with what is wrong or missing, never as a list of questions", text)
         self.assertIn('compose decide --project <slug> --new "stories <issue> approved" --quote', text)
 
     DEEP_DIVE = ("When the planner reports `needs-user \"deep-dive <story>: no tech doc\"`, the engineering manager runs that deep dive with the product owner here (0b), "
@@ -530,7 +530,7 @@ class NoLinearMcpToolName(unittest.TestCase):
 
 
 class LeadRelaysOnce(unittest.TestCase):
-    ONE_LINE = 'needs-user "<issue>: <n> cards <ids>; recommendation <one line>"'
+    ONE_LINE = 'needs-user "<issue>: <n> questions <ids>; recommendation <one line>"'
 
     def setUp(self):
         self.text = read("sections/0h.md").replace("\\~", "~")
@@ -551,11 +551,17 @@ class LeadRelaysOnce(unittest.TestCase):
     def test_manager_points_at_the_page_and_records_with_the_quote(self):
         relay = "\n".join(self.relay)
         self.assertRegex(relay, r"engineering manager reads the issue once")
-        self.assertRegex(relay, r"never every card in full")
+        self.assertIn("asks the product owner those questions one at a time, brainstorming style (0b)", relay)
         self.assertIn("`compose decisions --project <slug>`", relay)
-        self.assertIn('`compose decide --project <slug> --quote "<their words>" "<card id>: <answer>"`', relay)
-        self.assertIn("by card id", relay)
-        self.assertNotIn('herdr agent prompt <slug>-architect "<card id>: <answer>', relay)
+        self.assertIn('`compose decide --project <slug> --new "<decision>" --quote "<their words>" --closes <id>`', relay)
+        self.assertIn('`--drop <id> --quote "<their words>"`', relay)
+        self.assertIn("by question id", relay)
+        self.assertNotIn("<card id>", relay)
+        self.assertNotRegex(relay, r"\bcards?\b")
+
+    def test_an_approval_waits_for_the_open_questions(self):
+        relay = "\n".join(self.relay)
+        self.assertIn("`compose decide` refuses an approval while the issue has open questions", relay)
 
     def test_manager_refuses_a_paraphrase_and_answers_on_a_rhythm(self):
         relay = "\n".join(self.relay)
@@ -568,7 +574,7 @@ class LeadRelaysOnce(unittest.TestCase):
         line = self.lines[self.report]
         self.assertNotIn("carrying the architect's open cards", line)
         self.assertIn("needs-user", line)
-        self.assertIn("not the cards", line)
+        self.assertIn("not the questions in full", line)
 
     def test_lead_saves_linear_in_few_patches_near_its_reporting_rule(self):
         hits = [i for i, l in enumerate(self.lines) if "compose linear update --section" in l]
@@ -579,7 +585,7 @@ class LeadRelaysOnce(unittest.TestCase):
             self.assertIn(words, line)
 
     def test_new_lines_are_plain_and_the_older_sentences_stay(self):
-        new = [l for l in self.lines if self.ONE_LINE in l or "compose linear update --section" in l or "<card id>" in l]
+        new = [l for l in self.lines if self.ONE_LINE in l or "compose linear update --section" in l or "--closes <id>" in l]
         self.assertTrue(new)
         for line in new:
             self.assertNotRegex(line, r"[.!?] [A-Z]", line)
@@ -651,6 +657,12 @@ class BrainstormShape(unittest.TestCase):
         self.assertLess(at(self.ONCE[14]), at(self.ONCE[19]))
         self.assertLess(at(self.ONCE[19]), at(self.ONCE[15]))
         self.assertEqual(self.text.count("(`--issue <id>` when it is not the project's feature)"), 1)
+
+    CLOSES = "An answer to a question a teammate wrote is recorded the same way, with `--closes <id>` for each question it settles: one rule for every decision."
+
+    def test_answers_to_teammates_questions_follow_the_one_recording_rule(self):
+        self.assertEqual(self.lines.count(self.CLOSES), 1)
+        self.assertEqual(self.lines.index(self.CLOSES), self.lines.index(self.ONCE[next(i for i, l in enumerate(self.ONCE) if l.startswith("Every decision the product owner makes"))]) + 1)
 
     def test_the_card_flow_is_gone(self):
         for old in self.GONE:
@@ -1681,7 +1693,7 @@ class LeanStoryRule(unittest.TestCase):
 
 class LeanDesignStories(unittest.TestCase):
     LEAN = "Design stories are lean: one flow's lowfi or one screen's hifi each, cut just ahead of the code story it unblocks, walking skeleton flow first, lowfi then hifi inside each flow."
-    OLD = "| **epic** | Check for a design system (below). None: write the design-system epic with its features and stories, send its open decisions up as cards, build Foundations once they are answered. One exists: continue at the first story not Done under it or under the epic's features."
+    OLD = "| **epic** | Check for a design system (below). None: write the design-system epic with its features and stories, send its open decisions up as open questions, build Foundations once they are answered. One exists: continue at the first story not Done under it or under the epic's features."
 
     def epic_row(self):
         lines = read("sections/0d.md").splitlines()
@@ -1772,7 +1784,7 @@ class ManagerProseNamesPostures(unittest.TestCase):
         "**Yolo: the engineering manager answers until an explicit off** (`/compose:yolo [--push] [words]`, `compose yolo`).",
         "Yolo follows every Away rule above, with the `yolo:` prefix, the `(yolo recommendation, unconfirmed, <date>)` tag, and `compose yolo` in place of `compose away`; only the exit differs.",
         "Only an explicit off ends it: the message `yolo:off` (or `yolo off`), `/compose:yolo off`, or `compose yolo off --project <slug>`; then run `compose yolo off --project <slug>` (every project of an epic), relay the digest, and ask its \"To confirm\" decisions in one ask.",
-        "Every other message is a steer: act on it at once (a change of plans goes to the team lead; an answer to a card is recorded with `compose decide --quote \"<their words>\"`, which rewrites a tagged line as theirs and wakes the team lead), reply with what changed, and yolo stays on; \"To confirm\" waits for the off.",
+        "Every other message is a steer: act on it at once (a change of plans goes to the team lead; an answer to an open question is recorded with `compose decide --new \"<decision>\" --quote \"<their words>\" --closes <id>`, and a word on a tagged line with its bare id, which rewrites it as theirs; each wakes the team lead), reply with what changed, and yolo stays on; \"To confirm\" waits for the off.",
         "`compose away digest --project <slug>` or `compose yolo digest --project <slug>` prints the digest and leaves the posture on.",
     ]
     NEVER = [
@@ -1789,7 +1801,7 @@ class ManagerProseNamesPostures(unittest.TestCase):
         start, end = self.lines.index(self.AWAY), self.lines.index(self.YOLO[0])
         self.assertLess(self.lines.index(self.BIAS), end)
         away = "\n".join(self.lines[start:end])
-        for want in ["compose away off --project <slug>", "away: <card ids>: accept-all", "compose decide --project <slug> --accept-all",
+        for want in ["compose away off --project <slug>", "away: <question ids>: accept-all", "compose decide --project <slug> --accept-all",
                      "(away recommendation, unconfirmed, <date>)", "compose away decided --project <slug>",
                      'compose decide --project <slug> "<id>" --quote "<their words>"']:
             self.assertIn(want, away)
@@ -2290,6 +2302,11 @@ class UserDocsShaping(unittest.TestCase):
         self.assertEqual(len(decide), 1)
         self.assertIn("--new", decide[0])
         self.assertIn("--replaces", decide[0])
+        for flag in ("--closes", "--drop", "--accept-all", "no open questions"):
+            self.assertIn(flag, decide[0])
+        decisions = [l for l in rows if l.startswith("| `decisions`")]
+        self.assertIn("open question", decisions[0])
+        self.assertIn("`<n> questions <ids>`", next(l for l in rows if l.startswith("| `report`")))
         architect = [l for l in rows if l.startswith("| `architect")]
         self.assertEqual(len(architect), 1)
         self.assertIn("--change", architect[0])
@@ -2600,6 +2617,19 @@ class NightMode(unittest.TestCase):
         for rel in ("sections/0n.md", "sections/0f.md", "commands/factory.md", "commands/away.md", "docs/cli.md", "docs/how-it-works.md"):
             self.assertNotIn("\u2014", read(rel), rel)
 
+
+
+class NoCards(unittest.TestCase):
+    """Teammates write open questions, never cards: no skill or doc prose speaks of cards (a `discard` is not one; code spans, such as the
+    older `<n> cards <ids>` the report gate still reads, are left out)."""
+
+    def test_no_card_wording_left(self):
+        import re
+        paths = sorted((ROOT / "sections").glob("*.md")) + sorted((ROOT / "commands").glob("*.md")) + [
+            ROOT / "SKILL.md", ROOT / "docs" / "cli.md", ROOT / "docs" / "how-it-works.md", ROOT / "docs" / "herdr.md"]
+        for path in paths:
+            for n, line in enumerate(path.read_text().splitlines(), 1):
+                self.assertNotRegex(re.sub(r"`[^`]*`", "", line), re.compile(r"\bcards?\b", re.I), f"{path.name}:{n}")
 
 if __name__ == "__main__":
     unittest.main()

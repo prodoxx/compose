@@ -76,7 +76,7 @@ These commands manage it:
 1. `compose frame0 up --project <name>` starts it.
 2. `compose frame0 save --project <name>` writes the drawing to the file.
    `compose frame0 draw --project <name>` draws a whole page from one list of tool calls and saves it, so a page costs one agent turn rather than one per shape.
-   `compose frame0 export --project <name> --page <page>` writes a page as a PNG, for a card image or a designer's read.
+   `compose frame0 export --project <name> --page <page>` writes a page as a PNG, for a visual question or a designer's read.
 3. `compose frame0 down --project <name>` saves and quits.
    `teardown` does this too.
 4. `compose frame0 pages --project <name>` lists the pages with their shape counts (`--empty` shows only the empty ones).
@@ -127,14 +127,14 @@ The team lead starts it for a feature or story whose project it runs, and the en
 4. It starts one `design-NNN` builder per design task, each in its own tab, and gates each build with `compose figma tree` and `compose figma judge`: Jev judges each criterion on the node tree and on screens rendered from the same nodes.
 5. A `design-review` teammate then checks one image per story, and the result is handed to the code tasks as Framelink data.
 
-Every open design decision reaches you as a card with a recommendation.
+Every open design decision reaches you as a question with a recommendation, asked one at a time.
 The designer and its crew are Claude sessions, because Figma serves writes only to its allowlisted clients.
 Writes go through the official Figma connector, and every read goes through Framelink, which keeps reads off the connector's daily cap.
 The designer requires Framelink; [requirements.md](requirements.md#for-the-designer) shows how to set it up, and the designer's start stops with the install steps when it is missing.
 `compose figma check --project <name> --figma <file url or key>` stores the target file and prints the Framelink setup when it cannot read the file.
 With no file stored, the designer asks you for one.
 Before it plans anything it checks what your Figma plan allows (`compose figma check --plan`, from `whoami`'s tier, measured by one probe on a scratch file when a tier's limit would block): pages per file, modes per collection, and whether a library can be published.
-The design system needs Light and Dark unless a recorded decision says otherwise (light only needs one mode), so a Starter plan blocks it only when two modes are needed, and that comes to you as one card, upgrade or design around it, before any task is written around the limit.
+The design system needs Light and Dark unless a recorded decision says otherwise (light only needs one mode), so a Starter plan blocks it only when two modes are needed, and that comes to you as one question, upgrade or design around it, before any task is written around the limit.
 It asks you to publish a library only after `compose figma publish` shows a publish is pending, and once per review round.
 Its model is the `designer` entry under `models.crew`, Opus 5.5 at high effort when the entry is missing.
 
