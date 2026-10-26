@@ -530,6 +530,8 @@ class Prep(unittest.TestCase):
             return json.dumps({"identifier": i, "title": self.titles.get(i, i), "description": self.descriptions.get(i, ""),
                                "state": {"name": self.states.get(i, "Todo")}, "labels": {"nodes": []}})
         if args[:3] == ["linear", "doc", "list"]:
+            if "--json" in args:
+                return json.dumps([{"id": f"doc-{n}", "updatedAt": "2026-10-27T01:00:00.000Z", "title": t, "url": "https://linear.app/doc/prep"} for n, t in enumerate(self.docs)])
             return "".join(f"doc-{n} 2026-10-27 {t}\n" for n, t in enumerate(self.docs))
         if args[:3] == ["linear", "doc", "create"]:
             self.docs[args[args.index("--title") + 1]] = stdin or ""
@@ -587,9 +589,9 @@ class Prep(unittest.TestCase):
                 s["mode"], s["night"]["ended"] = "day", {"state": "back", "at": 1.0}
             return (None, json.dumps({"questions": [{"question": "Refunds in v1?", "recommendation": "No", "why": "D4"}], "drop": False}), 4, {})
         self.claude.side_effect = reply
-        self.assertEqual(fp.run_prep(self.repo, "NEB-12"), {"ticket": "NEB-12", "status": "failed"})
+        self.assertEqual(fp.run_prep(self.repo, "NEB-12"), {"ticket": "NEB-12", "status": "cut"})
         self.assertEqual([c for c in self.cli_calls if c[:3] in (["linear", "doc", "create"], ["linear", "doc", "update"])], [])
-        self.assertEqual(json.loads(fp.outcomes_path(self.repo).read_text().splitlines()[-1])["status"], "failed")
+        self.assertEqual(json.loads(fp.outcomes_path(self.repo).read_text().splitlines()[-1])["status"], "cut")
         self.assertEqual(self.events, ['event factory=prep-failed ticket=NEB-12 why="the night ended before the prep"'])
 
     def test_a_reply_that_will_not_parse_records_nothing(self):
@@ -662,15 +664,65 @@ class Prep(unittest.TestCase):
         fp.prep_idle(self.repo, self.state, {"id": "NEB-11"}, 100.0 + 1800 + 301, self.out)  # kill still says alive
         self.assertEqual(self.spawn.call_count, 2)
 
-    def test_a_dead_worker_with_no_outcome_is_retried_once_after_half_an_hour(self):
+    def test_a_dead_worker_with_no_outcome_is_retried_once_after_half_an_hour_then_given_up(self):
         idle = lambda now: fp.prep_idle(self.repo, self.state, {"id": "NEB-11"}, now, self.out)
         idle(100.0); self.finish_worker("NEB-11"); idle(1000.0)
         self.assertEqual(self.spawn.call_count, 2)  # NEB-12 started; NEB-11 not yet
         self.assertEqual([c.args[1][-1] for c in self.spawn.call_args_list], ["NEB-11", "NEB-12"])
         self.finish_worker("NEB-12"); idle(1900.0)
         self.assertEqual(self.spawn.call_args.args[1][-1], "NEB-11")
+        self.assertEqual(self.state["prep"]["NEB-11"]["attempts"], 1)
         self.finish_worker("NEB-11"); idle(4000.0); idle(8000.0)
         self.assertEqual([c.args[1][-1] for c in self.spawn.call_args_list].count("NEB-11"), 2)
+        self.assertTrue(self.state["prep"]["NEB-11"]["gave_up"])
+        self.assertEqual(fp.prep_status(self.repo, "NEB-11", self.state["prep"]["NEB-11"], 8000.0), "gave-up")
+
+    def test_a_worker_error_records_failed(self):
+        self.claude.side_effect = RuntimeError("claude down")
+        self.assertEqual(fp.run_prep(self.repo, "NEB-12"), {"ticket": "NEB-12", "status": "failed"})
+        last = json.loads(fp.outcomes_path(self.repo).read_text().splitlines()[-1])
+        self.assertEqual((last["ticket"], last["status"]), ("NEB-12", "failed"))
+
+    def test_prep_status_reads_the_latest_outcome_since_the_worker_began(self):
+        rec = {"pid": 7000, "print": "p", "at": 100.0, "layer": "story", "attempts": 0}
+        self.assertEqual(fp.prep_status(self.repo, "NEB-11", rec, 100.0), "running")
+        self.gone.add(7000)
+        self.assertEqual(fp.prep_status(self.repo, "NEB-11", rec, 100.0), "failed")  # it died without a word
+        for status in ("prepared", "dropped", "cut", "failed"):
+            fp._outcome(self.repo, "NEB-11", status)
+            self.assertEqual(fp.prep_status(self.repo, "NEB-11", rec, 200.0), status)
+        self.assertEqual(fp.prep_status(self.repo, "NEB-11", {**rec, "attempts": 1}, 200.0), "gave-up")
+        self.assertEqual(fp.prep_status(self.repo, "NEB-11", {**rec, "at": time.time() + 60}, 200.0), "failed")  # an outcome older than the worker is not its own
+
+    def cut_worker(self, ident):
+        self.finish_worker(ident); fp._outcome(self.repo, ident, "cut")
+
+    def test_a_cut_prep_is_requeued_at_once_and_keeps_its_attempts_every_time(self):
+        idle = lambda now: fp.prep_idle(self.repo, self.state, {"id": "NEB-11"}, now, self.out)
+        idle(100.0); self.state["prep"]["NEB-11"]["attempts"] = 1; self.cut_worker("NEB-11")
+        fp.refresh(self.repo, self.state, [], 160.0, self.out)  # a tick, day or night, settles it before the refresh's clock
+        self.assertEqual((self.state["prep"]["NEB-11"]["print"], self.state["prep"]["NEB-11"]["attempts"]), (None, 1))
+        idle(200.0)
+        self.assertEqual([c.args[1][-1] for c in self.spawn.call_args_list], ["NEB-11", "NEB-11"])
+        self.cut_worker("NEB-11"); idle(300.0)
+        self.assertEqual([c.args[1][-1] for c in self.spawn.call_args_list], ["NEB-11", "NEB-11", "NEB-11"])
+        self.assertEqual(self.state["prep"]["NEB-11"]["attempts"], 1); self.assertFalse(self.state["prep"]["NEB-11"].get("gave_up"))
+
+    def test_a_given_up_prep_is_skipped_until_its_text_changes(self):
+        self.state["prep"]["NEB-11"] = {"pid": 6000, "print": self.print_of("NEB-11"), "at": 100.0, "layer": "story", "attempts": 1}
+        self.gone.add(6000)
+        fp.prep_idle(self.repo, self.state, {"id": "NEB-11"}, 100.0 + 2 * fp.RETRY_SECONDS, self.out)
+        self.assertTrue(self.state["prep"]["NEB-11"]["gave_up"])
+        self.assertEqual([c.args[1][-1] for c in self.spawn.call_args_list], ["NEB-12"])
+        self.state["prep"]["NEB-11"]["print"] = None  # even with no print, a given-up ticket waits for a change
+        self.gone.add(self.state["prep"]["NEB-12"]["pid"]); fp._outcome(self.repo, "NEB-12", "prepared")
+        fp.prep_idle(self.repo, self.state, {"id": "NEB-11"}, 100.0 + 3 * fp.RETRY_SECONDS, self.out)
+        self.assertEqual([c.args[1][-1] for c in self.spawn.call_args_list], ["NEB-12"])
+        self.state["prep"]["NEB-11"]["print"] = self.print_of("NEB-11")
+        self.descriptions["NEB-11"] = "changed"
+        fp.refresh(self.repo, self.state, ["event factory=changed story=NEB-11"], 100.0 + 4 * fp.RETRY_SECONDS, self.out)
+        rec = self.state["prep"]["NEB-11"]
+        self.assertEqual((rec["print"], rec.get("gave_up"), rec["attempts"]), (None, False, 0))
 
     def test_a_deliberate_drop_is_not_retried(self):
         self.reply(drop=True)
@@ -721,13 +773,18 @@ class Digest(unittest.TestCase):
         unittest.mock.patch.object(fd.fc_core, "all_projects", return_value={"sign-in": (self.repo, self.repo / ".compose" / "sign-in")}).start()
         unittest.mock.patch.object(fd.fc_tasks, "yolo_state", return_value=None).start()
         unittest.mock.patch.object(fd.fc_yolo, "digest_sections", return_value=[]).start()
-        self.real_find = fd.fc_nightprep._find_doc
-        self.find = unittest.mock.patch.object(fd.fc_nightprep, "_find_doc", side_effect=lambda repo: (self.docs["id"], self.docs["content"])).start()
+        self.real_find = fd.fc_nightprep.find_doc
+        self.find = unittest.mock.patch.object(fd.fc_nightprep, "find_doc", side_effect=lambda repo: dict(self.docs)).start()
         unittest.mock.patch.object(fd.fc_nightprep, "prep_doc", side_effect=AssertionError("the digest must not create the prep document")).start()
         self.addCleanup(unittest.mock.patch.stopall)
 
     def event(self, line):
         st.add_event(self.repo, line)
+
+    def prepped(self, ident, status="prepared", layer="stories", **kw):
+        self.state["prep"][ident] = {"pid": 4000 + int(ident.split("-")[1]), "print": "x", "at": 1.0, "layer": layer, "attempts": 0, **kw}
+        if status:
+            fp._outcome(self.repo, ident, status)
 
     def answer(self, at=None, **kw):
         rec = {"key": "k", "project": "sign-in", "issue": "NEB-10", "question": "q", "answer": "a", "reasoning": "", "cards": [], "never_set": False,
@@ -818,7 +875,7 @@ class Digest(unittest.TestCase):
         self.last_reconcile.side_effect = ValueError("bad json")
         self.paused.side_effect = OSError("gone")
         self.find.side_effect = RuntimeError("linear down")
-        self.state["prep"]["NEB-12"] = {"pid": None, "print": "x", "at": 1.0, "layer": "stories"}
+        self.prepped("NEB-12")
         text = fd.render(self.repo, self.state, self.since + 60)
         self.assertIn("last reconcile unavailable: bad json", text)
         self.assertIn("paused tasks of sign-in unavailable: gone", text)
@@ -827,19 +884,43 @@ class Digest(unittest.TestCase):
 
     def test_ready_to_plan_counts_the_prepared_questions_and_lists_planning_waits(self):
         self.docs.update(url="https://linear.app/d", content="Intro\n\n## NEB-12: Billing\n\nLayer: stories.\n\nQuestions:\n1. Which?\n   Recommendation (a guess): x - y\n2. When?\n   Recommendation (a guess): z - w\n")
-        self.state["prep"]["NEB-12"] = {"pid": None, "print": "x", "at": 1.0, "layer": "stories"}
+        self.prepped("NEB-12")
         self.state["prep"]["NEB-13"] = {"pid": 5, "print": None, "at": 1.0, "layer": "story"}
         self.state["night"]["morning_msgs"] = ["sign-in|plan the stories for NEB-9?"]
         self.assertEqual(fd.ready_to_plan(self.repo, self.state),
-                         ["NEB-12 Billing (stories): 2 questions prepared", "Planning waits: sign-in: plan the stories for NEB-9?"])
+                         ["Prep document: https://linear.app/d", "NEB-12 Billing (stories): 2 questions prepared", "Planning waits: sign-in: plan the stories for NEB-9?"])
+
+    def test_ready_to_plan_says_how_each_prep_ended_before_any_tick_settles_it(self):
+        self.docs.update(url="https://linear.app/doc/prep", content="## NEB-12: Billing\n\nQuestions:\n1. Which?\n")
+        alive = {4016}
+        unittest.mock.patch.object(fp.os, "kill", side_effect=lambda pid, sig: None if pid in alive else (_ for _ in ()).throw(ProcessLookupError())).start()
+        self.prepped("NEB-12"); self.prepped("NEB-13", "dropped", "story"); self.prepped("NEB-14", "cut", "story")
+        self.prepped("NEB-15", None, "story"); self.prepped("NEB-16", None, "stories", at=self.since); self.prepped("NEB-17", "failed", "story", attempts=1)
+        self.prepped("NEB-18", None, "story", gave_up=True, attempts=1)
+        self.assertEqual(fd.ready_to_plan(self.repo, self.state, self.since + 60),
+                         ["Prep document: https://linear.app/doc/prep",
+                          "NEB-12 Billing (stories): 1 question prepared",
+                          "NEB-14 (story): prep was cut off when the night ended; it runs again next night",
+                          "NEB-15 (story): prep failed; it is tried once more next night",
+                          "NEB-16 (stories): still being prepared",
+                          "NEB-17 (story): prep failed twice; see .compose/night-prep.log",
+                          "NEB-18 (story): prep failed twice; see .compose/night-prep.log"])
+        self.assertIn("Ready to plan\n- Prep document: https://linear.app/doc/prep\n- NEB-12 Billing", fd.render(self.repo, self.state, self.since + 60))
+
+    def test_ready_to_plan_names_no_document_when_nothing_was_prepared_or_it_is_missing(self):
+        self.docs.update(url="https://linear.app/doc/prep")
+        self.prepped("NEB-13", "dropped", "story")
+        self.assertEqual(fd.ready_to_plan(self.repo, self.state), [])
+        self.prepped("NEB-14", "cut", "story"); self.docs.update(id=None, url="")
+        self.assertEqual(fd.ready_to_plan(self.repo, self.state), ["NEB-14 (story): prep was cut off when the night ended; it runs again next night"])
 
     def test_ready_to_plan_never_creates_a_missing_document(self):
         calls = []
         self.find.side_effect = self.real_find
-        self.state["prep"]["NEB-12"] = {"pid": None, "print": "x", "at": 1.0, "layer": "stories"}
-        with unittest.mock.patch.object(fp.fc_factoryturn, "compose_cli", side_effect=lambda args, stdin=None: calls.append(list(args)) or ""):
+        self.prepped("NEB-12")
+        with unittest.mock.patch.object(fp.fc_factoryturn, "compose_cli", side_effect=lambda args, stdin=None: calls.append(list(args)) or "[]"):
             self.assertEqual(fd.ready_to_plan(self.repo, self.state), ["NEB-12 (stories): prepared questions unavailable (document missing)"])
-        self.assertEqual(calls, [["linear", "doc", "list", "--repo", str(self.repo)]])
+        self.assertEqual(calls, [["linear", "doc", "list", "--json", "--repo", str(self.repo)]])
 
     def test_the_digest_reads_this_night_s_archived_posture_once_it_is_lifted(self):
         results = self.repo / ".compose" / "sign-in" / "results"
@@ -861,7 +942,7 @@ class Digest(unittest.TestCase):
     def test_render_has_the_three_heads_the_end_state_and_the_spend(self):
         self.state["night"].update(ended={"state": "budget", "at": self.since + 3600}, spend=20.31, waits=1, waited=1861.0)
         self.docs["content"] = "## NEB-12: Billing\n\nQuestions:\n1. Which?\n"
-        self.state["prep"]["NEB-12"] = {"pid": None, "print": "x", "at": 1.0, "layer": "stories"}
+        self.prepped("NEB-12")
         text = fd.render(self.repo, self.state, self.since + 7200)
         self.assertTrue(text.startswith(f"morning digest for {self.repo.name}: night 23:00 to 00:00, ended: budget\n"))
         self.assertIn("spend $20.31 of $20.00; usage waits: 1 (31m)", text)
@@ -900,7 +981,7 @@ class Night(unittest.TestCase):
                              (fn.fc_answer, "answer_step", self.answer_step), (fn.fc_nightprep, "refresh", self.refresh),
                              (fd.fc_delivery, "product_plan", mock.Mock(side_effect=RuntimeError("no plan here"))),
                              (fd.fc_delivery, "last_reconcile", mock.Mock(return_value=None)), (fd.fc_change, "paused_tasks", mock.Mock(return_value={})),
-                             (fd.fc_nightprep, "_find_doc", mock.Mock(side_effect=RuntimeError("no doc here"))),
+                             (fd.fc_nightprep, "find_doc", mock.Mock(side_effect=RuntimeError("no doc here"))),
                              (fd.fc_yolo, "digest_sections", mock.Mock(return_value=[]))):
             mock.patch.object(mod, name, m).start()
         mock.patch.dict(fc_config.FACTORY, {"turn_seconds": 0}).start()

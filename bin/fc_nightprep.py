@@ -14,7 +14,6 @@ GONE = ("done", "canceled", "cancelled", "in progress", "in review")
 MAX_QUESTIONS = 5
 WORKER_SECONDS = 1800 + 300  # a worker's timeout plus a margin: a pid older than this is another process's
 RETRY_SECONDS = 1800
-DONE = ('prepared', 'dropped')
 ERRORS = (RuntimeError, ValueError, TypeError, KeyError, OSError, SystemExit, subprocess.SubprocessError)
 ASK = ("You prepare the next planning session for this ticket; you never plan: do not write stories, mark anything ready, or answer your own questions. "
        "Read the code it touches, say what is built and what is still open, and write at most 5 questions the product owner must answer, "
@@ -41,19 +40,31 @@ def _outcome(repo, ident, status) -> None:
     with open(path, "a") as out:
         out.write(json.dumps({"ticket": ident, "status": status, "at": time.time()}) + "\n")
 
-def _done_since(repo, ident, at) -> bool:
+def _last_outcome(repo, ident, at):
+    """The status of the ticket's latest outcome recorded at or after `at`, or None."""
     try:
         lines = outcomes_path(repo).read_text().splitlines()
-    except OSError:
-        return False
+    except FileNotFoundError:
+        return None
+    last = None
     for line in lines:
         try:
             r = json.loads(line)
         except ValueError:
             continue
-        if isinstance(r, dict) and r.get("ticket") == ident and r.get("status") in DONE and (r.get("at") or 0) >= at:
-            return True
-    return False
+        if isinstance(r, dict) and r.get("ticket") == ident and isinstance(r.get("at"), (int, float)) and r["at"] >= at:
+            last = r.get("status")
+    return last
+
+def prep_status(repo, ident, rec, now) -> str:
+    """How the record's prep stands: running, prepared, dropped, cut (the night ended first), failed, or gave-up (failed on its retry).
+    A worker that died without an outcome failed. Read from the outcome file, so it holds before the loop has settled anything."""
+    if _running(rec, now):
+        return "running"
+    status = _last_outcome(repo, ident, rec.get("at") or 0)
+    if status not in ("prepared", "dropped", "cut"):
+        status = "failed"
+    return "gave-up" if status == "failed" and (rec.get("attempts") or 0) >= 1 else status
 
 def _issue(repo, ident) -> dict:
     got = json.loads(fc_factoryturn.compose_cli(["linear", "get", ident, "--json", "--repo", str(repo)]))
@@ -101,12 +112,15 @@ def render(ticket, found: dict, model, at) -> str:
         lines += [f"{n}. {q['question']}", f"   Recommendation (a guess): {q['recommendation']} - {q['why']}"]
     return "\n".join(lines) + "\n"
 
-def _find_doc(repo) -> tuple:
-    for line in fc_factoryturn.compose_cli(["linear", "doc", "list", "--repo", str(repo)]).splitlines():
-        parts = line.split(" ", 2)
-        if len(parts) == 3 and parts[2].strip() == PREP_TITLE:
-            return parts[0], _body(fc_factoryturn.compose_cli(["linear", "doc", "get", parts[0], "--repo", str(repo)]))
-    return None, ""
+def find_doc(repo) -> dict:
+    """The prep document as {id, content, url}, found only: id is None when it is missing."""
+    docs = json.loads(fc_factoryturn.compose_cli(["linear", "doc", "list", "--json", "--repo", str(repo)]))
+    if not isinstance(docs, list):
+        raise ValueError("doc list --json did not print a list")
+    for d in docs:
+        if isinstance(d, dict) and (d.get("title") or "").strip() == PREP_TITLE and d.get("id"):
+            return {"id": d["id"], "content": _body(fc_factoryturn.compose_cli(["linear", "doc", "get", d["id"], "--repo", str(repo)])), "url": d.get("url") or ""}
+    return {"id": None, "content": "", "url": ""}
 
 def _body(shown) -> str:
     """A doc get's body: after the title line, before the section hashes."""
@@ -118,15 +132,15 @@ def _body(shown) -> str:
     return "\n".join(out).rstrip("\n")
 
 def prep_doc(repo) -> dict:
-    """The prep document, created when missing. Its url is known only to the call that created it (the writes return it otherwise)."""
-    ident, content = _find_doc(repo)
-    if ident:
-        return {"id": ident, "content": content, "url": ""}
+    """The prep document, created when missing."""
+    doc = find_doc(repo)
+    if doc["id"]:
+        return doc
     url = fc_factoryturn.compose_cli(["linear", "doc", "create", "--title", PREP_TITLE, "--repo", str(repo)], stdin=INTRO + "\n").strip()
-    ident, content = _find_doc(repo)
-    if not ident:
+    doc = find_doc(repo)
+    if not doc["id"]:
         raise RuntimeError("the prep document was created but is not listed")
-    return {"id": ident, "content": content, "url": url}
+    return {**doc, "url": doc["url"] or url}
 
 def _heading(body, ident, title) -> str:
     return next((l for l in body.split("\n") if l.startswith(f"## {ident}:")), f"## {ident}: {title}")
@@ -143,16 +157,15 @@ def write_section(repo, ident, title, text) -> str:
     url = ""
     for _ in range(2):
         if text is None:
-            doc_id, content = _find_doc(repo)
-            if not doc_id or not any(l.startswith(f"## {ident}:") for l in content.split("\n")):
+            doc = find_doc(repo)
+            if not doc["id"] or not any(l.startswith(f"## {ident}:") for l in doc["content"].split("\n")):
                 return url
-            doc = {"id": doc_id, "content": content, "url": ""}
         else:
             doc = prep_doc(repo)
         body = fc_plan.replace_section(doc["content"], _heading(doc["content"], ident, title), text or "")
         shown = fc_factoryturn.compose_cli(["linear", "doc", "update", doc["id"], "--description", "--repo", str(repo)], stdin=body)
         url = shown.strip().removeprefix("updated ").strip() or doc["url"]
-        now = _find_doc(repo)[1]
+        now = find_doc(repo)["content"]
         if _old_section(now, ident) == (text or "").strip():
             return url
     raise RuntimeError(f"the prep document did not keep the section of {ident}")
@@ -216,7 +229,7 @@ def run_prep(repo, ident) -> dict:
             plan = None
         entries = fc_plan.order_entries(plan["tracks"], plan["features"]) if plan else []
         layer = "stories" if any(e["id"] == ident and e["kind"] == "feature" for e in entries) else "story"
-        _, content = _find_doc(repo)
+        content = find_doc(repo)["content"]
         prompt = prep_prompt(issue, feature, ((plan or {}).get("doc") or {}).get("content") or "", fc_nightstate.notes_tail(repo), _old_section(content, ident))
         reply = fc_claude.claude_once(repo, prompt, timeout=1800, model=fc_claude.claude_id(model), tools="Read,Grep,Glob", effort=effort, keep=8000)[1]
         got = parse_reply(reply)
@@ -227,8 +240,8 @@ def run_prep(repo, ident) -> dict:
         found = _clean(got)
         if not fc_nightstate.still_on(repo, since):  # nothing is written once the night it was started under has ended
             fc_factorystate.add_event(repo, f'event factory=prep-failed ticket={ident} why="the night ended before the prep"')
-            _outcome(repo, ident, "failed")
-            return {"ticket": ident, "status": "failed"}
+            _outcome(repo, ident, "cut")  # not the worker's fault: the next night prepares it again
+            return {"ticket": ident, "status": "cut"}
         if found["drop"] or not found["questions"]:
             url = write_section(repo, ident, title, None)
             _outcome(repo, ident, "dropped")
@@ -241,12 +254,17 @@ def run_prep(repo, ident) -> dict:
         return {"ticket": ident, "status": "prepared", "questions": len(found["questions"])}
     except ERRORS as e:
         fc_factorystate.add_event(repo, f'event factory=prep-failed ticket={ident} why="{_q(str(e) or type(e).__name__, 120)}"')
+        try:
+            _outcome(repo, ident, "failed")
+        except OSError:
+            pass  # with no outcome the loop counts the worker as failed all the same
         return {"ticket": ident, "status": "failed"}
 
 def refresh(repo, state, lines, now, out) -> None:
     """Keep the document true: drop the sections of tickets that moved on or became ready, and queue the ones whose text changed."""
     kinds = {m for line in lines for m in re.findall(r"factory=([\w-]+)", line)}
     prep = state.setdefault("prep", {})
+    _settle(repo, prep, now)
     if not (kinds & set(REFRESH_ON)) and now - (state.get("prep_checked") or 0) < REFRESH_SECONDS:
         return
     state["prep_checked"] = now
@@ -265,36 +283,45 @@ def refresh(repo, state, lines, now, out) -> None:
                 write_section(repo, ident, _line(issue.get("title") or "") or ident, None)
                 del prep[ident]
             elif rec.get("print") is not None and prep_print(*_texts(repo, issue)) != rec["print"]:
-                rec["print"] = None
+                rec.update(print=None, gave_up=False, attempts=0)  # a changed ticket deserves a fresh try
         except ERRORS:
             continue
     try:  # a worker's late write can bring back a section refresh dropped: nothing in state names it, so it goes
-        for ident in dict.fromkeys(re.findall(r"^## ([A-Z][A-Z0-9]*-\d+):", _find_doc(repo)[1], re.M)):
+        for ident in dict.fromkeys(re.findall(r"^## ([A-Z][A-Z0-9]*-\d+):", find_doc(repo)["content"], re.M)):
             if ident not in prep:
                 write_section(repo, ident, ident, None)
     except ERRORS:
         pass
 
-def _requeue_stuck(repo, prep, now) -> None:
-    """A worker that died without a prepared or dropped outcome is tried once more, half an hour after it began."""
+def _settle(repo, prep, now) -> None:
+    """Act on how each finished worker ended, on every tick: a cut prep is queued again at once, a failed one is tried once more
+    half an hour after it began, and one that failed its retry is given up until its ticket changes."""
     for ident, rec in prep.items():
-        if (rec.get("pid") and not _running(rec, now) and rec.get("print") is not None and not rec.get("attempts")
-                and now - (rec.get("at") or 0) >= RETRY_SECONDS and not _done_since(repo, ident, rec.get("at") or 0)):
+        if not rec.get("pid") or rec.get("print") is None:
+            continue
+        try:
+            status = prep_status(repo, ident, rec, now)
+        except OSError:
+            continue  # an unreadable outcome file settles nothing: the next tick reads it again
+        if status == "cut":
+            rec["print"] = None
+        elif status == "failed" and now - (rec.get("at") or 0) >= RETRY_SECONDS:
             rec["print"], rec["attempts"] = None, 1
+        elif status == "gave-up":
+            rec["gave_up"] = True
 
 def prep_idle(repo, state, offer, now, out) -> None:
     """A night turn with nothing to start: refresh the document, then start one prep worker on the next unprepared ticket."""
     state.setdefault("said", {})
     refresh(repo, state, [], now, out)
     prep = state.setdefault("prep", {})
-    _requeue_stuck(repo, prep, now)
     night = state.get("night") or {}
     if any(_running(r, now) for r in prep.values()) or night.get("wait") or night.get("ended") or night.get("draining") not in (None, "budget"):
         return
     try:
         for c in candidates(repo, offer["id"], fc_config.FACTORY["prep_ahead"]):
             rec = prep.get(c["id"])
-            if rec and rec.get("print") is not None:
+            if rec and (rec.get("print") is not None or rec.get("gave_up")):
                 continue
             try:
                 fingerprint = prep_print(*_texts(repo, _issue(repo, c["id"])))
