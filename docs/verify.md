@@ -29,6 +29,7 @@ The top layer runs every check and the `test` of the tasks it is the lowest laye
 A task is tested on the lowest layer that holds its code and every test commit written for it.
 That is the layer with its code, unless a test appended to a shared file had to follow an earlier test into a higher layer: then the task is tested there, where its test exists.
 A lower layer runs the `test` of the tasks it is the lowest layer for and the cheap checks, the ones that are not a whole test suite, so the full suite runs once, on the stack as a whole.
+A lower layer that does not define a check's package script yet (bun, npm, pnpm or yarn says the script is missing) skips that check with a `layers later` line, so groundwork below a tool's setup passes when its toolchain task could not go under it; the top runs every check, so a script no layer adds still refuses the submit.
 A green result is kept by the git tree sha it ran on and its command, in `results/green/`: a check, the full suite or a task's `test`.
 When the same command is asked for on the same tree, verify, the run's pass gate and the layer gate take the result and print `<check> green on tree <sha12> at <time>, not rerun` without running it.
 A red or unknown result is never kept or reused, and a layer whose tree differs from every green one runs as before.

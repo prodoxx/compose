@@ -6,6 +6,8 @@ checked
 layer_commands
 against_base
 ids_text
+MISSING_SCRIPT
+missing_script
 layer_refusal
 layer_checks
 cmd_stack

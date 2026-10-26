@@ -71,6 +71,42 @@ def base_definitions(repo, rev):
         return seen[path]
     return lambda path, name: name in names(path)
 
+PM_RUN = re.compile(r"(?:bun|npm|pnpm|yarn)(?:\s+--?[\w-]+)*\s+run\s+([\w:.@/-]+)")
+
+def package_scripts(check):
+    """(package.json path, script) for each package script a verify `check` runs with `bun|npm|pnpm|yarn run`, in the directory a
+    relative `cd` before it moves to. A `cd` it cannot follow (absolute, or out of the repo) ends what it can tell."""
+    out, cwd = [], Path()
+    for part in re.split(r"&&|\|\||;", check):
+        part = part.strip()
+        cd = re.fullmatch(r"cd\s+(\S+)", part)
+        if cd:
+            d = Path(cd.group(1).strip("'\""))
+            if d.is_absolute() or str(d).startswith(("~", "$")) or ".." in d.parts:
+                break
+            cwd = cwd / d
+        elif PM_RUN.match(part):
+            out.append((str(cwd / "package.json"), PM_RUN.match(part).group(1)))
+    return out
+
+def base_scripts(repo, rev):
+    """`has(package.json path, name)` for spec_check: whether `<pm> run name` runs at `rev`: a script of that package.json there,
+    a dependency it names (a bin mostly shares its package's name), or a bin installed under the repo's `node_modules` (installs
+    are git-ignored, so they are read from disk). A package.json that is not there at `rev`, or is not JSON, has nothing."""
+    seen = {}
+    def names(pkg):
+        if pkg not in seen:
+            r = fc_core.sh(["git", "show", f"{rev}:{pkg}"], repo, check=False) if rev else None
+            try:
+                d = json.loads(r.stdout) if r is not None and r.returncode == 0 else {}
+            except ValueError:
+                d = {}
+            d = d if isinstance(d, dict) else {}
+            seen[pkg] = {n for k in ("scripts", "dependencies", "devDependencies") for n in (d.get(k) or {})}
+        return seen[pkg]
+    bins = lambda pkg, name: any((Path(repo) / d / "node_modules" / ".bin" / name).exists() for d in {Path(pkg).parent, Path()})
+    return lambda pkg, name: name in names(pkg) or bins(pkg, name)
+
 def uses(text, path):
     """Whether a brief's `text` names the code at `path`: the path itself, with or without its extension, or its module called, imported or required by name.
     A bare stem is a module name only where the file name is one: `stem.name` and `import stem` for Python, `require('./stem')` for JS and TS.
@@ -188,10 +224,12 @@ def run_waves(tasks):
         done |= set(wave)
     return waves
 
-def spec_check(data, checks=(), defined=None):
+def spec_check(data, checks=(), defined=None, scripts=None):
     """(ok, issue id, level, gaps) for the feature, then every non-canceled issue: a story or a task. `checks` are
     verify.json's: a task whose `test:` is one of them runs the whole suite after every implementer turn. `defined` says what
-    the base already has (base_definitions), so a task naming only that code needs no `after:`."""
+    the base already has (base_definitions), so a task naming only that code needs no `after:`. `scripts` (base_scripts) says
+    which package scripts the base runs: a check that runs one a task adds fails on every layer below that task's, so the task
+    that adds it is `kind: toolchain`, whose layer goes below groundwork."""
     suite = {" ".join(c.split()) for c in checks}
     issues = [i for i in data["issues"] if (i.get("status") or "").lower() not in fc_tasks.CANCELED]
     tasks = [t for t in (fc_tasks.task_from_issue(i) for i in issues) if t]
@@ -213,6 +251,17 @@ def spec_check(data, checks=(), defined=None):
     if clashes:
         detail = "; ".join(f"{f}: {', '.join(ids)}" for f, ids in clashes.items())
         gaps.append(f"two tasks own the same file (they must be one task, or one must be `after:` the other): {detail}")
+    for pkg, script in dict.fromkeys(ps for c in checks for ps in package_scripts(c)) if scripts else ():
+        if scripts(pkg, script):
+            continue
+        c = next(c for c in checks if (pkg, script) in package_scripts(c))
+        owners = sorted(t["id"] for t in tasks if pkg in t["files"])
+        if not owners:
+            gaps.append(f"verify check `{c}` runs {script}, which {pkg} does not define on the base, and no task adds it: "
+                        "put it in the `kind: toolchain` task that sets its tool up, or drop the check")
+        elif not any(t["kind"] == "toolchain" for t in tasks if t["id"] in owners):
+            gaps.append(f"verify check `{c}` runs {script}, which {pkg} does not define on the base: make the task of {', '.join(owners)} "
+                        "that sets its tool up `kind: toolchain`, so its layer goes below groundwork and every layer can run the check")
     loose = missing_after(tasks, defined)
     to_run = [t for t in tasks if (t["linear_state"] or "").lower() not in ("in review", "done")]  # a passed or merged layer never runs again
     waves = run_waves(to_run)
@@ -239,6 +288,9 @@ def spec_check(data, checks=(), defined=None):
                 if not meta["protected"] and not meta["delete"] and meta.get("route") != "check-only" and meta["kind"] != "hand":  # no test to write: it deletes, its check is the proof, or it is built by hand
                     gaps.append("empty `protected:`")
             gaps += missing_after_text({meta["id"]: loose[meta["id"]]} if meta["id"] in loose else {})
+            after = next((t["after"] for t in tasks if t["id"] == meta["id"]), "")
+            if meta["kind"] == "toolchain" and after:
+                gaps.append(f"`kind: toolchain` sets up the tools every layer runs, so its layer is the bottom one: drop its `after:` (blocked-by {after})")
             if " ".join(meta["test"].split()) in suite:
                 gaps.append(f"`test:` is the verify check `{meta['test']}`, the whole suite: run only this task's test (its file, or a name filter)")
             if re.search(r"(?i)contract\.md|\b(?:from|in|per|see) the (?:groundwork )?contract\b", desc):
@@ -276,7 +328,7 @@ def cmd_spec_check(a):
              "issues": [dict(v, id=k) for k, v in (cache.get("issues") or {}).items()]}
         checks, base = fc_core.project_config(proj).get("checks", []), fc_status.project_head(repo, proj)
     bad = False
-    for ok, ident, level, gaps in spec_check(d, checks, base_definitions(repo, base)):
+    for ok, ident, level, gaps in spec_check(d, checks, base_definitions(repo, base), base_scripts(repo, base)):
         print(f"{'PASS' if ok else 'FAIL'} {ident} {level}" + (f": {'; '.join(gaps)}" if gaps else ""))
         bad = bad or not ok
     if bad:

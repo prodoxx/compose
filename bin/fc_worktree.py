@@ -146,10 +146,11 @@ def task_branches(repo, proj):
     return out
 
 def layer_order(tasks):
-    """The ids of `tasks` bottom to top as one stack: a task after its `after:` tasks among them, then by id. The one rule the
-    chain (stack_order, then chain_order) and `compose tasks` share, so the order a planner reviews is the order the stack gets."""
+    """The ids of `tasks` bottom to top as one stack: a task after its `after:` tasks among them, a `kind: toolchain` task (it sets
+    up the tools verify's checks run) before the rest, then by id. The one rule the chain (stack_order, then chain_order) and
+    `compose tasks` share, so the order a planner reviews is the order the stack gets."""
     metas = {m["id"]: m for m in tasks}
-    ids = sorted(metas)
+    ids = sorted(metas, key=lambda t: (metas[t].get("kind") != "toolchain", t))
     order, placed = [], set()
     while len(order) < len(ids):
         progressed = False
