@@ -10,7 +10,8 @@ UNCONFIRMED = "({mode} recommendation, unconfirmed, {date})"  # the tag on a lin
 CONFIRMED = '(product owner, {date}; said: "{quote}")'       # the tag on a line the product owner decided, their words attached
 ANSWER = re.compile(rf"^\s*({fc_ask.CARD_ID}|D\d+)(?:\s*[:=.]\s*(.+?))?\s*$")  # a bare `D7` or `Q3` confirms a recorded line; the old `Q1: A` answers a card
 TAG = re.compile(r"\s*\([^()]*\)\s*$")  # the tag a decision line ends with
-APPROVAL = re.compile(r"\b(?:design|stories|tech doc|PRD)\b.*\bapproved\b", re.I)  # a go line: refused while questions are open
+APPROVAL = re.compile(r"^(?:the )?(?:design|stories|tech doc|PRD)\b[^.]{0,60}?\b(?:is |are )?approved\.?$", re.I)  # a go line the skill writes: refused while questions are open
+KEEP = re.compile(r"^(?:keep\b|[A-Z]+\d+ stands\b)", re.I)  # a change-of-course answer that leaves the replaced line standing
 NEW_FORM = '`compose decide --project {slug} --new "<decision>" --quote "<their words>" --closes <id>`'
 
 def map_issue(proj, a):
@@ -118,9 +119,15 @@ def close_questions(body, ids):
     kept = re.sub(r"\n{3,}", "\n\n", "\n".join(l for i, l in enumerate(lines) if i not in gone)).strip()
     return fc_plan.replace_section(body, heading_line(body, OPEN), kept or heading_line(body, OPEN))
 
-def record(body, answers, tag):
+def superseded(live, q):
+    """The live Decisions so far line an old change card's `Supersedes:` names, when the map still has it."""
+    want = " ".join(q["supersedes"].split()).strip("~ ")
+    return next((l for l in live if want and (want in l or " ".join(l.split()).startswith(want))), None)
+
+def record(body, answers, tag, change=None):
     """The map with each bare id's unconfirmed line rewritten under the tag (a confirmed one refuses: a change goes through
-    `compose change`), and each old `Q1: A` answer moved from Not yet specified to a Decisions so far line `<id>: <text> <tag>`."""
+    `compose change`), and each old `Q1: A` answer moved from Not yet specified to a Decisions so far line `<id>: <text> <tag>`.
+    Under a change of course an old card's `Supersedes:` line is struck through, `~~<old>~~ (<change>)`, unless the answer keeps it."""
     qs = open_questions(body)
     dec = fc_change.map_section(body, DECIDED).splitlines()  # every line of the section, struck ones included
     live = lambda: {m.group(1): i for i, m in enumerate(map(fc_change.LIST_ITEM.match, dec)) if m and "~~" not in m.group(1)}
@@ -138,11 +145,14 @@ def record(body, answers, tag):
             line = f"{cid}: {answer if answer is not None else kept} {tag}"
             dec[live()[old]] = f"- {line}"
         else:
-            line = f"{cid}: {answer_text(cid, qs[cid], answer)} {tag}"
+            text = answer_text(cid, qs[cid], answer)
+            line = f"{cid}: {text} {tag}"
             if old:
                 dec[live()[old]] = f"- {line}"
             else:
                 dec.append(f"- {line}")
+            if change and (gone := superseded(live(), qs[cid])) and not KEEP.match(text.split(". ", 1)[-1]):
+                dec[live()[gone]] = f"- ~~{gone}~~ ({change})"
             closed.append(cid)
         out.append(line)
     body = fc_plan.replace_section(body, heading_line(body, DECIDED), "\n".join(dec))
@@ -190,7 +200,7 @@ def cmd_decide(a):
         sys.exit('not recorded: a decision is recorded only with the product owner\'s words: add --quote "<their message, verbatim>". '
                  "While away or yolo is on, `compose decide` without --quote records the recommendation as unconfirmed.")
     news = [t for t in (getattr(a, "new", None) or []) if t.strip()]
-    closes, drops = list(dict.fromkeys(getattr(a, "closes", None) or [])), list(dict.fromkeys(getattr(a, "drop", None) or []))
+    closes, drops = list(getattr(a, "closes", None) or []), list(getattr(a, "drop", None) or [])
     replaces, change = getattr(a, "replaces", None), getattr(a, "change", None)
     if replaces and (len(news) != 1 or not re.fullmatch(fc_ask.CARD_ID, replaces)):
         sys.exit("not recorded: --replaces <id> goes with exactly one --new \"<decision>\" that takes its place")
@@ -199,6 +209,10 @@ def cmd_decide(a):
     if not a.answers and not a.accept_all and not news and not drops:
         sys.exit('decide needs --new "<decision>" (with --closes <id> for the question it answers), --drop <id>, --accept-all, or a bare id to confirm')
     answers = parse_answers(a.answers or [])
+    named = closes + drops + [cid for cid, _ in answers]
+    if twice := list(dict.fromkeys(i for i in named if named.count(i) > 1)):
+        sys.exit(f"not recorded: {', '.join(twice)} {'is' if len(twice) == 1 else 'are'} named more than once across --closes, --drop and the "
+                 "answers; record each question once")
     if not quote and any(ans is None for _, ans in answers):
         sys.exit('not recorded: confirming a recorded decision needs the product owner\'s words: add --quote "<their message, verbatim>"')
     lid, ident, body = read_map(map_issue(proj, a))
@@ -218,7 +232,7 @@ def cmd_decide(a):
     tag = CONFIRMED.format(date=date, quote=quote.replace('"', "'")) if quote else UNCONFIRMED.format(mode=posture["mode"], date=date)
     if change:
         tag = f"({change}; " + tag[1:]
-    new_body, lines = record(body, answers, tag) if answers else (body, [])
+    new_body, lines = record(body, answers, tag, change) if answers else (body, [])
     items = ([(t, closes if n == 0 else []) for n, t in enumerate(news)]
              + [(f"no longer applies: {fc_ask.REPLACES.sub('', qs[i]['question']).strip()}", [i]) for i in drops]
              + [(qs[cid]["recommendation"], [cid]) for cid in accepted])
@@ -226,6 +240,10 @@ def cmd_decide(a):
     lines += added
     if replaces:
         new_body = replace_decision(new_body, replaces, change or f"replaced by {added[0].split(':')[0]}")
+    for cid in accepted:  # an accepted change-of-course question strikes what it replaces, as --replaces with its change does
+        if (rid := qs[cid]["replaces"]) and decided_line(new_body, rid) and not KEEP.match(qs[cid]["recommendation"].split(". ", 1)[-1]):
+            by = next(l.split(":")[0] for l in added if f"(closes {cid})" in l)
+            new_body = replace_decision(new_body, rid, change or (cid.split("-")[0] if re.fullmatch(r"C\d+-\d+", cid) else f"replaced by {by}"))
     fc_linear.linear_gql("mutation($id: String!, $in: IssueUpdateInput!) { issueUpdate(id: $id, input: $in) { success } }", {"id": lid, "in": {"description": new_body}})
     fc_linear_cmd.await_write(lambda: fc_linear.linear_gql("query($id: String!) { issue(id: $id) { description } }", {"id": lid})["issue"]["description"], body, new_body)
     if posture and not quote:

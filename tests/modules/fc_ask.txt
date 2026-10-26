@@ -8,6 +8,7 @@ question_ids
 map_bodies
 CLOSES
 closed_ids
+open_ids_in
 decided_ids
 QUESTION_FORMAT
 CARD_HEAD

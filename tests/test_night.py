@@ -317,7 +317,7 @@ class Answerer(unittest.TestCase):
         self.report("needs-user", "NEB-10: 1 question Q1; recommendation Clerk", "2026-10-27 01:05:00")
         self.claude.return_value = (None, '{"never_set": false, "answer": "Q1 Clerk", "reasoning": "D2 says one store", "answers": {"Q1": "Sign in with Clerk"}}', 3, {})
         fa.run_answer(self.repo, "sign-in", "2026-10-27 01:05:00")
-        self.assertEqual(self.cli.call_args_list[-1].args[0], ["decide", "--repo", str(self.repo), "--project", "sign-in", "--new", "Sign in with Clerk", "--closes", "Q1"])
+        self.assertEqual(self.cli.call_args_list[-1].args[0], ["decide", "--repo", str(self.repo), "--project", "sign-in", "--new", "Sign in with Clerk", "--closes", "Q1", "--issue", "NEB-10"])
         self.assertIn('"answers": {"<question id>": "<the decision, as a sentence>"}', fa.ASK)
         self.assertNotIn("card", fa.ASK)
         comment = next(c for c in self.cli.call_args_list if c.args[0][:2] == ["linear", "comment"])
@@ -428,7 +428,7 @@ class Answerer(unittest.TestCase):
         self.reply(answers={"Q1": "Sign in with Clerk", "Q2": "  "})
         fa.run_answer(self.repo, "sign-in", "2026-10-27 01:05:00")
         decides = [c.args[0] for c in self.cli.call_args_list if c.args[0][0] == "decide"]
-        self.assertEqual(decides, [["decide", "--repo", str(self.repo), "--project", "sign-in", "--new", "Sign in with Clerk", "--closes", "Q1"]])
+        self.assertEqual(decides, [["decide", "--repo", str(self.repo), "--project", "sign-in", "--new", "Sign in with Clerk", "--closes", "Q1", "--issue", "NEB-10"]])
 
     def test_a_torn_status_file_does_not_stop_the_step(self):
         (self.proj / "results" / "crew" / "sign-in-orchestrator.status").write_text("{torn\n")
@@ -439,7 +439,7 @@ class Answerer(unittest.TestCase):
         self.reply(answers={"D2": "x", "Q1": "Clerk"})
         fa.run_answer(self.repo, "sign-in", "2026-10-27 01:05:00")
         decides = [c.args[0] for c in self.cli.call_args_list if c.args[0][0] == "decide"]
-        self.assertEqual(decides, [["decide", "--repo", str(self.repo), "--project", "sign-in", "--new", "Clerk", "--closes", "Q1"]])
+        self.assertEqual(decides, [["decide", "--repo", str(self.repo), "--project", "sign-in", "--new", "Clerk", "--closes", "Q1", "--issue", "NEB-10"]])
 
     def test_in_flight_repeats_are_silent_and_answered_repeats_go_to_the_morning_once(self):
         self.report("needs-user", "NEB-10: same", "2026-10-27 01:00:00")

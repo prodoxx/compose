@@ -92,7 +92,16 @@ class Ask(unittest.TestCase):
                          ("Which auth?", "Clerk", "every screen signs in", (0, 1)))
         self.assertEqual((qs["C1-2"]["question"], qs["C1-2"]["recommendation"], qs["C1-2"]["replaces"]), ("Move to Paddle? (replaces D4)", "Paddle", "D4"))
         self.assertIn("session/ab12", qs["V1"]["why"])
-        self.assertEqual((qs["Q4"]["recommendation"], qs["Q4"]["span"]), ("", (3, 4)), "a plain line keeps the notes after it")
+        self.assertEqual((qs["Q4"]["recommendation"], qs["Q4"]["span"]), ("", (3, 5)), "a question's span runs to the next question head")
+
+    def test_a_recommendation_with_a_dash_in_it_splits_on_the_last_dash(self):
+        q = fc.fc_ask.questions_in("- Q5: Which auth? - Recommendation: Clerk - the hosted one - every screen signs in\n")["Q5"]
+        self.assertEqual((q["recommendation"], q["why"]), ("Clerk - the hosted one", "every screen signs in"))
+
+    def test_a_question_span_takes_its_continuation_lines_in_both_formats(self):
+        qs = fc.fc_ask.questions_in("- Q1: Which auth? - Recommendation: Clerk - every screen\n  signs in\nsee NEB-9\n- Q2: Colors? - Recommendation: warm - brand\n"
+                                    "Q3. Database?\nA. Postgres - affects: hosting\nRecommendation: A\nmore notes on hosting\n")
+        self.assertEqual([qs[i]["span"] for i in ("Q1", "Q2", "Q3")], [(0, 3), (3, 4), (4, 8)])
 
     def test_an_old_card_block_reads_as_its_question_and_recommended_option(self):
         qs = fc.fc_ask.questions_in("1. **Q1**: Which db?\n   - Why: hosting hangs on it\n   - **A.** Postgres (affects: schema)\n   - B) SQLite - affects deploy only\n"
@@ -101,7 +110,7 @@ class Ask(unittest.TestCase):
         self.assertEqual(sorted(qs), ["Q1", "Q2"])
         self.assertEqual((qs["Q1"]["question"], qs["Q1"]["why"], qs["Q1"]["recommendation"], qs["Q1"]["span"]), ("Which db?", "hosting hangs on it", "B. SQLite", (0, 5)))
         self.assertEqual(qs["Q1"]["options"], {"A": ("Postgres", "schema"), "B": ("SQLite", "deploy only")})
-        self.assertEqual((qs["Q2"]["recommendation"], qs["Q2"]["span"]), ("A. warm", (5, 9)))
+        self.assertEqual((qs["Q2"]["recommendation"], qs["Q2"]["span"]), ("A. warm", (5, 11)))
 
     def test_a_working_link_goes_out_with_the_text_fallback(self):
         self.report(f"NEB-1: 2 questions V1-V2; recommendation accept; visual questions open in Lavish: {self.good}")
@@ -231,6 +240,15 @@ class Ask(unittest.TestCase):
         self.assertIn("already in the map's Decisions so far", out)
         self.assertEqual(self.sent(), [])
 
+    def test_an_id_open_on_the_issue_is_open_and_a_reused_one_must_be_renumbered(self):
+        desc = ("## Decisions so far\n- D4: Clerk (closes Q2) (product owner, 2026-10-20)\n\n"
+                "## Not yet specified\n- Q2: Which database? - Recommendation: SQLite - hosting\n")
+        out = self.ask_on_map(desc)
+        self.assertIn("renumber: Q2 was already used", out)
+        self.assertNotIn("already in the map's Decisions so far", out)
+        self.assertEqual(self.sent(), [])
+        self.assertTrue((self.proj / "results" / "crew" / "shop-architect.refused").exists())
+
     def test_a_linear_outage_does_not_stop_an_ask(self):
         with mock.patch.object(fc.fc_config, "LINEAR_KEY", "k"), mock.patch.object(fc.fc_linear, "linear_gql", side_effect=OSError("down")):
             self.report("NEB-1: 1 questions Q1; recommendation a")
@@ -284,6 +302,16 @@ class BriefsNameBothPostures(unittest.TestCase):
                 self.assertNotIn(gone, flat, name)
             self.assertIn("--closes", flat, name)
             self.assertIn("one question at a time", flat, name)
+
+    def test_each_brief_says_never_reuse_an_id(self):
+        for name in ("PLANNER_BRIEF", "CHANGE_BRIEF"):
+            self.assertIn("never reuse an id", self.flat(name), name)
+
+    def test_the_change_page_shows_pictures_only_and_answers_come_through_the_manager(self):
+        flat = self.flat("CHANGE_BRIEF")
+        self.assertNotIn("accept-all button", flat)
+        self.assertNotIn("same reads, forms", flat)
+        self.assertIn("The page shows pictures only, with no answer controls; answers come through the engineering manager.", flat)
 
     def test_no_brief_keeps_a_yolo_only_rule_or_an_em_dash(self):
         for name in ("PLANNER_BRIEF", "CHANGE_BRIEF"):

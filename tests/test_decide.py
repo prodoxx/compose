@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import contextlib, importlib.machinery, importlib.util, io, json, os, subprocess, sys, tempfile, time, unittest
+import contextlib, importlib.machinery, importlib.util, io, json, os, re, subprocess, sys, tempfile, time, unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -172,6 +172,42 @@ class Decide(unittest.TestCase):
             self.refuses("NEB-1 still has open questions: Q1, Q2", new=[text], quote="looks good")
         self.refuses('--closes <id>', new=["stories NEB-1 approved"], quote="looks good")
 
+    def test_an_approval_is_only_a_go_line_the_skill_writes(self):
+        out = self.decide(new=["Stories that are approved by a manager show a badge"], quote="badges")
+        self.assertIn("- D5: Stories that are approved by a manager show a badge (product owner,", self.linear.body)
+        self.assertIn("open questions on NEB-1 (2):", out)
+
+    def test_every_approval_form_the_skill_writes_is_guarded(self):
+        root = Path(__file__).resolve().parents[1]
+        forms = {m for f in [*root.glob("sections/*.md"), *root.glob("commands/*.md")]
+                 for m in re.findall(r'--new "([^"]*approved[^"]*)"', f.read_text())}
+        self.assertGreaterEqual(len(forms), 3, forms)
+        for form in forms:
+            text = re.sub(r"<[^>]*>", "NEB-7", form)
+            with self.subTest(form):
+                self.assertRegex(text, fc.fc_decide.APPROVAL)
+                self.refuses("NEB-1 still has open questions: Q1, Q2", new=[text], quote="go")
+
+    def test_one_answer_named_twice_is_refused_without_a_traceback(self):
+        for kw in ({"new": ["Clerk"], "closes": ["Q1"], "drop": ["Q1"]}, {"new": ["Clerk"], "closes": ["Q1", "Q1"]},
+                   {"drop": ["Q2", "Q2"]}):
+            with self.subTest(kw):
+                self.refuses("Q", quote="x", **kw)
+                with self.assertRaises(SystemExit) as e:
+                    self.decide(quote="x", **kw)
+                self.assertIn("more than once", str(e.exception.code))
+        self.linear.body = OLD_CARDS
+        self.refuses("Q1 is named more than once", "Q1: A", new=["Clerk"], closes=["Q1"], quote="x")
+
+    def test_closing_a_question_takes_its_continuation_lines_with_it(self):
+        self.linear.body = MAP.replace("- Q1: Which auth? - Recommendation: Clerk - every screen signs in",
+                                       "- Q1: Which auth? - Recommendation: Clerk - every screen signs in,\n  and the admin too (NEB-9)\nsee the auth note")
+        self.decide(new=["Clerk"], closes=["Q1"], quote="clerk")
+        body = self.linear.body
+        self.assertNotIn("admin too", body)
+        self.assertNotIn("auth note", body)
+        self.assertIn("## Not yet specified\n\n- Q2: Which database?", body)
+
     def test_an_approval_goes_through_once_every_question_is_closed(self):
         self.decide(new=["Clerk"], closes=["Q1"], quote="clerk")
         self.decide(drop=["Q2"], quote="no db")
@@ -339,11 +375,40 @@ class Decide(unittest.TestCase):
         self.decide(new=["Paddle"], closes=["C1-2"], change="C1", quote="paddle")
         self.assertNotIn("~~", self.linear.body)
 
-    def test_an_old_supersedes_line_strikes_nothing_by_itself(self):
-        self.linear.body = OLD_CARDS.replace("## Out of scope", "W1. Fees too high?\nSupersedes: Q0: Stripe\nA. keep it - affects: none\nB. Paddle - affects: checkout\nRecommendation: B\n\n## Out of scope")
-        self.decide("W1: B", quote="paddle", change="C2")
-        self.assertIn('- Q0: Stripe (product owner, 2026-10-20; said: "stripe")\n', self.linear.body)
+    OLD_CHANGE_CARD = "C1-2. Fees too high?\nSupersedes: Q0: Stripe\nA. keep it - affects: none\nB. Paddle - affects: checkout\nRecommendation: B\n\n## Out of scope"
+
+    def test_the_old_change_card_answer_strikes_its_supersedes_line_as_main_did(self):
+        self.linear.body = OLD_CARDS.replace("## Out of scope", self.OLD_CHANGE_CARD)
+        self.decide("C1-2: B", quote="paddle", change="C1")
+        self.assertIn('- ~~Q0: Stripe (product owner, 2026-10-20; said: "stripe")~~ (C1)\n', self.linear.body)
+        self.assertIn(f'- C1-2: B. Paddle (C1; product owner, {TODAY}; said: "paddle")', self.linear.body)
+
+    def test_the_old_change_card_answer_that_keeps_strikes_nothing(self):
+        self.linear.body = OLD_CARDS.replace("## Out of scope", self.OLD_CHANGE_CARD)
+        self.decide("C1-2: A", quote="keep", change="C1")
         self.assertNotIn("~~", self.linear.body)
+
+    def test_accept_all_on_a_change_of_course_question_strikes_the_decision_it_replaces(self):
+        self.change_map()
+        self.decide(accept_all=True, quote="all as you say")
+        body = self.linear.body
+        self.assertIn('- ~~D4: one store (product owner, 2026-10-20; said: "one")~~ (C1)\n', body)
+        self.assertIn("- D6: Paddle (closes C1-2) (product owner,", body)
+
+    def test_accept_all_under_away_strikes_with_the_change_id_from_the_question_id(self):
+        self.change_map()
+        self.linear.body = self.linear.body.replace("C1-2", "C3-1")
+        (self.proj / "results" / "yolo.json").write_text(json.dumps({"mode": "away", "since": "x", "decisions": [], "words": "", "push": False}))
+        self.decide(accept_all=True)
+        self.assertIn('- ~~D4: one store (product owner, 2026-10-20; said: "one")~~ (C3)\n', self.linear.body)
+
+    def test_accept_all_on_a_keep_recommendation_strikes_nothing(self):
+        for rec in ("Keep D4 - fees are fine", "D4 stands - fees are fine"):
+            with self.subTest(rec):
+                self.change_map()
+                self.linear.body = self.linear.body.replace("Recommendation: Paddle - 30 cents a sale", f"Recommendation: {rec}")
+                self.decide(accept_all=True, quote="as you say")
+                self.assertNotIn("~~", self.linear.body)
 
     def test_an_old_card_block_closes_whole_with_closes(self):
         self.linear.body = OLD_CARDS

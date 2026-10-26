@@ -5,6 +5,7 @@ CONFIRMED
 ANSWER
 TAG
 APPROVAL
+KEEP
 NEW_FORM
 map_issue
 read_map
@@ -19,6 +20,7 @@ cmd_decisions
 parse_answers
 answer_text
 close_questions
+superseded
 record
 replace_decision
 record_new

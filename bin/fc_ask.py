@@ -59,6 +59,10 @@ def closed_ids(line):
     """The question ids a decision line closed, from its `(closes Q3, Q4)` note."""
     return [i for m in CLOSES.finditer(line) for i in re.split(r"[,\s]+", m.group(1)) if i]
 
+def open_ids_in(bodies):
+    """Every question id open under Not yet specified on those maps."""
+    return {cid for desc in bodies.values() for cid in questions_in(fc_change.map_section(desc, "Not yet specified"))}
+
 def decided_ids(bodies, ids):
     """Which of `ids` a live line of those maps' Decisions so far already settles: an old line it heads, or a line whose `(closes ...)` names it."""
     out = set()
@@ -81,9 +85,9 @@ RECOMMENDATION = re.compile(r"^\s*(?:[-*]\s+)?[*_`]*recommend(?:ation|ed)?[*_`]*
 SUPERSEDES = re.compile(r"^\s*(?:[-*]\s+)?[*_`]*(?:supersedes|replaces)[*_`]*\s*:\s*(\S.*)", re.I)
 
 def old_card(q, lines):
-    """Fill an old card block's question from its lines (why, options, the recommended option); its span ends at its last card line."""
-    letter, last = "", 0
-    for n, l in enumerate(lines, 1):
+    """Fill an old card block's question from its lines: why, options, the recommended option, and the line a change card supersedes."""
+    letter = ""
+    for l in lines:
         if o := OPTION.match(l):
             text, aff = o.group(2), AFFECTS.search(o.group(2))
             q["options"][o.group(1)] = (text[:aff.start()].rstrip(" -:;,(") if aff else text, aff.group(1).strip(" )") if aff else "")
@@ -91,29 +95,28 @@ def old_card(q, lines):
             letter = r.group(1).upper()
         elif w := WHY.match(l):
             q["why"] = w.group(1).strip()
-        elif not SUPERSEDES.match(l):
-            continue
-        last = n
+        elif sup := SUPERSEDES.match(l):
+            q["supersedes"] = sup.group(1).strip()
     q["recommendation"] = f"{letter}. {q['options'][letter][0]}" if letter in q["options"] else letter
-    q["span"] = (q["span"][0], q["span"][0] + 1 + last)
 
 def questions_in(section):
     """The open questions written in a map's Not yet specified, by id: question, recommendation, why, replaces (the decision a
-    change-of-course question would replace), options (an old card's letters), and span, the (start, end) of its lines in the section.
+    change-of-course question would replace), options and supersedes (an old card's letters and `Supersedes:` line), and span, the
+    (start, end) of its lines in the section: its head and every line after it up to the next question head or the section's end.
     A question is one line, `- Q3: <question> - Recommendation: <recommendation> - <why it matters>`; an old card block (`Q1. <question>`
     / `Why:` / `A. <option> - affects: ...` / `Recommendation: <letter>`) still reads as one, its recommendation the option it names."""
     lines = section.splitlines()
     heads = [(i, m) for i, m in ((i, CARD_HEAD.match(l)) for i, l in enumerate(lines)) if m and not OPTION.match(lines[i])]
     out = {}
     for n, (i, m) in enumerate(heads):
-        text = m.group(2).strip()
-        q = {"question": text, "recommendation": "", "why": "", "replaces": "", "options": {}, "span": (i, i + 1)}
+        text, end = m.group(2).strip(), heads[n + 1][0] if n + 1 < len(heads) else len(lines)
+        q = {"question": text, "recommendation": "", "why": "", "replaces": "", "options": {}, "supersedes": "", "span": (i, end)}
         if r := INLINE_RECOMMENDATION.search(text):
             q["question"] = text[:r.start()].strip()
-            rec, _, why = text[r.end():].partition(" - ")
-            q["recommendation"], q["why"] = rec.strip(" *_`"), why.strip()
+            rec, dash, why = text[r.end():].rpartition(" - ")  # the why follows the last dash: a recommendation may hold one
+            q["recommendation"], q["why"] = (rec if dash else why).strip(" *_`"), why.strip() if dash else ""
         else:
-            old_card(q, lines[i + 1:heads[n + 1][0] if n + 1 < len(heads) else len(lines)])
+            old_card(q, lines[i + 1:end])
         if p := REPLACES.search(q["question"]):
             q["replaces"] = p.group(1)
         out.setdefault(m.group(1), q)
@@ -156,7 +159,11 @@ def ask_gate(proj, message, hop=""):
     scope = (f"{hop}@" if hop else "") + (f"{head[1] or ''}/{head[2]}" if head else "?")
     feature = (json.loads((proj / "linear.json").read_text()) if (proj / "linear.json").exists() else {}).get("feature")
     bodies = map_bodies([x for x in (head[2] if head else None, feature) if x])
-    open_ids = [i for i in ids if i not in decided_ids(bodies, ids)]
+    decided = decided_ids(bodies, ids)
+    if reused := [i for i in ids if i in decided and i in open_ids_in(bodies)]:
+        raise Refused(f"not reported: renumber: {', '.join(reused)} was already used (a Decisions so far line closed it). Give the open "
+                      "question a new id on the map, never reuse an id, then report again.")
+    open_ids = [i for i in ids if i not in decided]
     if not open_ids:
         raise Refused(f"not reported: {', '.join(ids)} already in the map's Decisions so far. Build on the decisions; nothing is open.")
     if problems := format_problems(bodies, open_ids):

@@ -180,8 +180,8 @@ def run_answer(repo, slug, at, nth=0) -> dict:
             fc_factoryturn.compose_cli(["linear", "comment", q["issue"], "--repo", str(repo)], stdin=comment_body(q, rec, model, time.strftime("%Y-%m-%d")))
             rec["commented"] = True
             if rec["answers"]:
-                for qid, text in rec["answers"].items():  # one decide per question: --closes takes exactly one --new
-                    fc_factoryturn.compose_cli(["decide", "--repo", str(repo), "--project", slug, "--new", text, "--closes", qid])
+                for qid, text in rec["answers"].items():  # one decide per question (--closes takes one --new), on the issue the question heads
+                    fc_factoryturn.compose_cli(["decide", "--repo", str(repo), "--project", slug, "--new", text, "--closes", qid, "--issue", q["issue"]])
             elif not fc_factoryturn.prompt_lead(fc_herdr.agent_name(slug, "orchestrator"), f"night: {rec['answer']}"):
                 raise RuntimeError("the team lead did not take the answer")
             rec["acted"] = True
