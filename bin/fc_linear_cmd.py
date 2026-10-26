@@ -214,7 +214,7 @@ def verb_get(a):
         return
     print(issue_line(issue))
     blockers = [f"{r['issue']['identifier']} ({r['issue']['state']['name']})" for r in issue.get("inverseRelations", {}).get("nodes", []) if r["type"] == "blocks"]
-    if blockers:  # --blocked-by sets the whole list, so a caller needs these before changing one
+    if blockers:  # --blocked-by sets the whole list, so a caller needs these before changing it
         print("blocked by: " + ", ".join(blockers))
     if a.body:
         print_body(issue["description"])
@@ -265,12 +265,20 @@ def verb_create(a):
         fc_linear.linear_blocked_by({"id": issue["id"]}, a.blocked_by.split(","))
     print(f"created {issue['identifier']}")
 
+def ids(values):
+    """The issue ids in repeated or comma-separated flag values, empty ones dropped."""
+    return [x.strip() for v in values or () for x in v.split(",") if x.strip()]
+
 def verb_update(a):
     if not a.target:
         sys.exit("update needs an issue id")
     writes = writes_body(a, "update")
-    if not (writes or a.title or a.parent or a.state or a.label or a.add_label or a.drop_label or a.priority is not None or a.blocked_by is not None):
-        sys.exit("update needs --title, --state, --parent, --label, --add-label, --drop-label, --priority, --blocked-by, or a body: --section, --append, or --description with --file or stdin")
+    add, drop = ids(a.add_blocked_by), ids(a.drop_blocked_by)
+    if not (writes or a.title or a.parent or a.state or a.label or a.add_label or a.drop_label or a.priority is not None or a.blocked_by is not None or add or drop):
+        sys.exit("update needs --title, --state, --parent, --label, --add-label, --drop-label, --priority, --blocked-by, --add-blocked-by, --drop-blocked-by, "
+                 "or a body: --section, --append, or --description with --file or stdin")
+    if a.blocked_by is not None and (add or drop):
+        sys.exit("update takes --blocked-by (the whole list) or --add-blocked-by/--drop-blocked-by, not both")
     prio = priority(a)  # a bad value refuses before the issue is read
     issue = fc_linear.linear_gql("query($id: String!) { issue(id: $id) { id identifier description project { id name } team { name states { nodes { id name } } labels(first: 250) { nodes { id name } } } } }",
                                  {"id": a.target[0]})["issue"]
@@ -285,13 +293,18 @@ def verb_update(a):
     inp.update(prio)
     if writes:
         inp["description"] = new_body(a, issue["description"])
-    if inp:  # empty only when --blocked-by is the one change
+    if inp:  # empty only when the blockers are the one change
         fc_linear.linear_gql("mutation($id: String!, $in: IssueUpdateInput!) { issueUpdate(id: $id, input: $in) { success } }", {"id": issue["id"], "in": inp})
         if writes:
             await_write(lambda: fc_linear.linear_gql("query($id: String!) { issue(id: $id) { description } }", {"id": issue["id"]})["issue"]["description"], issue["description"], inp["description"])
+    dropped = []
     if a.blocked_by is not None:
-        fc_linear.linear_blocked_by(issue, [x for x in a.blocked_by.split(",") if x])
+        dropped = fc_linear.linear_blocked_by(issue, ids([a.blocked_by]))
+    elif add or drop:
+        fc_linear.linear_blocked_by(issue, None, add=add, drop=drop)
     print(f"updated {issue['identifier']}")
+    if dropped:  # --blocked-by sets the whole list: say what it took away, in case the caller meant to add
+        print(f"no longer blocked by: {', '.join(dropped)} (--add-blocked-by adds and keeps the rest)")
 
 def verb_comment(a):
     if not a.target:
@@ -398,6 +411,8 @@ def cmd_linear(a):
         sys.exit(fc_config.needs_linear_key("compose linear"))
     if a.action != "update" and (getattr(a, "add_label", None) or getattr(a, "drop_label", None)):
         sys.exit("--add-label and --drop-label change an existing issue: compose linear update <id> takes them, and create takes --label")
+    if a.action != "update" and (getattr(a, "add_blocked_by", None) or getattr(a, "drop_blocked_by", None)):
+        sys.exit("--add-blocked-by and --drop-blocked-by change an existing issue: compose linear update <id> takes them, and create takes --blocked-by")
     try:
         globals()[f"verb_{a.action}"](a)
     except (RuntimeError, OSError) as e:
