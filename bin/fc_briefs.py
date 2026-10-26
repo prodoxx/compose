@@ -1,7 +1,7 @@
 import argparse, fcntl, json, re, sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-import fc_core, fc_config, fc_claude, fc_tasks, fc_herdr, fc_worktree, fc_change, fc_crew, fc_crewpick, fc_toolbug, fc_testred, fc_planner_brief
+import fc_core, fc_config, fc_claude, fc_tasks, fc_herdr, fc_worktree, fc_change, fc_crew, fc_crewpick, fc_toolbug, fc_testred, fc_planner_brief, fc_prd
 
 
 # ---------- groundwork: the boilerplate brief, then one test-writing teammate per task on a shared contract ----------
@@ -147,8 +147,17 @@ def cmd_planner(a):
     feature = (json.loads((proj / "linear.json").read_text()) if (proj / "linear.json").exists() else {}).get("feature", "<feature id>")
     issue = a.issue or feature
     role = "planner" if issue.lower() == feature.lower() else re.sub(r"[^a-z0-9_-]+", "-", f"planner-{issue.lower()}").strip("-")  # a story's planner runs beside the feature's
-    print(fc_planner_brief.PLANNER_BRIEF.format(slug=proj.name, wt=wt, issue=issue, name=fc_herdr.agent_name(proj.name, role))
-           + (f"\nProject notes from the team lead:\n{extra.strip()}\n" if extra.strip() else ""))
+    brief = fc_planner_brief.PLANNER_BRIEF.format(slug=proj.name, wt=wt, issue=issue, name=fc_herdr.agent_name(proj.name, role))
+    print(fc_planner_brief.with_prd(brief, _prd(wt)) + (f"\nProject notes from the team lead:\n{extra.strip()}\n" if extra.strip() else ""))
+
+def _prd(wt):
+    """The repo's PRD for the planner brief, or None: with no Linear key, no link, or Linear down the brief goes out without it."""
+    if not fc_config.LINEAR_KEY:
+        return None
+    try:
+        return fc_prd.read_prd(wt)
+    except fc_prd.LOOKUP_ERRORS:
+        return None
 
 def cmd_toolsmith(a):
     """Print the toolsmith's brief for the project's newest tool-bug entry: the maintainer's toolsmith files and fixes on a

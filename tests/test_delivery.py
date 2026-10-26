@@ -103,6 +103,25 @@ class Product(Fake):
         self.assertIn("A first guess at the tracks, from the blocks Linear holds today; play it back as a guess:\n1. ", out)
         self.assertEqual(self.mutations(), [])
 
+    def test_seed_starts_from_the_prd_s_product_at_a_glance(self):
+        prd = {"id": "d9", "title": "PRD", "url": "u/prd", "content": "> Draft\n\n## Goals\n\nSell.\n\n## The product at a glance\n\nA shoe shop for runners.\n\n## Open questions\n\nNone.\n"}
+        with mock.patch.object(fc.fc_prd, "read_prd", return_value=prd):
+            out = self.run_verb("seed")
+        self.assertTrue(out.startswith("The PRD's product at a glance (u/prd):\nA shoe shop for runners.\n"), out)
+        self.assertNotIn("Sell.", out); self.assertNotIn("None.", out)
+
+    def test_seed_without_a_prd_says_to_plan_it_first(self):
+        with mock.patch.object(fc.fc_prd, "read_prd", return_value=None):
+            out = self.run_verb("seed")
+        self.assertEqual(out.splitlines()[0], fc.fc_delivery.NO_PRD)
+        self.assertIn("compose prd seed", fc.fc_delivery.NO_PRD); self.assertIn("first", fc.fc_delivery.NO_PRD)
+
+    def test_seed_goes_on_when_the_prd_lookup_fails(self):
+        with mock.patch.object(fc.fc_prd, "read_prd", side_effect=RuntimeError("linear down")):
+            out = self.run_verb("seed")
+        self.assertIn("PRD lookup failed: linear down", out.splitlines()[0])
+        self.assertIn("A first guess at the tracks", out)
+
     def test_a_bad_tracks_section_stops_with_its_line(self):
         self.content = "## Tracks\n\n1. Sign-in NEB-7\n"
         with self.assertRaises(SystemExit) as e:

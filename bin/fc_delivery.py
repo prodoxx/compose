@@ -1,7 +1,7 @@
 """`compose delivery`: the product delivery plan across features, read from Linear (seed, order); the plan is a document in the Linear project."""
 import json, sys, time
 
-import fc_core, fc_config, fc_linear, fc_linear_cmd, fc_plan, fc_tasks
+import fc_core, fc_config, fc_linear, fc_linear_cmd, fc_plan, fc_prd, fc_tasks
 
 PRODUCT_TITLE = "Product delivery plan"
 NO_PLAN = "no product delivery plan yet: compose delivery seed starts one"
@@ -11,6 +11,7 @@ ISSUE_QUERY = "query($id: String!) { issue(id: $id) { %s url project { id } } }"
 DOCS_QUERY = """query($p: String!, $after: String) { project(id: $p) { documents(first: 50, after: $after) {
   pageInfo { hasNextPage endCursor } nodes { id title url } } } }"""
 DOC_QUERY = "query($id: String!) { document(id: $id) { id title url content } }"
+NO_PRD = "No PRD yet: plan it first with the product owner (compose prd seed, sections/0r.md); the delivery plan is planned from it."
 NOT_FOUND = "Entity not found: Issue"  # Linear's whole answer for an issue id it does not know
 
 def _issue(n):
@@ -104,7 +105,18 @@ def verb_order(a):
     report_unusable(plan)
     print(json.dumps(entries, indent=2) if a.json else "\n".join(entry_line(n, e) for n, e in enumerate(entries, 1)))
 
+def prd_lines(repo):
+    """The PRD's product at a glance, which the delivery plan starts from, or the line saying there is no PRD to start from."""
+    try:
+        prd = fc_prd.read_prd(repo)
+    except (RuntimeError, OSError, ValueError, KeyError, SystemExit) as e:
+        return [f"PRD lookup failed: {e}; the delivery plan is still planned from the PRD, so check it with compose prd status"]
+    if not prd:
+        return [NO_PRD]
+    return [f"The PRD's product at a glance ({prd['url']}):", fc_prd.glance(prd["content"]) or "(the PRD has no product at a glance yet)", ""]
+
 def verb_seed(a):
+    print("\n".join(prd_lines(a.repo)))
     product = read_product(a.repo)
     print("No product delivery plan yet." if not product["doc"] else f"The product delivery plan has no tracks yet: {product['doc']['url']}")
     open_ = [f for f in sorted(product["features"].values(), key=lambda f: fc_plan.issue_num(f["id"]))

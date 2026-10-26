@@ -1,13 +1,16 @@
 """The build loop's decision step: what is in flight, and which ready stories to start next."""
-import hashlib, json, os, re, subprocess, sys, traceback
+import hashlib, json, os, re, subprocess, sys, time, traceback
 from pathlib import Path
-import fc_change, fc_config, fc_core, fc_delivery, fc_herdr, fc_linear, fc_load, fc_plan, fc_readiness, fc_reconcile, fc_tasks
+import fc_change, fc_config, fc_core, fc_delivery, fc_herdr, fc_linear, fc_load, fc_plan, fc_prd, fc_readiness, fc_reconcile, fc_tasks
 import fc_factorystate
 
 JUDGE_LIMIT = 6
 MOVE_UP_JUDGES = 2  # judges a turn spends on out-of-order tickets, beyond pick's
 BACKOFF_TURNS = 3  # turns a story whose dispatch failed waits before it is tried again
 PLANNING_HOURS = 24  # a planning conversation older than this no longer holds offers back
+PRD_FIRST = ("event factory=prd-missing  (no PRD and no product delivery plan yet: plan the PRD with the product owner from compose prd seed "
+             "(sections/0r.md), then the delivery plan from it; nothing is dispatched before they exist)")
+PRD_OFFER = "event factory=prd-missing  (no PRD yet: offer to plan it with the product owner from compose prd seed (sections/0r.md); building goes on)"
 OPEN = ("todo", "backlog")
 FREED = ("in review", "done", "canceled")
 SHAPING = "needs-shaping"
@@ -263,6 +266,7 @@ def offer_day(repo, state, offer, now, out):
 
 ORDER_FILTER = {}  # mode -> fn(plan, entries, state) -> entries: a mode's say over which ordered stories may start
 IDLE = {"day": offer_day}
+PRD_IDLE = {}  # mode -> fn(repo, state, now, out): a mode's use of a turn that waits on the PRD (night prep prepares it)
 
 def _settle(repo, plan, state, out):
     """Drop the records of stories that left the build (verified, finished, out of the plan) or lost their team lead.
@@ -395,11 +399,21 @@ def turn(repo, state, now, stopping=None, saved=None):
         state["said"].pop("turn-crash", None)
     return out
 
+def _day(now):
+    return time.strftime("%Y-%m-%d", time.localtime(now))
+
 def _turn(repo, state, now, stopping, saved, out):
     said = state["said"]
     state["turns"] += 1
+    prd = fc_prd.check(repo, state, now)  # never raises: a failed lookup leaves the cache and blocks nothing
+    if prd:
+        said.pop("prd-missing", None); said.pop("prd-day", None)
     try:
         plan = fc_delivery.product_plan(repo)
+        if plan is None and prd is False:
+            fc_factorystate.say_once(state, "prd-missing", PRD_FIRST, out)
+            PRD_IDLE.get(fc_factorystate.pace(state)["mode"], lambda *a: None)(repo, state, now, out)
+            return
         if plan is None:
             fc_factorystate.say_once(state, "bootstrap", "event factory=bootstrap  (no product delivery plan yet: plan it with the product owner from "
                                  "compose delivery seed (sections/0p.md); nothing is dispatched before it exists)", out)
@@ -436,8 +450,12 @@ def _turn(repo, state, now, stopping, saved, out):
     if not _dispatch_all(repo, plan, got["picks"], state, now, stopping, saved, out):
         return
     planning = state["planning"] if isinstance(state["planning"], dict) and now - (state["planning"].get("at") or 0) < PLANNING_HOURS * 3600 else None
+    offers = not planning and now >= (state["declined_until"] or 0) and not _stopped(repo, stopping)
+    if prd is False and offers and fc_factorystate.pace(state)["mode"] == "day" and said.get("prd-day") != _day(now):
+        said["prd-day"] = _day(now)  # once a day, ahead of any ticket offer
+        out.append(PRD_OFFER)
     if got["picks"] or got["ready_waiting"] or not got["offer"]:
         said.pop("offer", None)
         state["offer"] = None
-    elif not planning and now >= (state["declined_until"] or 0) and not _stopped(repo, stopping):
+    elif offers:
         IDLE[fc_factorystate.pace(state)["mode"]](repo, state, got["offer"], now, out)

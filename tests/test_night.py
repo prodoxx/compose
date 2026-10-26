@@ -503,6 +503,7 @@ class Prep(unittest.TestCase):
         self.descriptions = {"NEB-11": "d11", "NEB-12": "d12"}
         self.states = {}
         self.docs, self.cli_calls, self.race = {}, [], None
+        self.seed, self.tprint = "PRD seed for Shop\n## Open tickets\n- NEB-11 (Todo) Sign in\n", "t1"
         def readiness(repo, ident, refresh=False, write=True):
             assert write is False, "prep must not write to the ticket"
             r = self.results[ident]
@@ -516,7 +517,8 @@ class Prep(unittest.TestCase):
                    unittest.mock.patch.object(fp.fc_plan, "order_entries", side_effect=lambda tracks, features: self.entries),
                    unittest.mock.patch.object(fp.fc_readiness, "story_readiness", side_effect=readiness),
                    unittest.mock.patch.object(fp.fc_factorystate, "add_event", side_effect=lambda repo, line: self.events.append(line)),
-                   unittest.mock.patch.object(fp.os, "kill", side_effect=lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()) if pid in self.gone else None)]
+                   unittest.mock.patch.object(fp.os, "kill", side_effect=lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()) if pid in self.gone else None),
+                   unittest.mock.patch.object(fp.fc_prd, "ticket_print", side_effect=lambda repo: self.tprint)]
         self.claude, self.spawn = (p.start() for p in patches[1:3])
         patches[0].start()
         for p in patches[3:]:
@@ -525,6 +527,8 @@ class Prep(unittest.TestCase):
 
     def cli(self, args, stdin=None, pane=None):
         self.cli_calls.append(list(args))
+        if args[:2] == ["prd", "seed"]:
+            return self.seed
         if args[:2] == ["linear", "get"]:
             i = args[2]
             return json.dumps({"identifier": i, "title": self.titles.get(i, i), "description": self.descriptions.get(i, ""),
@@ -637,6 +641,61 @@ class Prep(unittest.TestCase):
     def reply(self, **kw):
         found = {"code": [], "built": [], "open": [], "questions": [{"question": "Q?", "recommendation": "No", "why": "w"}], "drop": False, **kw}
         self.claude.return_value = (None, json.dumps(found), 4, {})
+
+    def missing_prd(self, found=False):
+        self.state["prd"] = {"found": found, "checked": 100.0}
+
+    def test_idle_prepares_the_prd_first_while_it_is_missing(self):
+        self.missing_prd()
+        fp.prep_idle(self.repo, self.state, {"id": "NEB-11"}, 100.0, self.out)
+        self.spawn.assert_called_once_with(self.repo, ["factory", "prep", "--repo", str(self.repo), "--ticket", "PRD"], "night-prep.log")
+        self.assertEqual((self.state["prep"]["PRD"]["layer"], self.state["prep"]["PRD"]["print"]), ("prd", "t1"))
+        self.finish_worker("PRD"); fp.prep_idle(self.repo, self.state, {"id": "NEB-11"}, 160.0, self.out)
+        self.assertEqual(self.spawn.call_args.args[1][-1], "NEB-11")
+
+    def test_idle_does_not_prepare_the_prd_once_it_is_found_or_unknown(self):
+        for prd in ({"found": True, "checked": 100.0}, {}):
+            self.state["prd"], self.state["prep"] = prd, {}
+            fp.prep_idle(self.repo, self.state, {"id": "NEB-11"}, 100.0, self.out)
+            self.assertEqual(self.spawn.call_args.args[1][-1], "NEB-11")
+
+    def test_a_night_turn_with_no_prd_and_no_plan_prepares_the_prd(self):
+        state = {**json.loads(json.dumps(st.EMPTY)), "mode": "night", "night": self.state["night"]}
+        fp.fc_delivery.product_plan.return_value = None
+        with unittest.mock.patch.object(ft.fc_prd, "find_prd", return_value=None):
+            lines = ft.turn(self.repo, state, 100.0)
+        self.assertEqual(lines, [ft.PRD_FIRST])
+        self.assertEqual(self.spawn.call_args.args[1][-1], "PRD")
+
+    def test_the_prd_prep_writes_its_questions_from_the_seed_and_never_touches_a_ticket(self):
+        self.reply(questions=[{"question": f"Q{n}?", "recommendation": "r", "why": "w"} for n in range(7)])
+        self.assertEqual(fp.run_prep(self.repo, "PRD")["status"], "prepared")
+        doc = self.docs[fp.PREP_TITLE]
+        self.assertIn("## PRD: product requirements\n", doc); self.assertIn("5. Q4?\n", doc); self.assertNotIn("Q5?", doc)
+        self.assertIn(self.seed, self.claude.call_args.args[1]); self.assertIn("never plan", self.claude.call_args.args[1])
+        self.assertEqual([c for c in self.cli_calls if c[:2] != ["prd", "seed"] and c[:2] != ["linear", "doc"]], [])
+        self.assertIn("event factory=prepared ticket=PRD questions=5", self.events[-1])
+
+    def test_the_sweep_keeps_the_prd_section_while_the_prd_is_missing_and_drops_it_once_found(self):
+        self.missing_prd()
+        self.state["prep"] = {"PRD": {"print": "t1", "at": 1.0, "pid": None, "layer": "prd"}}
+        self.docs[fp.PREP_TITLE] = "## PRD: product requirements\n\nx\n\n## NEB-12: Billing\n\ny\n"
+        fp.refresh(self.repo, self.state, ["event factory=verified story=NEB-10"], 100.0, self.out)
+        self.assertIn("## PRD: product requirements", self.docs[fp.PREP_TITLE]); self.assertIn("PRD", self.state["prep"])
+        del self.state["prep"]["PRD"]
+        fp.refresh(self.repo, self.state, ["event factory=verified story=NEB-10"], 101.0, self.out)
+        self.assertIn("## PRD: product requirements", self.docs[fp.PREP_TITLE])  # no record, but still missing: kept
+        self.state["prep"]["PRD"] = {"print": "t1", "at": 1.0, "pid": None, "layer": "prd"}; self.missing_prd(True)
+        fp.refresh(self.repo, self.state, ["event factory=verified story=NEB-10"], 102.0, self.out)
+        self.assertNotIn("PRD", self.docs[fp.PREP_TITLE]); self.assertNotIn("PRD", self.state["prep"])
+        self.assertEqual([c for c in self.cli_calls if c[:3] == ["linear", "get", "PRD"]], [])
+
+    def test_refresh_prepares_the_prd_again_when_the_tickets_changed(self):
+        self.missing_prd()
+        self.state["prep"] = {"PRD": {"print": "t1", "at": 1.0, "pid": None, "layer": "prd", "attempts": 1, "gave_up": True}}
+        self.tprint = "t2"
+        fp.refresh(self.repo, self.state, ["event factory=verified story=NEB-10"], 100.0, self.out)
+        self.assertEqual((self.state["prep"]["PRD"]["print"], self.state["prep"]["PRD"]["gave_up"]), (None, False))
 
     def test_model_text_cannot_forge_a_heading_or_break_a_line(self):
         self.reply(questions=[{"question": "Refunds?\n## NEB-5: x", "recommendation": "# No\nyes", "why": "w"}], built=["a\n## NEB-6: y"])
@@ -782,7 +841,7 @@ class Digest(unittest.TestCase):
         st.add_event(self.repo, line)
 
     def prepped(self, ident, status="prepared", layer="stories", **kw):
-        self.state["prep"][ident] = {"pid": 4000 + int(ident.split("-")[1]), "print": "x", "at": 1.0, "layer": layer, "attempts": 0, **kw}
+        self.state["prep"][ident] = {"pid": 4000 + int(ident.split("-")[1] if "-" in ident else 0), "print": "x", "at": 1.0, "layer": layer, "attempts": 0, **kw}
         if status:
             fp._outcome(self.repo, ident, status)
 
@@ -889,6 +948,12 @@ class Digest(unittest.TestCase):
         self.state["night"]["morning_msgs"] = ["sign-in|plan the stories for NEB-9?"]
         self.assertEqual(fd.ready_to_plan(self.repo, self.state),
                          ["Prep document: https://linear.app/d", "NEB-12 Billing (stories): 2 questions prepared", "Planning waits: sign-in: plan the stories for NEB-9?"])
+
+    def test_ready_to_plan_lists_the_prd_first(self):
+        self.docs.update(url="https://linear.app/d", content="## NEB-12: Billing\n\nQuestions:\n1. Which?\n\n## PRD: product requirements\n\nQuestions:\n1. Who?\n2. Why?\n")
+        self.prepped("NEB-12"); self.prepped("PRD", layer="prd")
+        self.assertEqual(fd.ready_to_plan(self.repo, self.state)[:3],
+                         ["Prep document: https://linear.app/d", "PRD product requirements (prd): 2 questions prepared", "NEB-12 Billing (stories): 1 question prepared"])
 
     def test_ready_to_plan_says_how_each_prep_ended_before_any_tick_settles_it(self):
         self.docs.update(url="https://linear.app/doc/prep", content="## NEB-12: Billing\n\nQuestions:\n1. Which?\n")

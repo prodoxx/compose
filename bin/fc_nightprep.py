@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib, json, os, re, subprocess, time
 from pathlib import Path
 
-import fc_claude, fc_config, fc_core, fc_delivery, fc_factorystate, fc_factoryturn, fc_nightstate, fc_plan, fc_readiness
+import fc_claude, fc_config, fc_core, fc_delivery, fc_factorystate, fc_factoryturn, fc_nightstate, fc_plan, fc_prd, fc_readiness
 
 PREP_TITLE = "Night prep: questions for the next planning session"
 REFRESH_ON = ("dispatched", "verified", "held", "changed", "answered")
@@ -20,6 +20,13 @@ ASK = ("You prepare the next planning session for this ticket; you never plan: d
        "each with your recommendation marked as a guess. When an old section is given, rewrite, merge, or drop its questions against what is true now; "
        "set drop when none still applies. Reply with only JSON: "
        '{"code": [str], "built": [str], "open": [str], "questions": [{"question": str, "recommendation": str, "why": str}], "drop": bool}.')
+PRD_TITLE = "product requirements"  # the PRD's section of the prep document is "## PRD: product requirements"
+PRD_ASK = ("You prepare the product owner's PRD session; the project has no PRD yet. You never plan: do not write the PRD or stories, "
+           "mark anything ready, or answer your own questions. Read the seed below (the project, its documents and tickets, what is built) and the code, "
+           "say what is built and what is still open, and write at most 5 questions about the product (its problem, who it is for, goals, non-goals, "
+           "anti-goals) the product owner must answer, each with your recommendation marked as a guess. When an old section is given, rewrite, merge, "
+           "or drop its questions against what is true now; set drop when none still applies. Reply with only JSON: "
+           '{"code": [str], "built": [str], "open": [str], "questions": [{"question": str, "recommendation": str, "why": str}], "drop": bool}.')
 
 def prep_print(ticket_text: str, feature_text: str) -> str:
     return hashlib.sha256(f"{ticket_text}\0{feature_text}".encode()).hexdigest()[:16]
@@ -215,22 +222,33 @@ def prep_prompt(issue, feature, plan_doc, notes, old) -> str:
             f"Its feature:\n{feature[:6000]}\n\nThe product plan:\n{plan_doc[:6000]}\n\nNight notes:\n{notes[-3000:]}\n\n"
             + (f"Old section to rewrite, merge, or drop:\n{old}\n" if old else "No old section.\n"))
 
+def prd_prompt(seed, notes, old) -> str:
+    return (f"{PRD_ASK}\n\nThe seed (compose prd seed):\n{seed[:14000]}\n\nNight notes:\n{notes[-3000:]}\n\n"
+            + (f"Old section to rewrite, merge, or drop:\n{old}\n" if old else "No old section.\n"))
+
+def _subject(repo, ident) -> tuple:
+    """(title, layer, prompt) of what the worker prepares: a ticket, or the PRD while the project has none."""
+    content = find_doc(repo)["content"]
+    if ident == fc_prd.PRD_ID:
+        seed = fc_factoryturn.compose_cli(["prd", "seed", "--repo", str(repo)])
+        return PRD_TITLE, "prd", prd_prompt(seed, fc_nightstate.notes_tail(repo), _old_section(content, ident))
+    issue = _issue(repo, ident)
+    title = _line(issue.get("title") or "") or ident
+    feature = _texts(repo, issue)[1]
+    try:
+        plan = fc_delivery.product_plan(repo)
+    except (RuntimeError, SystemExit):
+        plan = None
+    entries = fc_plan.order_entries(plan["tracks"], plan["features"]) if plan else []
+    layer = "stories" if any(e["id"] == ident and e["kind"] == "feature" for e in entries) else "story"
+    return title, layer, prep_prompt(issue, feature, ((plan or {}).get("doc") or {}).get("content") or "", fc_nightstate.notes_tail(repo), _old_section(content, ident))
+
 def run_prep(repo, ident) -> dict:
-    """The worker: research one ticket and write its section of the prep document. A failure is an event, never a crash."""
+    """The worker: research one ticket, or the PRD, and write its section of the prep document. A failure is an event, never a crash."""
     model, effort = fc_config.NIGHT_MODEL
     since = fc_nightstate.night_since(repo)
     try:
-        issue = _issue(repo, ident)
-        title = _line(issue.get("title") or "") or ident
-        feature = _texts(repo, issue)[1]
-        try:
-            plan = fc_delivery.product_plan(repo)
-        except (RuntimeError, SystemExit):
-            plan = None
-        entries = fc_plan.order_entries(plan["tracks"], plan["features"]) if plan else []
-        layer = "stories" if any(e["id"] == ident and e["kind"] == "feature" for e in entries) else "story"
-        content = find_doc(repo)["content"]
-        prompt = prep_prompt(issue, feature, ((plan or {}).get("doc") or {}).get("content") or "", fc_nightstate.notes_tail(repo), _old_section(content, ident))
+        title, layer, prompt = _subject(repo, ident)
         reply = fc_claude.claude_once(repo, prompt, timeout=1800, model=fc_claude.claude_id(model), tools="Read,Grep,Glob", effort=effort, keep=8000)[1]
         got = parse_reply(reply)
         if got is None:
@@ -268,10 +286,14 @@ def refresh(repo, state, lines, now, out) -> None:
     if not (kinds & set(REFRESH_ON)) and now - (state.get("prep_checked") or 0) < REFRESH_SECONDS:
         return
     state["prep_checked"] = now
+    found = prd_found(state)
     for ident, rec in list(prep.items()):
         if _running(rec, now):
             continue
         try:
+            if ident == fc_prd.PRD_ID:
+                _refresh_prd(repo, prep, rec, found)
+                continue
             issue = _issue(repo, ident)
             gone = ((issue.get("state") or {}).get("name") or "").lower() in GONE
             if not gone and rec.get("layer", "story") == "story":
@@ -287,11 +309,23 @@ def refresh(repo, state, lines, now, out) -> None:
         except ERRORS:
             continue
     try:  # a worker's late write can bring back a section refresh dropped: nothing in state names it, so it goes
-        for ident in dict.fromkeys(re.findall(r"^## ([A-Z][A-Z0-9]*-\d+):", find_doc(repo)["content"], re.M)):
-            if ident not in prep:
+        for ident in dict.fromkeys(re.findall(r"^## (PRD|[A-Z][A-Z0-9]*-\d+):", find_doc(repo)["content"], re.M)):
+            if ident not in prep and (ident != fc_prd.PRD_ID or found is True):  # the PRD's section stays while the PRD is missing
                 write_section(repo, ident, ident, None)
     except ERRORS:
         pass
+
+def prd_found(state):
+    """The factory's last PRD lookup: True, False, or None when it has none (night prep prepares the PRD only on False)."""
+    return (state.get("prd") or {}).get("found") if isinstance(state.get("prd"), dict) else None
+
+def _refresh_prd(repo, prep, rec, found) -> None:
+    """The PRD's prep: dropped with its section once the PRD exists, queued again when the project's tickets changed."""
+    if found is True:
+        write_section(repo, fc_prd.PRD_ID, PRD_TITLE, None)
+        del prep[fc_prd.PRD_ID]
+    elif rec.get("print") is not None and fc_prd.ticket_print(repo) != rec["print"]:
+        rec.update(print=None, gave_up=False, attempts=0)
 
 def _settle(repo, prep, now) -> None:
     """Act on how each finished worker ended, on every tick: a cut prep is queued again at once, a failed one is tried once more
@@ -319,7 +353,14 @@ def prep_idle(repo, state, offer, now, out) -> None:
     if any(_running(r, now) for r in prep.values()) or night.get("wait") or night.get("ended") or night.get("draining") not in (None, "budget"):
         return
     try:
-        for c in candidates(repo, offer["id"], fc_config.FACTORY["prep_ahead"]):
+        if prd_found(state) is False:  # the PRD first: every plan starts from it
+            rec = prep.get(fc_prd.PRD_ID)
+            if not (rec and (rec.get("print") is not None or rec.get("gave_up"))):
+                fingerprint = fc_prd.ticket_print(repo)
+                pid = fc_nightstate.spawn_once(repo, ["factory", "prep", "--repo", str(repo), "--ticket", fc_prd.PRD_ID], "night-prep.log")
+                prep[fc_prd.PRD_ID] = {"pid": pid, "print": fingerprint, "at": now, "layer": "prd", "attempts": (rec or {}).get("attempts", 0)}
+                return
+        for c in candidates(repo, offer["id"], fc_config.FACTORY["prep_ahead"]) if offer else []:
             rec = prep.get(c["id"])
             if rec and (rec.get("print") is not None or rec.get("gave_up")):
                 continue
@@ -333,4 +374,9 @@ def prep_idle(repo, state, offer, now, out) -> None:
     except ERRORS as e:
         fc_factorystate.say_once(state, "prep-error", f'event factory=prep-failed why="{_q(str(e) or type(e).__name__, 120)}"  (night prep skips this turn)', out)
 
+def prep_prd(repo, state, now, out) -> None:
+    """A night turn that waits on the PRD with no delivery plan: prepare the PRD's questions."""
+    prep_idle(repo, state, None, now, out)
+
 fc_factoryturn.IDLE["night"] = prep_idle
+fc_factoryturn.PRD_IDLE["night"] = prep_prd

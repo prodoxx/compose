@@ -16,6 +16,7 @@ quick
 spec-check
 ready
 delivery
+prd
 factory
 readiness
 projects
