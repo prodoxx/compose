@@ -345,7 +345,7 @@ def _settle(repo, prep, now) -> None:
             rec["gave_up"] = True
 
 def prep_idle(repo, state, offer, now, out) -> None:
-    """A night turn with nothing to start: refresh the document, then start one prep worker on the next unprepared ticket."""
+    """A night turn with a ticket to plan, while stories build or not: refresh the document, then start one prep worker on the next unprepared ticket."""
     state.setdefault("said", {})
     refresh(repo, state, [], now, out)
     prep = state.setdefault("prep", {})
