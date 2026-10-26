@@ -1013,7 +1013,8 @@ class ChangeBrief(unittest.TestCase):
         self.assertIn("its `evidence` field", brief)
         self.assertIn("`compose decide --change C1`", brief)
         self.assertIn("struck through, `~~<old line>~~ (C1)`", brief)
-        self.assertIn('"keep it as is" strikes nothing', brief)
+        self.assertIn("an answer that keeps it strikes nothing", brief)
+        self.assertIn("`- C1-1: <question> (replaces <the D id it would replace>) - Recommendation:", " ".join(brief.split()))
         self.assertIn("Do not touch tasks, stories, or the plan", brief)
         self.assertTrue(brief.rstrip().endswith("held: 003, 004"))
 
