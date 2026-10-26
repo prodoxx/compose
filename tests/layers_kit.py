@@ -95,7 +95,7 @@ class LayersBase(unittest.TestCase):
         (self.proj / "verify.json").write_text(json.dumps({"review_base": "main", **cfg}))
         out = []
         with mock.patch.object(fc.fc_core, "say", out.append):
-            self.assertTrue(fc.fc_stack.register_stack(self.repo, self.proj, "compose/p"))
+            self.assertTrue(fc.fc_stack.register_stack(self.repo, self.proj, "compose/p"), out)
         return out
 
     def changed(self, branch, below):

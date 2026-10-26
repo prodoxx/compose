@@ -281,7 +281,30 @@ def review_units(repo, proj, base, trunk, chain, held=()):
         units.append(unit(t, slots.get(2 * i, []) + fc_core.sh(["git", "rev-list", "--reverse", "--no-merges", f"{prev}..{b}"], repo).stdout.split()))
         units += [unit("groundwork", [c], f"groundwork after {t}") for c in slots.get(2 * i + 1, [])]
         prev = b
-    return units
+    return toolchain_first(repo, units, {m["id"] for m in fc_tasks.code_tasks(fc_tasks.load_tasks(proj)) if m.get("kind") == "toolchain"})
+
+def toolchain_first(repo, units, toolchain):
+    """`units` with each `toolchain` task's unit moved to the bottom, below groundwork, so every layer has the tools verify's checks
+    run (a Storybook build, a new lint). It moves only past units that touch none of its files, so the layers still replay the
+    chain; one that cannot stays where it is and says which files hold it."""
+    seen = {}
+    def files(u):
+        for c in u["commits"]:
+            if c not in seen:
+                seen[c] = set(commit_facts(repo, c)[0])
+        return set().union(*(seen[c] for c in u["commits"]))
+    low, rest = [], []
+    for u in units:
+        if u["name"] in toolchain:
+            hit = [x for x in rest if files(x) & files(u)]
+            if not hit:
+                low.append(u)
+                continue
+            shared = sorted(set().union(*(files(x) for x in hit)) & files(u))
+            fc_core.say(f"stack  note  toolchain task {u['name']} stays above {', '.join(dict.fromkeys(x['name'] for x in hit))}: "
+                        f"it changes {', '.join(shared)} too, so a check its tools bring fails below its layer")
+        rest.append(u)
+    return low + rest
 
 def commit_key(repo, c):
     """What names a commit across rebuilds and rebases, which change its hash: its author, author date, and the files it touches."""

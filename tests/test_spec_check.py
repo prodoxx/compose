@@ -213,6 +213,45 @@ class SpecCheck(unittest.TestCase):
                      "Call fc_tasks.load_tasks in bin/fc_tasks.py", "import fc_tasks; fc_tasks.load_tasks"):
             self.assertEqual(miss(body), {"002": {"001": ["bin/fc_tasks.py"]}}, body)
 
+    def test_package_scripts_reads_what_a_check_runs_and_where(self):
+        ps = fc.fc_spec.package_scripts
+        self.assertEqual(ps("bun run build-storybook"), [("package.json", "build-storybook")])
+        self.assertEqual(ps("cd app && . /x/smoke.env && bun --bun run prisma generate && bun run test:storybook"),
+                         [("app/package.json", "prisma"), ("app/package.json", "test:storybook")])
+        self.assertEqual(ps("cd ./web; npm run lint || pnpm run e2e"), [("web/package.json", "lint"), ("web/package.json", "e2e")])
+        for c in ("bun test", "yarn build", "make build", "cd /abs/app && bun run x", "cd .. && bun run x", "bun --cwd app run x", "FOO=1 bun run x"):
+            self.assertEqual(ps(c), [], c)  # nothing it can tell is a script of a package.json it can name
+
+    def test_base_scripts_are_scripts_dependencies_and_installed_bins_at_the_base(self):
+        with tempfile.TemporaryDirectory() as d:
+            git = lambda *a: subprocess.run(["git", "-C", d, *a], check=True, capture_output=True)
+            git("init", "-q"); Path(d, "app").mkdir()
+            Path(d, "app", "package.json").write_text(json.dumps({"scripts": {"build": "vite build"}, "devDependencies": {"prisma": "6"}}))
+            git("add", "."); git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base")
+            Path(d, "app", "package.json").write_text(json.dumps({"scripts": {"build-storybook": "storybook build"}}))  # the worktree is not the base
+            Path(d, "node_modules", ".bin").mkdir(parents=True); Path(d, "node_modules", ".bin", "tsc").write_text("")
+            has = fc.fc_spec.base_scripts(d, "HEAD")
+            self.assertEqual([n for n in ("build", "prisma", "tsc") if not has("app/package.json", n)], [])
+            self.assertFalse(has("app/package.json", "build-storybook"))
+            self.assertFalse(has("web/package.json", "build"))  # no package.json at the base defines nothing
+
+    def test_a_check_running_a_script_the_base_lacks_needs_a_toolchain_task_that_adds_it(self):
+        checks = ["bun run build", "bun run build-storybook"]
+        scripts = lambda pkg, name: name == "build"
+        gaps = lambda issues: fc.fc_spec.spec_check(data(issues), checks, scripts=scripts)[0][3]
+        self.assertEqual(gaps([task("ENG-3", "001")]), ["verify check `bun run build-storybook` runs build-storybook, which package.json does not define "
+                         "on the base, and no task adds it: put it in the `kind: toolchain` task that sets its tool up, or drop the check"])
+        self.assertEqual(gaps([task("ENG-3", "001", files="package.json, bun.lock")]), ["verify check `bun run build-storybook` runs build-storybook, "
+                         "which package.json does not define on the base: make the task of 001 that sets its tool up `kind: toolchain`, so its "
+                         "layer goes below groundwork and every layer can run the check"])
+        self.assertEqual(gaps([task("ENG-3", "001", files="package.json, bun.lock", kind="toolchain")]), [])
+        self.assertEqual(fc.fc_spec.spec_check(data([task("ENG-3", "001")]), checks)[0][3], [])  # no base to read says nothing
+
+    def test_a_toolchain_task_waits_for_nothing(self):
+        out = check([task("ENG-3", "001"), task("ENG-4", "002", ["ENG-3"], kind="toolchain")])
+        self.assertEqual(out["ENG-4"], (False, "task", ["`kind: toolchain` sets up the tools every layer runs, so its layer is the "
+                                                        "bottom one: drop its `after:` (blocked-by 001)"]))
+
     def test_the_base_is_read_from_git_at_the_given_revision(self):
         with tempfile.TemporaryDirectory() as d:
             git = lambda *a: subprocess.run(["git", "-C", d, *a], check=True, capture_output=True)

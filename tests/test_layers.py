@@ -42,6 +42,33 @@ class Layers(LayersBase):
         self.assertEqual(self.git("show", "compose/p-layer-02:shared.test"), "a\n" * 5 + "b\n" * 4 + "b")
         self.assertEqual(self.git("diff", "compose/p-layer-03", "compose/p-003"), "")
 
+    def toolchain(self, tid):
+        tasks = json.loads((self.proj / "results" / "tasks.json").read_text())
+        for t in tasks["tasks"]:
+            t["kind"] = "toolchain" if t["id"] == tid else "code"
+        (self.proj / "results" / "tasks.json").write_text(json.dumps(tasks))
+
+    def test_a_toolchain_task_is_the_bottom_layer_below_groundwork_so_every_layer_has_the_tools_verify_runs(self):
+        """Task 003 sets up a tool (packages, scripts, config) that verify's checks run. Groundwork's layers come below every task's,
+        so a check of that tool would fail on them: the toolchain task leads the chain and its layer goes below groundwork."""
+        self.toolchain("003")
+        out = self.stack()
+        self.assertEqual([l for l in out if "STOP" in l], [])
+        self.assertEqual(self.layers(), ["compose/p-layer-01", "compose/p-layer-02", "compose/p-layer-03"])
+        self.assertEqual(self.changed("compose/p-layer-01", "main"), {"t003.test", "003.src"})
+        self.assertEqual(self.changed("compose/p-layer-02", "compose/p-layer-01"), {"lock.txt", "bun.lock", "setup.txt", "stub.txt"})
+        self.assertEqual(self.changed("compose/p-layer-03", "compose/p-layer-02"), {"t001.test", "001.src", "t002.test", "002.src"})
+        self.assertEqual(self.git("diff", "compose/p-layer-03", "compose/p-002"), "")  # the chain is 003, 001, 002, and the layers add up to it
+
+    def test_a_toolchain_task_that_changes_a_groundwork_file_stays_above_groundwork_and_says_so(self):
+        self.toolchain("003")
+        self.git("checkout", "-q", "compose/p-003"); self.write("stub.txt", "s\n" * 21); self.commit("Stub the story"); self.git("checkout", "-q", "compose/p")
+        out = self.stack()
+        self.assertEqual([l for l in out if "STOP" in l], [])
+        self.assertEqual(self.changed("compose/p-layer-01", "main"), {"lock.txt", "bun.lock", "setup.txt", "stub.txt"})
+        self.assertIn("stack  note  toolchain task 003 stays above groundwork: it changes stub.txt too, so a check its tools bring fails below its layer", out)
+        self.assertEqual(self.git("diff", self.layers()[-1], "compose/p-002"), "")
+
     def test_groundwork_written_after_a_tasks_test_gets_its_own_layer_above_that_task(self):
         """A commit no task owns, on a file a task's test commit touched before it, cannot replay in the bottom groundwork: it is a
         groundwork layer of its own right above that task, never inside the task's layer. A later commit on a file it touched goes

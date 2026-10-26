@@ -1,5 +1,5 @@
 """Shipping a verified stack: check every layer before it is submitted, reword its commits, land it on the base."""
-import hashlib, json, os, subprocess, sys, time
+import hashlib, json, os, re, subprocess, sys, time
 from pathlib import Path
 import fc_core, fc_proc, fc_tasks, fc_worktree, fc_layers, fc_stack, fc_green, fc_gate, fc_jev, fc_verify, fc_update
 
@@ -55,6 +55,14 @@ def against_base(repo, cfg, wt, base, top, failed, ran):
 def ids_text(ids, limit=8):
     return ", ".join(ids[:limit]) + (f" and {len(ids) - limit} more" if len(ids) > limit else "")
 
+MISSING_SCRIPT = re.compile(r'Script not found "([^"]+)"|Missing script:\s*"?([^"\s]+)"?|Command "([^"]+)" not found|'
+                            r"Couldn't find a script named \"([^\"]+)\"")  # bun; npm and pnpm; pnpm and yarn 1; yarn 2+
+
+def missing_script(out):
+    """The package script a check's output says is not defined, else None."""
+    m = MISSING_SCRIPT.search(out or "")
+    return next(g for g in m.groups() if g) if m else None
+
 def layer_refusal(name, c, out, why=""):
     """The reason a layer is refused for the check `c`: `why` says which tests, `out` is the tail of its output."""
     return (f"{name} fails `{c}` on its own tree" + (f" ({why})" if why else "") + (f":\n{out[-800:]}\n" if out.strip() else ". ") +
@@ -66,7 +74,8 @@ def layer_checks(repo, proj, layers, trunk, wt, fresh=False):
     worktree. Each layer runs the tests of the tasks it is the lowest layer for (layer_commands); the top layer also every check, a layer below it only the cheap ones (layer_commands).
     A failing test that fails on the stack's base too, in a test the stack does not touch, was red before this work: it is accepted
     and reported (against_base). One that passes on the base, or that the stack touches, refuses the submit, as does a failure that
-    names no test. The first layer refused is the reason returned, with nothing pushed; "" when every layer passes. A layer that
+    names no test. A check below the top whose package script the layer does not define yet waits for the layer that adds it (a
+    stack that brings in a tool cuts its groundwork below the tool's setup); the top runs every check, so a script no layer adds still refuses. The first layer refused is the reason returned, with nothing pushed; "" when every layer passes. A layer that
     passed once is not run again while its tip and its commands stay the same, and one that leaned on the base also the base and top.
     A command already green on a layer's tree (fc_green: verify, the run or an earlier submit left it) is not run again either, and the
     layer says so; one that goes red is forgotten. `fresh` runs everything."""
@@ -81,7 +90,7 @@ def layer_checks(repo, proj, layers, trunk, wt, fresh=False):
     seen = json.loads(kept.read_text()) if kept.exists() else {}
     top, below = fc_core.sh(["git", "rev-parse", layers[-1]["branch"]], repo).stdout.strip(), fc_stack.layer_base(repo, proj, trunk)
     base = fc_core.sh(["git", "merge-base", below, top], repo, check=False).stdout.strip() or fc_core.sh(["git", "rev-parse", below], repo).stdout.strip()
-    on_base, accepted = {}, 0
+    on_base, accepted, own = {}, 0, set(fc_verify.at_root(checks, roots, wt))
     for i, l in enumerate(layers, 1):
         tip = fc_core.sh(["git", "rev-parse", l["branch"]], repo).stdout.strip()
         name = f"layer {i} of {len(layers)} ({l['branch']})"
@@ -104,6 +113,9 @@ def layer_checks(repo, proj, layers, trunk, wt, fresh=False):
                 ready = True
             state = fc_gate.check_state(checked(name, outs), [c], wt, 0)[c]
             fc_green.record(proj, tree, c, state["exit"])
+            if state["exit"] and i < len(layers) and c in own and (script := missing_script(outs[c])):
+                fc_core.say(f"layers later {name}  `{c}`: this layer does not define the script {script} yet: it waits for the layer that adds it, and the top runs every check")
+                continue
             if state["unknown"]:
                 return layer_refusal(name, c, outs[c], "" if state["exit"] == 124 else "it names no failing test, so it cannot be compared with the base")
             if state["exit"]:

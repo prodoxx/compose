@@ -122,6 +122,23 @@ A code task names the Figma nodes it builds on a `figma_nodes:` line, like `figm
 It writes them into the task's clone as `.figma/<node>.json`, kept out of git, and the implementer may read them.
 A fetch that fails stops the task before its first turn.
 
+## Toolchain tasks
+
+A task that sets up a tool verify's `checks` run (its packages, package scripts and config, like a Storybook build or a new lint) adds `kind: toolchain` to its block and has no `after:`.
+It leads the chain, and its layer goes below groundwork, so every layer of the stack has the tool and runs the check on its own tree.
+A toolchain task that changes a file groundwork changed too stays above groundwork, and the stack says `toolchain task NNN stays above` with the files.
+`spec-check` fails a check that runs a package script the base does not define unless a toolchain task owns that `package.json`, and a toolchain task with an `after:`.
+
+````markdown
+```compose
+id: 001
+kind: toolchain
+files: package.json, bun.lock, .storybook/main.ts
+test: bun run build-storybook
+route: check-only
+```
+````
+
 ## Hand tasks
 
 A change nobody can write a red test for (removing tests, a rename, a config edit) is built by hand on its own branch.

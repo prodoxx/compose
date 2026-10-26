@@ -23,6 +23,19 @@ class LayerChecks(Ship):
         self.assertFalse(self.origin_has("refs/heads/compose/p-layer-01"))
         self.assertFalse((self.proj / "layers.json").exists())
 
+    def test_a_check_whose_script_a_later_layer_adds_waits_for_it_and_the_top_still_runs_every_check(self):
+        missing = """echo 'error: Script not found "build-storybook"'; exit 1"""
+        self.config(checks=[f"test -f 002.src || {{ {missing}; }}"])  # the script arrives with 002.src in layer 2
+        out, code = self.submit()
+        self.assertEqual(code, 0, out)
+        self.assertTrue(any("layers later" in l and "compose/p-layer-01" in l and "build-storybook" in l for l in out), out)
+        self.assertTrue(self.origin_has("refs/heads/compose/p-layer-01"))
+        self.config(checks=[f"test -f nowhere || {{ {missing}; }}"])  # no layer adds it: the top refuses the submit
+        out, code = self.submit()
+        self.assertEqual(code, 1)
+        stop = [l for l in out if "STOP" in l]
+        self.assertIn("layer 3 of 3 (compose/p-layer-03) fails", stop[0])
+
     def test_every_layer_runs_the_checks_once_and_an_unchanged_layer_is_not_run_again(self):
         counter = Path(tempfile.mkdtemp()) / "runs"
         self.config(checks=[f"echo run >> {counter}"])
@@ -118,6 +131,12 @@ class Faked(unittest.TestCase):
 
 
 class FakedLayerChecks(Faked):
+    def test_missing_script_reads_what_bun_npm_pnpm_and_yarn_say(self):
+        for out, script in (('error: Script not found "build-storybook"', "build-storybook"), ('npm error Missing script: "test:storybook"', "test:storybook"),
+                            ("ERR_PNPM_NO_SCRIPT  Missing script: build-storybook", "build-storybook"), ('Command "build-storybook" not found.', "build-storybook"),
+                            ('Usage Error: Couldn\'t find a script named "lint".', "lint"), ("FAIL src/a.test.ts > renders", None), ("", None)):
+            self.assertEqual(fc.fc_ship.missing_script(out), script, out)
+
     def test_a_project_without_checks_says_so_and_checks_nothing(self):
         said = []
         with mock.patch.object(fc.fc_core, "say", said.append):
