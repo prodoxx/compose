@@ -76,10 +76,10 @@ Screen that raised it: {reflect}
    and the code it cites (`trail ask "<question>" --source`).
 2. Write one question per decision line the evidence questions:
    `- {cid}-1: <question> (replaces <the D id it would replace>) - Recommendation: <recommendation> - <the evidence, quoted verbatim, with its source>`,
-   ids {cid}-1, {cid}-2 and on. Keeping the line is always an answer.
+   ids {cid}-1, {cid}-2 and on; never reuse an id. Keeping the line is always an answer.
    `compose report` refuses a question without a recommendation. Never choose for the product owner.
    Text by default; visual only when the choices are pictures, then never asked as text. Visual questions go on one Lavish page, never the architect's earlier page: {page}
-   Build it as the architect does: same reads, forms, accept-all button, and prompts.
+   The page shows pictures only, with no answer controls; answers come through the engineering manager.
 3. Write every question under Not yet specified on the map first, visual ones too; visual ones go on the page as well.
    Then ask once, all open questions in one line: open the page if any
    (`npx -y lavish-axi {page}`), and report, before any poll, one line:
@@ -92,7 +92,7 @@ Screen that raised it: {reflect}
    `npx -y lavish-axi reply {page} --agent-reply "<question ids> received"`; on `browser_disconnected` run
    `npx -y lavish-axi {page}` once for its `url:` and report once `needs-user "reminder: change {cid}: ..."` with it, then poll again.
    Never loop or poll `compose linear` while you wait (shared hourly Linear budget): read the issue once, the herdr prompt brings the answer.
-   Never `end` or `--reopen` a session the product owner ended. Answers arrive in the poll's `text` column, not as a data field.
+   Never `end` or `--reopen` a session the product owner ended.
 5. You never write a Decisions so far line. Answers land through `compose decide --change {cid}`, run by the engineering manager with
    the product owner's words attached: each answer is `--new "<decision>" --closes <id>` and becomes a line
    `D<n>: <decision> (closes <id>) ({cid}; product owner, <date>; said: "<their words>")`. An answer that changes a decision also names it,

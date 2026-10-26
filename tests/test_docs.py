@@ -552,12 +552,29 @@ class LeadRelaysOnce(unittest.TestCase):
         relay = "\n".join(self.relay)
         self.assertRegex(relay, r"engineering manager reads the issue once")
         self.assertIn("asks the product owner those questions one at a time, brainstorming style (0b)", relay)
-        self.assertIn("`compose decisions --project <slug>`", relay)
-        self.assertIn('`compose decide --project <slug> --new "<decision>" --quote "<their words>" --closes <id>`', relay)
+        self.assertIn("`compose decisions --project <slug> --issue <issue>`", relay)
+        self.assertIn('`compose decide --project <slug> --issue <issue> --new "<decision>" --quote "<their words>" --closes <id>`', relay)
         self.assertIn('`--drop <id> --quote "<their words>"`', relay)
         self.assertIn("by question id", relay)
         self.assertNotIn("<card id>", relay)
         self.assertNotRegex(relay, r"\bcards?\b")
+
+    def test_the_relay_names_the_issue_of_the_report(self):
+        relay = "\n".join(self.relay)
+        self.assertIn("`compose decisions --project <slug> --issue <issue>`", relay)
+        self.assertIn('`compose decide --project <slug> --issue <issue> --new "<decision>" --quote "<their words>" --closes <id>`', relay)
+        for line in self.relay:
+            if "compose decisions --project" in line or "--closes <id>" in line:
+                self.assertIn("--issue <issue>", line, line)
+
+    def test_accept_all_strikes_what_a_change_of_course_question_replaces(self):
+        text = "\n".join(self.lines)
+        self.assertIn("A change-of-course question accepted this way strikes the decision it replaces, `~~<old line>~~ (C<n>)`, unless its recommendation keeps it.", text)
+        self.assertIn('The older `"C1-2: B" --change C1` answer to a lettered change question strikes its `Supersedes:` line the same way.', text)
+
+    def test_the_designer_reports_with_the_one_line(self):
+        line = next(l for l in read("sections/0d.md").splitlines() if l.startswith("Every open design decision goes up"))
+        self.assertIn(f"`compose report --project <slug> --as <slug>-designer {self.ONE_LINE}`", line)
 
     def test_an_approval_waits_for_the_open_questions(self):
         relay = "\n".join(self.relay)
@@ -1784,7 +1801,7 @@ class ManagerProseNamesPostures(unittest.TestCase):
         "**Yolo: the engineering manager answers until an explicit off** (`/compose:yolo [--push] [words]`, `compose yolo`).",
         "Yolo follows every Away rule above, with the `yolo:` prefix, the `(yolo recommendation, unconfirmed, <date>)` tag, and `compose yolo` in place of `compose away`; only the exit differs.",
         "Only an explicit off ends it: the message `yolo:off` (or `yolo off`), `/compose:yolo off`, or `compose yolo off --project <slug>`; then run `compose yolo off --project <slug>` (every project of an epic), relay the digest, and ask its \"To confirm\" decisions in one ask.",
-        "Every other message is a steer: act on it at once (a change of plans goes to the team lead; an answer to an open question is recorded with `compose decide --new \"<decision>\" --quote \"<their words>\" --closes <id>`, and a word on a tagged line with its bare id, which rewrites it as theirs; each wakes the team lead), reply with what changed, and yolo stays on; \"To confirm\" waits for the off.",
+        "Every other message is a steer: act on it at once (a change of plans goes to the team lead; an answer to an open question is recorded with `compose decide --issue <issue> --new \"<decision>\" --quote \"<their words>\" --closes <id>`, and a word on a tagged line with its bare id, which rewrites it as theirs; each wakes the team lead), reply with what changed, and yolo stays on; \"To confirm\" waits for the off.",
         "`compose away digest --project <slug>` or `compose yolo digest --project <slug>` prints the digest and leaves the posture on.",
     ]
     NEVER = [
@@ -1801,7 +1818,7 @@ class ManagerProseNamesPostures(unittest.TestCase):
         start, end = self.lines.index(self.AWAY), self.lines.index(self.YOLO[0])
         self.assertLess(self.lines.index(self.BIAS), end)
         away = "\n".join(self.lines[start:end])
-        for want in ["compose away off --project <slug>", "away: <question ids>: accept-all", "compose decide --project <slug> --accept-all",
+        for want in ["compose away off --project <slug>", "away: <question ids>: accept-all", "compose decide --project <slug> --issue <issue> --accept-all",
                      "(away recommendation, unconfirmed, <date>)", "compose away decided --project <slug>",
                      'compose decide --project <slug> "<id>" --quote "<their words>"']:
             self.assertIn(want, away)

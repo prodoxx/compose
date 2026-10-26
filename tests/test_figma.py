@@ -960,6 +960,10 @@ class FigmaConnectorBriefs(unittest.TestCase):
             self.assertIn("one ToolSearch select call", brief)
             self.assertIn("Never use another `plugin:*figma*` server", brief)
 
+    def test_designer_reports_open_questions_through_the_needs_user_gate(self):
+        designer = " ".join(fc.fc_figma.DESIGNER_BRIEF.format(slug="p", wt="/w", feature="ENG-1", figma="AbCd").split())
+        self.assertIn('`compose report --project p --as p-designer needs-user "<issue>: <n> questions <ids>; recommendation <one line>"`', designer)
+
     def test_designer_brief_reads_tokens_through_trail(self):
         designer = " ".join(fc.fc_figma.DESIGNER_BRIEF.format(slug="p", wt="/w", feature="ENG-1", figma="AbCd").split())
         self.assertIn("the repo's tokens through trail (`trail ask \"<question>\" --source`)", designer)

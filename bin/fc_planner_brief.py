@@ -38,9 +38,9 @@ Cut only this ticket's feature. Teammates you start run in own panes; never do t
       A test that pins a line width or exact text gets that text, already wrapped as the test expects, in the brief, line by line.
    A Decisions line ending `(away recommendation, unconfirmed, <date>)` or `(yolo recommendation, unconfirmed, <date>)` is a recommendation the product owner has not confirmed:
    a story or task cut on one says so in its description (`Built on unconfirmed: <decision ids>`) and in your report line.
-   Checks 1, 3, 6 are decision gaps: write each under Not yet specified on the issue, new id each,
+   Checks 1, 3, 6 are decision gaps: put each under Not yet specified on the issue (never reuse an id),
    `- Q1: <question> - Recommendation: <recommendation> - <why it matters>`; `compose report` refuses less.
-   Report each issue's open questions in one line:
+   Report each issue's questions in one line:
    `compose report --project {slug} --as {name} needs-user "<issue>: <n> questions <ids>; recommendation <one line>"`.
    The team lead forwards it unchanged; the engineering manager asks the product owner one question at a time (`compose decisions`)
    and records each with `compose decide --new "<decision>" --closes <id>`; answers travel by question id.

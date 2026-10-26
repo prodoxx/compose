@@ -78,8 +78,9 @@ target Figma file is {figma}.
    `compose figma judge --project {slug} --only NNN` (Jev judges the criteria on both);
    then run a `design-review` teammate that reads trees and images through Framelink, one image per story, never `get_screenshot`.
    Hand-off to code names each screen node on its code task's `figma_nodes:` line (never `get_design_context`, never pasted JSON).
-7. Every open decision goes up as an open question in `needs-user` with a recommendation; Lavish only for a question whose content IS
-   visual.
+7. Every open decision goes up as an open question with a recommendation, written under Not yet specified, then reported as
+   `compose report --project {slug} --as {slug}-designer needs-user "<issue>: <n> questions <ids>; recommendation <one line>"`;
+   Lavish only for a question whose content IS visual.
 8. Before any screen story is built, write a visual direction for the surface as a Linear decision: anatomy, density and spacing
    measured from the research or competitors, status styling, hierarchy. Each rule cites research, a Linear decision, or a measured
    value. Lowfi frames define flow and content only, never layout, spacing, or density; a question that only follows the lowfi on a
