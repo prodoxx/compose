@@ -192,6 +192,11 @@ class SpecCheck(unittest.TestCase):
             self.assertEqual(miss(dict(shrink, files=[owner]), dict(jev, body=body)), {}, body)  # a test file's path does not name its source
         for owner, body in (("app/src/lib/api.ts", "require('./api')"), ("app/package.json", "see app/package.json"), ("app/src/lib/limit-message.ts", "see app/src/lib/limit-message.")):
             self.assertEqual(miss(dict(shrink, files=[owner]), dict(jev, body=body)), {"004": {"001": [owner]}}, body)
+        for owner, body in (("app/src/lib/auth.ts", "see app/src/lib/auth-client.ts"), ("app/.env.example", "set it in app/.env"),
+                            ("app/.env", "copy app/.env.example"), ("app/src/lib/auth.ts", "app/src/lib/auth.ts-old")):
+            self.assertEqual(miss(dict(shrink, files=[owner]), dict(jev, body=body)), {}, body)  # a hyphen goes on the name; a dotfile's suffix is part of it
+        for owner, body in (("app/.env.example", "add it to app/.env.example."), ("app/src/lib/auth.ts", "see app/src/lib/auth - the server half")):
+            self.assertEqual(miss(dict(shrink, files=[owner]), dict(jev, body=body)), {"004": {"001": [owner]}}, body)
         self.assertEqual(miss(dict(shrink, files=["app/package-lock.json"]), dict(jev, body="app/package-lock.json")), {})  # generated
         self.assertEqual(miss(dict(shrink, kind="design"), jev), {})  # a design task builds a page, not code
         self.assertEqual(fc.fc_spec.missing_after_text(miss(shrink, jev)), ["004 names bin/fc_shrink.py, which 001 owns: add `after: 001`"])
