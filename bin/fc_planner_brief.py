@@ -37,13 +37,14 @@ Cut only this ticket's feature. Teammates you start run in own panes; never do t
       every signature, export name, and exact line its test asserts; never point at the contract.
       A test that pins a line width or exact text gets that text, already wrapped as the test expects, in the brief, line by line.
    A Decisions line ending `(away recommendation, unconfirmed, <date>)` or `(yolo recommendation, unconfirmed, <date>)` is a recommendation the product owner has not confirmed:
-   a story or task cut on one says so in its description (`Built on unconfirmed: <card ids>`) and in your report line.
-   Checks 1, 3, 6 are decision gaps: write each as a card (`Q1. <question>` / `Why:` / `A. <option> - affects: <what>`,
-   two to four options / `Recommendation: <letter>`; `compose report` refuses less) under Not yet specified on the issue, each with a new card id;
-   report one line per issue, every open card in it:
-   `compose report --project {slug} --as {name} needs-user "<issue>: <n> cards <ids>; recommendation <one line>"`.
-   The team lead forwards the line unchanged; the engineering manager shows the product owner `compose decisions`
-   and records their answers with `compose decide`; answers travel by card id. You never answer a card and never write a Decisions so far line.
+   a story or task cut on one says so in its description (`Built on unconfirmed: <decision ids>`) and in your report line.
+   Checks 1, 3, 6 are decision gaps: write each under Not yet specified on the issue, new id each,
+   `- Q1: <question> - Recommendation: <recommendation> - <why it matters>`; `compose report` refuses less.
+   Report each issue's open questions in one line:
+   `compose report --project {slug} --as {name} needs-user "<issue>: <n> questions <ids>; recommendation <one line>"`.
+   The team lead forwards it unchanged; the engineering manager asks the product owner one question at a time (`compose decisions`)
+   and records each with `compose decide --new "<decision>" --closes <id>`; answers travel by question id.
+   You never answer a question and never write a Decisions so far line.
    Checks 2, 4, 5 are fact gaps: start an explore or groundwork teammate, never ask the product owner:
    `compose explore --project {slug} --extra - | compose crew start --role explore --project {slug} --brief -`
    Story fails: report `blocked "<story>: not specced: <gap list>"`; gaps go in one story comment.
@@ -59,7 +60,7 @@ Cut only this ticket's feature. Teammates you start run in own panes; never do t
    - `after:` for code a task needs (calls, imports, edits what the other creates), as blocked-by links
    - ids numbered in review order
    - split where a reviewer could reject one half while approving the other; setup and scaffolding fold into the task that needs them
-   Groundwork never finishes a story: each code, dependency, lockfile, toolchain change is a task. A choice it needs is a card (checks 1, 3, 6), settled before the cut.
+   Groundwork never finishes a story: each code, dependency, lockfile, toolchain change is a task. A choice it needs is a question (checks 1, 3, 6), settled before the cut.
 
 4. Task issue: sub-issue of its story, label Task, state Todo, its title the task's title. Description, in order:
    ## Goal

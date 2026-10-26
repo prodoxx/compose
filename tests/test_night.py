@@ -294,7 +294,7 @@ class Answerer(unittest.TestCase):
 
     def test_planning_questions_wait_for_the_morning_and_the_rest_get_one_answerer_each(self):
         self.report("needs-user", "shape NEB-12: no design yet", "2026-10-27 01:00:00")
-        self.report("needs-user", "NEB-10: 2 cards Q1,Q2; recommendation Q1 A, Q2 B", "2026-10-27 01:05:00")
+        self.report("needs-user", "NEB-10: 2 questions Q1,Q2; recommendation Q1 Clerk, Q2 SQLite", "2026-10-27 01:05:00")
         lines = fa.answer_step(self.repo, self.state, 100.0)
         self.assertEqual(lines, ['event factory=for-morning project=sign-in question="shape NEB-12: no design yet"  '
                                  "(planning waits for the product owner: it is listed under Ready to plan)"])
@@ -313,23 +313,25 @@ class Answerer(unittest.TestCase):
         self.assertEqual(self.spawn.call_count, 3)
         self.assertNotIn("answer-failed", "".join(fa.answer_step(self.repo, self.state, 260.0)))
 
-    def test_the_worker_records_cards_through_decide_and_the_rest_through_the_team_lead(self):
-        self.report("needs-user", "NEB-10: 1 card Q1; recommendation A", "2026-10-27 01:05:00")
-        self.claude.return_value = (None, '{"never_set": false, "answer": "Q1 A", "reasoning": "D2 says one store", "cards": {"Q1": "A"}}', 3, {})
+    def test_the_worker_records_question_answers_through_decide_and_the_rest_through_the_team_lead(self):
+        self.report("needs-user", "NEB-10: 1 question Q1; recommendation Clerk", "2026-10-27 01:05:00")
+        self.claude.return_value = (None, '{"never_set": false, "answer": "Q1 Clerk", "reasoning": "D2 says one store", "answers": {"Q1": "Sign in with Clerk"}}', 3, {})
         fa.run_answer(self.repo, "sign-in", "2026-10-27 01:05:00")
-        self.assertEqual(self.cli.call_args_list[-1].args[0], ["decide", "--repo", str(self.repo), "--project", "sign-in", "Q1: A"])
+        self.assertEqual(self.cli.call_args_list[-1].args[0], ["decide", "--repo", str(self.repo), "--project", "sign-in", "--new", "Sign in with Clerk", "--closes", "Q1"])
+        self.assertIn('"answers": {"<question id>": "<the decision, as a sentence>"}', fa.ASK)
+        self.assertNotIn("card", fa.ASK)
         comment = next(c for c in self.cli.call_args_list if c.args[0][:2] == ["linear", "comment"])
         self.assertEqual(comment.args[0][2], "NEB-10"); self.assertIn("Answered while you were away", comment.kwargs["stdin"])
         self.prompt.assert_not_called()
-        self.assertEqual(json.loads(fa.answers_path(self.repo).read_text().splitlines()[-1])["answer"], "Q1 A")
+        self.assertEqual(json.loads(fa.answers_path(self.repo).read_text().splitlines()[-1])["answer"], "Q1 Clerk")
         self.assertEqual(self.claude.call_args.kwargs["tools"], "Read,Grep,Glob"); self.assertEqual(self.claude.call_args.kwargs["effort"], "high")
-        self.claude.return_value = (None, '{"never_set": false, "answer": "keep 30 day sessions", "reasoning": "r", "cards": {}}', 3, {})
+        self.claude.return_value = (None, '{"never_set": false, "answer": "keep 30 day sessions", "reasoning": "r", "answers": {}}', 3, {})
         fa.run_answer(self.repo, "sign-in", "2026-10-27 01:05:00")
         self.prompt.assert_called_once_with("sign-in-orchestrator", "night: keep 30 day sessions")
 
     def test_a_never_set_question_is_never_answered(self):
         self.report("needs-user", "NEB-10: force-push the rebased branch?", "2026-10-27 01:05:00")
-        self.claude.return_value = (None, '{"never_set": true, "why_wait": "force-push", "answer": "", "reasoning": "", "cards": {}}', 1, {})
+        self.claude.return_value = (None, '{"never_set": true, "why_wait": "force-push", "answer": "", "reasoning": "", "answers": {}}', 1, {})
         rec = fa.run_answer(self.repo, "sign-in", "2026-10-27 01:05:00")
         self.assertTrue(rec["never_set"]); self.prompt.assert_not_called()
         self.assertFalse(any(c.args[0][0] == "decide" for c in self.cli.call_args_list))
@@ -343,7 +345,7 @@ class Answerer(unittest.TestCase):
             def reply(*args, change=change, **kw):
                 with st.edit(self.repo) as s:
                     change(s)
-                return (None, '{"never_set": false, "answer": "30 days", "reasoning": "r", "cards": {"Q1": "A"}}', 3, {})
+                return (None, '{"never_set": false, "answer": "30 days", "reasoning": "r", "answers": {"Q1": "Clerk"}}', 3, {})
             self.claude.side_effect = reply
             rec = fa.run_answer(self.repo, "sign-in", "2026-10-27 01:05:00")
             self.assertEqual(rec["error"], "the night ended before the answer")
@@ -368,7 +370,7 @@ class Answerer(unittest.TestCase):
         self.prompt.assert_not_called()
 
     def reply(self, **kw):
-        self.claude.return_value = (None, json.dumps({"never_set": False, "answer": "a", "reasoning": "r", "cards": {}, **kw}), 1, {})
+        self.claude.return_value = (None, json.dumps({"never_set": False, "answer": "a", "reasoning": "r", "answers": {}, **kw}), 1, {})
 
     def test_any_never_set_object_in_the_reply_wins_over_an_example(self):
         self.report("needs-user", "NEB-10: q", "2026-10-27 01:05:00")
@@ -380,7 +382,7 @@ class Answerer(unittest.TestCase):
 
     def test_a_failed_decide_after_the_comment_is_recorded_as_partial(self):
         self.report("needs-user", "NEB-10: Q1 here", "2026-10-27 01:05:00")
-        self.reply(cards={"Q1": "A"})
+        self.reply(answers={"Q1": "Clerk"})
         self.cli.side_effect = lambda args, stdin=None, pane=None: (_ for _ in ()).throw(RuntimeError("boom")) if args[0] == "decide" else ""
         rec = fa.run_answer(self.repo, "sign-in", "2026-10-27 01:05:00")
         self.assertEqual((rec["commented"], rec["acted"]), (True, False))
@@ -414,23 +416,30 @@ class Answerer(unittest.TestCase):
         self.assertTrue(rec["never_set"]); self.assertIn("force-push", rec["why_wait"]); self.prompt.assert_not_called()
         self.assertFalse(any(c.args[0][:2] == ["linear", "comment"] for c in self.cli.call_args_list))
 
-    def test_card_ids_must_be_cards_of_the_question(self):
-        self.report("needs-user", "NEB-10: 1 card Q1", "2026-10-27 01:05:00")
-        self.reply(answer="", cards={"D2": "x", "Q9": "B"})
+    def test_answered_ids_must_be_questions_of_the_report(self):
+        self.report("needs-user", "NEB-10: 1 question Q1", "2026-10-27 01:05:00")
+        self.reply(answer="", answers={"D2": "x", "Q9": "B"})
         self.assertTrue(fa.run_answer(self.repo, "sign-in", "2026-10-27 01:05:00")["error"])
-        self.reply(cards={"D2": "x", "Q1": "A"})
-        self.assertEqual(fa.run_answer(self.repo, "sign-in", "2026-10-27 01:05:00")["cards"], {"Q1": "A"})
+        self.reply(answers={"D2": "x", "Q1": "Clerk"})
+        self.assertEqual(fa.run_answer(self.repo, "sign-in", "2026-10-27 01:05:00")["answers"], {"Q1": "Clerk"})
+
+    def test_each_answer_is_its_own_decide_and_blank_answers_are_dropped(self):
+        self.report("needs-user", "NEB-10: 2 questions Q1, Q2; recommendation Clerk, SQLite", "2026-10-27 01:05:00")
+        self.reply(answers={"Q1": "Sign in with Clerk", "Q2": "  "})
+        fa.run_answer(self.repo, "sign-in", "2026-10-27 01:05:00")
+        decides = [c.args[0] for c in self.cli.call_args_list if c.args[0][0] == "decide"]
+        self.assertEqual(decides, [["decide", "--repo", str(self.repo), "--project", "sign-in", "--new", "Sign in with Clerk", "--closes", "Q1"]])
 
     def test_a_torn_status_file_does_not_stop_the_step(self):
         (self.proj / "results" / "crew" / "sign-in-orchestrator.status").write_text("{torn\n")
         self.assertEqual(fa.new_questions(self.repo, self.state["night"]), [])
 
-    def test_d_ids_are_never_cards(self):
-        self.report("needs-user", "NEB-10: should D2 change? cards Q1", "2026-10-27 01:05:00")
-        self.reply(cards={"D2": "x", "Q1": "A"})
+    def test_d_ids_are_never_questions(self):
+        self.report("needs-user", "NEB-10: should D2 change? questions Q1", "2026-10-27 01:05:00")
+        self.reply(answers={"D2": "x", "Q1": "Clerk"})
         fa.run_answer(self.repo, "sign-in", "2026-10-27 01:05:00")
         decides = [c.args[0] for c in self.cli.call_args_list if c.args[0][0] == "decide"]
-        self.assertEqual(decides, [["decide", "--repo", str(self.repo), "--project", "sign-in", "Q1: A"]])
+        self.assertEqual(decides, [["decide", "--repo", str(self.repo), "--project", "sign-in", "--new", "Clerk", "--closes", "Q1"]])
 
     def test_in_flight_repeats_are_silent_and_answered_repeats_go_to_the_morning_once(self):
         self.report("needs-user", "NEB-10: same", "2026-10-27 01:00:00")
@@ -449,9 +458,9 @@ class Answerer(unittest.TestCase):
         for text in ("should I force-push the rebased branch?", "add a new API key for Stripe?", "switch the model to opus?"):
             self.assertTrue(fa.never_hits(text), text)
 
-    def test_the_guard_reads_card_values_and_reasoning(self):
-        self.report("needs-user", "NEB-10: 1 card Q1", "2026-10-27 01:05:00")
-        self.reply(answer="", cards={"Q1": "B. purchase the Pro plan"})
+    def test_the_guard_reads_answer_values_and_reasoning(self):
+        self.report("needs-user", "NEB-10: 1 question Q1", "2026-10-27 01:05:00")
+        self.reply(answer="", answers={"Q1": "purchase the Pro plan"})
         self.assertTrue(fa.run_answer(self.repo, "sign-in", "2026-10-27 01:05:00")["never_set"])
         self.assertFalse(any(c.args[0][0] == "decide" for c in self.cli.call_args_list))
         self.reply(reasoning="we must wipe the database first")
@@ -846,7 +855,7 @@ class Digest(unittest.TestCase):
             fp._outcome(self.repo, ident, status)
 
     def answer(self, at=None, **kw):
-        rec = {"key": "k", "project": "sign-in", "issue": "NEB-10", "question": "q", "answer": "a", "reasoning": "", "cards": [], "never_set": False,
+        rec = {"key": "k", "project": "sign-in", "issue": "NEB-10", "question": "q", "answer": "a", "reasoning": "", "answers": {}, "never_set": False,
                "why_wait": "", "model": "m", "at": at or time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self.since + 60)), "error": "",
                "commented": False, "acted": False, **kw}
         path = fa.answers_path(self.repo)

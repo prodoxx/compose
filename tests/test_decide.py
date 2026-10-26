@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import contextlib, importlib.machinery, importlib.util, io, json, os, sys, tempfile, time, unittest
+import contextlib, importlib.machinery, importlib.util, io, json, os, subprocess, sys, tempfile, time, unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -404,6 +404,27 @@ class Decide(unittest.TestCase):
         self.assertEqual((self.linear.writes, self.linear.body), ([], before))
     def test_yolo_tag_is_the_shared_one(self):
         self.assertIs(fc.fc_yolo.YOLO_TAG, fc.fc_decide.UNCONFIRMED)
+
+
+class Flags(unittest.TestCase):
+    """compose decide takes --closes and --drop, each repeatable, and its help speaks of questions."""
+
+    def help(self, *args):
+        out = subprocess.run([sys.executable, str(Path(fc.__file__)), *args, "--help"], capture_output=True, text=True, env={**os.environ, "COLUMNS": "400"})
+        return out.stdout
+
+    def test_decide_parses_closes_and_drop(self):
+        text = self.help("decide")
+        for flag in ("--closes", "--drop", "--new", "--replaces", "--accept-all"):
+            self.assertIn(flag, text)
+        self.assertNotIn("card", text)
+
+    def test_the_top_help_names_questions_not_cards(self):
+        self.assertNotIn("card", self.help("decisions"))
+        rows = [line for line in self.help().splitlines() if line.strip().startswith(("decide ", "decisions "))]
+        self.assertEqual(len(rows), 2)
+        for line in rows:
+            self.assertNotIn("card", line)
 
 
 if __name__ == "__main__":

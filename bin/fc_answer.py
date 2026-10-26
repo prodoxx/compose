@@ -18,7 +18,8 @@ NEVER_WORDS = re.compile("|".join((
 ASK = ("Answer this question the team lead raised while building an approved ticket, as the product owner would from what is written here; "
        "read the code you need. If answering needs anything in the never-set above, or needs the product owner to plan something new, "
        'set never_set and answer nothing. Reply with only JSON: {"never_set": bool, "why_wait": str, "answer": str, "reasoning": str, '
-       '"cards": {"<card id>": "<option>"}}.')
+       '"answers": {"<question id>": "<the decision, as a sentence>"}}; answers holds one entry per question id the team lead named, '
+       "each recorded as a decision that closes that question.")
 
 def answers_path(repo) -> Path:
     return fc_core.repo_link(repo).with_name("night-answers.jsonl")
@@ -148,7 +149,7 @@ def run_answer(repo, slug, at, nth=0) -> dict:
     if q is None:
         raise RuntimeError(f"no report of {slug} at {at} (#{nth})")
     model, effort = fc_config.NIGHT_MODEL
-    rec = {"key": q["key"], "project": slug, "issue": q["issue"], "question": q["message"], "answer": "", "reasoning": "", "cards": {},
+    rec = {"key": q["key"], "project": slug, "issue": q["issue"], "question": q["message"], "answer": "", "reasoning": "", "answers": {},
            "never_set": False, "why_wait": "", "model": model, "at": time.strftime("%Y-%m-%d %H:%M:%S"), "error": "", "commented": False, "acted": False}
     try:
         try:
@@ -163,23 +164,24 @@ def run_answer(repo, slug, at, nth=0) -> dict:
             raise ValueError("no verdict with answer and never_set in the reply")
         rec.update(never_set=bool(got.get("never_set")), why_wait=str(got.get("why_wait") or ""), answer=str(got.get("answer") or ""),
                    reasoning=str(got.get("reasoning") or ""))
-        cards = got.get("cards") if isinstance(got.get("cards"), dict) else {}
-        rec["cards"] = {str(k): str(v) for k, v in cards.items()
-                        if re.fullmatch(fc_ask.CARD_ID, str(k)) and not re.fullmatch(r"D\d+", str(k)) and re.search(rf"(?<![\w-]){re.escape(str(k))}(?![\w-])", q["message"])}
-        hits = never_hits(q["message"], rec["answer"], rec["reasoning"], *rec["cards"].values())
+        answers = got.get("answers") if isinstance(got.get("answers"), dict) else {}
+        rec["answers"] = {str(k): str(v).strip() for k, v in answers.items() if str(v).strip()
+                          and re.fullmatch(fc_ask.CARD_ID, str(k)) and not re.fullmatch(r"D\d+", str(k)) and re.search(rf"(?<![\w-]){re.escape(str(k))}(?![\w-])", q["message"])}
+        hits = never_hits(q["message"], rec["answer"], rec["reasoning"], *rec["answers"].values())
         if hits and not rec["never_set"]:
             rec.update(never_set=True, why_wait=f"mentions {', '.join(hits)}")
-        if not rec["never_set"] and not rec["cards"] and not rec["answer"].strip():
-            raise ValueError("the reply has no answer and no card of this question")
+        if not rec["never_set"] and not rec["answers"] and not rec["answer"].strip():
+            raise ValueError("the reply has no answer and no decision for a question of this report")
         if rec["never_set"]:
-            rec.update(answer="", cards={})
+            rec.update(answer="", answers={})
         else:
             if not fc_nightstate.still_on(repo, since):
                 raise RuntimeError("the night ended before the answer")
             fc_factoryturn.compose_cli(["linear", "comment", q["issue"], "--repo", str(repo)], stdin=comment_body(q, rec, model, time.strftime("%Y-%m-%d")))
             rec["commented"] = True
-            if rec["cards"]:
-                fc_factoryturn.compose_cli(["decide", "--repo", str(repo), "--project", slug, *(f"{c}: {o}" for c, o in rec["cards"].items())])
+            if rec["answers"]:
+                for qid, text in rec["answers"].items():  # one decide per question: --closes takes exactly one --new
+                    fc_factoryturn.compose_cli(["decide", "--repo", str(repo), "--project", slug, "--new", text, "--closes", qid])
             elif not fc_factoryturn.prompt_lead(fc_herdr.agent_name(slug, "orchestrator"), f"night: {rec['answer']}"):
                 raise RuntimeError("the team lead did not take the answer")
             rec["acted"] = True

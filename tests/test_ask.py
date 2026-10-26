@@ -241,7 +241,7 @@ class Briefs(unittest.TestCase):
     def test_the_change_brief_carries_the_ask_rules(self):
         brief = fc.fc_briefs.CHANGE_BRIEF
         flat = " ".join(brief.split())
-        for want in ("visual cards open in Lavish: <url>", "`url:`", "--takeover", "180000 ms", "lavish-axi reply {page} --agent-reply",
+        for want in ("visual questions open in Lavish: <url>", "`url:`", "--takeover", "180000 ms", "lavish-axi reply {page} --agent-reply",
                      "`browser_disconnected`", "reminder:", "`yolo:`", "(yolo recommendation, unconfirmed, <date>)"):
             self.assertIn(want, flat)
         self.assertNotIn("\u2014", brief)
@@ -262,7 +262,7 @@ class BriefsNameBothPostures(unittest.TestCase):
 
     def test_planner_sentence_still_leads_into_the_built_on_rule(self):
         flat = self.flat("PLANNER_BRIEF")
-        self.assertLess(flat.index(self.PLANNER), flat.index("Built on unconfirmed: <card ids>"))
+        self.assertLess(flat.index(self.PLANNER), flat.index("Built on unconfirmed: <decision ids>"))
 
     def test_no_brief_writes_decisions_by_hand(self):
         for name in ("PLANNER_BRIEF", "CHANGE_BRIEF"):
@@ -271,8 +271,19 @@ class BriefsNameBothPostures(unittest.TestCase):
             self.assertIn("never write a Decisions so far line" if name == "PLANNER_BRIEF" else "You never write a Decisions so far line", flat, name)
             self.assertIn("compose decisions", flat, name)
         self.assertIn("`compose decide --change {cid}`", self.flat("CHANGE_BRIEF"))
-        self.assertIn("`Supersedes: <the line as recorded>`", self.flat("CHANGE_BRIEF"))
         self.assertIn("`compose report` refuses", self.flat("PLANNER_BRIEF"))
+
+    def test_each_brief_writes_one_line_questions_without_options(self):
+        line = "- Q1: <question> - Recommendation: <recommendation> - <why it matters>"
+        self.assertIn(f"`{line}`", self.flat("PLANNER_BRIEF"))
+        self.assertIn("`- {cid}-1: <question> (replaces <the D id it would replace>) - Recommendation: <recommendation> - <the evidence, quoted verbatim, with its source>`",
+                      self.flat("CHANGE_BRIEF"))
+        for name in ("PLANNER_BRIEF", "CHANGE_BRIEF"):
+            flat = self.flat(name)
+            for gone in ("affects:", "Recommendation: <letter>", "card", "Supersedes:"):
+                self.assertNotIn(gone, flat, name)
+            self.assertIn("--closes", flat, name)
+            self.assertIn("one question at a time", flat, name)
 
     def test_no_brief_keeps_a_yolo_only_rule_or_an_em_dash(self):
         for name in ("PLANNER_BRIEF", "CHANGE_BRIEF"):

@@ -7,7 +7,7 @@ limit_value
 figma_caps
 caps_line
 caps_blockers
-BLOCKED_CARD
+BLOCKED_QUESTION
 design_pages
 count_pages
 PROBE_SCRIPT

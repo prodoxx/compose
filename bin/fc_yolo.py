@@ -87,8 +87,8 @@ def cmd_yolo(a):
         y["decisions"].append({"ts": time.strftime("%Y-%m-%d %H:%M:%S"), "text": " ".join(words[1:])})
         fc_core.atomic_write(path, json.dumps(y, indent=2))
         print(f"logged for the product owner's return: {' '.join(words[1:])}")
-        print(f"a card answer goes on the map with `compose decide --project {proj.name} \"<card id>: <answer>\"` (no --quote under {P}): it writes "
-              f"the line \"<card id>: <answer> {YOLO_TAG.format(mode=P, date=time.strftime('%Y-%m-%d'))}\" and logs it here, never as the product owner's")
+        print(f"an answer to an open question goes on the map with `compose decide --project {proj.name} --new \"<decision>\" --closes <id>` (no --quote under {P}): "
+              f"it writes the line \"D<n>: <decision> (closes <id>) {YOLO_TAG.format(mode=P, date=time.strftime('%Y-%m-%d'))}\" and logs it here, never as the product owner's")
         return
     # A shell variable holding a whole command reaches here as one word (zsh never splits an unquoted one): refuse it, never store it.
     if any(w.startswith(("--repo", "--project")) for w in words) or " decided " in f" {' '.join(words)} ":

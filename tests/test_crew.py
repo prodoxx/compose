@@ -1283,8 +1283,8 @@ class PiStart(unittest.TestCase):
         self.assertNotIn("builtin:mcp", fc.fc_models.probe_command("pi:x/y"))  # the implementer probe is unchanged
 
 
-class CardsById(unittest.TestCase):
-    """Briefs write cards to the map and report one needs-user line; answers travel by card id."""
+class QuestionsById(unittest.TestCase):
+    """Briefs write open questions to the map and report one needs-user line; answers travel by question id."""
 
     def flat(self, text, start, end):
         text = " ".join(text.split())
@@ -1299,24 +1299,24 @@ class CardsById(unittest.TestCase):
     def test_the_change_architect_waits_without_polling_linear(self):
         self.assertIn("Never loop or poll `compose linear` while you wait", self.flat(fc.fc_briefs.CHANGE_BRIEF, " 4. ", " 5. "))
 
-    def test_the_change_architects_step_3_writes_cards_then_reports_one_line(self):
+    def test_the_change_architects_step_3_writes_questions_then_reports_one_line(self):
         step = self.flat(fc.fc_briefs.CHANGE_BRIEF, " 3. ", " 4. ")
-        self.assertNotIn("the text cards in full", step)
-        self.assertIn("Not yet specified", step)  # cards land on the map first ...
+        self.assertNotIn("in full", step.split("needs-user", 1)[0])
+        self.assertIn("Not yet specified", step)  # questions land on the map first ...
         self.assertLess(step.index("Not yet specified"), step.index("needs-user"))  # ... before the report
         for line in self.needs_user(step):
-            self.assertIn("cards", line)
+            self.assertIn("questions", line)
             self.assertIn("recommendation", line)
             self.assertNotIn("in full", line)
         self.assertTrue(self.needs_user(self.flat(fc.fc_briefs.CHANGE_BRIEF, " 3. ", " 4. "))[0].startswith("change {cid}: "))
 
-    def test_planner_decision_cards_and_story_proposal_report_one_line(self):
+    def test_planner_decision_questions_and_story_proposal_report_one_line(self):
         self.assertNotIn("<the cards in full>", fc_planner_brief.PLANNER_BRIEF)
         self.assertNotIn("one needs-user list", " ".join(fc_planner_brief.PLANNER_BRIEF.split()))
-        cards = self.flat(fc_planner_brief.PLANNER_BRIEF, "Checks 1, 3, 6", "Checks 2, 4, 5")
-        self.assertIn("Not yet specified", cards)
-        for line in self.needs_user(cards):
-            self.assertIn("cards", line)
+        gaps = self.flat(fc_planner_brief.PLANNER_BRIEF, "Checks 1, 3, 6", "Checks 2, 4, 5")
+        self.assertIn("Not yet specified", gaps)
+        for line in self.needs_user(gaps):
+            self.assertIn("questions", line)
             self.assertIn("recommendation", line)
         stories = self.flat(fc_planner_brief.PLANNER_BRIEF, "Stories missing", "Then check and cut each story")
         self.assertIn("drafted on the issue", stories)  # stories are drafted on the issue ...
@@ -1329,11 +1329,11 @@ class CardsById(unittest.TestCase):
         self.assertIn("width-pinned or exact text the test asserts, verbatim", cut)
         self.assertIn("pins a line width or exact text, the brief holds that text verbatim", (Path(__file__).resolve().parents[1] / "sections" / "2.md").read_text())
 
-    def test_answers_travel_by_card_id_and_the_line_is_forwarded_unchanged(self):
+    def test_answers_travel_by_question_id_and_the_line_is_forwarded_unchanged(self):
         for name in ("CHANGE_BRIEF", "PLANNER_BRIEF"):
             with self.subTest(name):
                 text = " ".join(getattr(fc_planner_brief if name == "PLANNER_BRIEF" else fc.fc_briefs, name).split())
-                self.assertIn("card id", text)
+                self.assertIn("question id", text)
                 self.assertIn("unchanged", text)
 
     def test_placeholders_and_the_rest_of_the_template_stay(self):
@@ -1344,7 +1344,7 @@ class CardsById(unittest.TestCase):
             with self.subTest(name):
                 text = getattr(fc_planner_brief if name == "PLANNER_BRIEF" else fc.fc_briefs, name)
                 self.assertEqual({f for _, f, _, _ in string.Formatter().parse(text) if f}, want)  # no stray {n} or {ids}
-        self.assertIn("npx -y lavish-axi poll {page}", fc.fc_briefs.CHANGE_BRIEF)  # visual cards still go through the Lavish page
+        self.assertIn("npx -y lavish-axi poll {page}", fc.fc_briefs.CHANGE_BRIEF)  # visual questions still go through the Lavish page
 
 
 LINEAR_TEXT_LINE = "Linear text: concise, readable English. Lead with the action, one idea per line, no preamble or recap."
@@ -1593,9 +1593,9 @@ class RefusedReports(unittest.TestCase):
         self.assertEqual(fc.fc_watch.watch_filter(ev, "shop", []), ev)  # the team lead's watch gets it
         self.assertEqual(fc.fc_watch.watch_events(snap(self.proj), snap(self.proj)), [])
 
-    def test_a_card_asked_twice_is_refused_with_the_gate_reason(self):
-        self.assertIsNone(self.report("shop-q-neb-1", "needs-user", "NEB-1: 2 cards Q1-Q2 on the map; recommendation A, B"))
-        self.assertIsNone(self.report("shop-q-neb-1", "needs-user", "NEB-1: 2 cards Q1-Q2 on the map; recommendation A, B"))
+    def test_a_question_asked_twice_is_refused_with_the_gate_reason(self):
+        self.assertIsNone(self.report("shop-q-neb-1", "needs-user", "NEB-1: 2 questions Q1-Q2 on the map; recommendation Clerk, SQLite"))
+        self.assertIsNone(self.report("shop-q-neb-1", "needs-user", "NEB-1: 2 questions Q1-Q2 on the map; recommendation Clerk, SQLite"))
         refusals = fc.fc_reports.crew_refusals(self.proj, "shop-q-neb-1")
         self.assertEqual(len(refusals), 1)
         self.assertIn("already asked", refusals[0]["why"])

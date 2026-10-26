@@ -370,8 +370,8 @@ class SectionRewrite(unittest.TestCase):
 
     def test_change_brief_keeps_its_strike_through_format(self):
         change = " ".join(fc.fc_briefs.CHANGE_BRIEF.split())
-        for s in ("`compose decide --change {cid}`", "`<card id>: <answer> ({cid}; product owner, <date>; said: \"<their words>\")`",
-                  "struck through, `~~<old line>~~ ({cid})`", '"keep it as is" strikes nothing'):
+        for s in ("`compose decide --change {cid}`", "`D<n>: <decision> (closes <id>) ({cid}; product owner, <date>; said: \"<their words>\")`",
+                  "`--replaces <D id>`", "struck through, `~~<old line>~~ ({cid})`", "an answer that keeps it strikes nothing"):
             self.assertIn(s, change)
 
     def test_explore_brief_reads_then_rewrites_notes_with_the_codebase_brief(self):
