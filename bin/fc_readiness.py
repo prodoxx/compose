@@ -13,7 +13,8 @@ class NotAStory(Exception):
 
 
 READINESS_TREE = """query($id: String!) { issue(id: $id) { id identifier title description state { name } labels { nodes { name } }
-  children { nodes { state { name type } description } }
+  children { nodes { identifier state { name type } description
+    inverseRelations(first: 50) { nodes { type issue { identifier state { name } labels { nodes { name } } parent { identifier } } } } } }
   inverseRelations(first: 250) { nodes { type issue { identifier state { name } labels { nodes { name } } } } }
   project { documents(first: 250) { nodes { title content url } } }
   parent { id identifier title description labels { nodes { name } }
@@ -226,6 +227,7 @@ def story_readiness(repo, story, refresh=False, write=True):
         return out
     holds = [r["issue"]["identifier"] for r in node["inverseRelations"]["nodes"]
              if r["type"] == "blocks" and not fc_tasks.blocker_finished(r["issue"]["state"]["name"], [l["name"] for l in r["issue"]["labels"]["nodes"]])]
+    holds += [h for h in fc_linear.task_holds(node) if h not in holds]  # its tasks waiting on another story's hold it too
     if fc_linear.NEEDS_SHAPING in _labels(node):  # its design waits on the product owner in 0b: no judge spent and nothing written
         return {**out, "specced": False, "unblocked": not holds, "blocked_by": holds, "needs_shaping": True}
     out.update(unblocked=bool(fc_linear.ready_ids([node])), blocked_by=holds)
