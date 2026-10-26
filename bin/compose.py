@@ -163,7 +163,7 @@ def main():
             s.add_argument("target", nargs="*")
             for flag in ("--body", "--comments", "--json", "--append", "--description", "--any-project", "--fresh"):
                 s.add_argument(flag, action="store_true")
-            for flag in ("--label", "--add-label", "--drop-label"):
+            for flag in ("--label", "--add-label", "--drop-label", "--add-blocked-by", "--drop-blocked-by"):
                 s.add_argument(flag, action="append")
             for flag in ("--parent", "--search", "--state", "--priority", "--title", "--blocked-by", "--file", "--section", "--expect", "--create", "--into"):
                 s.add_argument(flag)

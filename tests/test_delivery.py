@@ -20,6 +20,8 @@ def node(ident, state, *blockers, title=None, parent=None, project="p1"):
 
 class Fake(unittest.TestCase):
     def setUp(self):
+        settle = mock.patch.object(fc.fc_linear_cmd, "SETTLE_SECONDS", 0)  # a fake that keeps its document still would wait the whole settle
+        settle.start(); self.addCleanup(settle.stop)
         self.repo = Path(tempfile.mkdtemp()).resolve()
         (self.repo / ".compose").mkdir()
         (self.repo / ".compose" / "linear.json").write_text(json.dumps({"project": URL, "team": "Engineering"}))
@@ -383,6 +385,38 @@ class Tracks(Fake):
         self.run_verb("tracks", file=self.tracks_file, quote="x")
         heads = [l for l in self.doc_writes[0].splitlines() if l.startswith("## ")]
         self.assertEqual(heads, ["## Tracks", "## Why this order", "## History"])
+
+    def test_new_tracks_survive_linear_serving_the_old_document_for_a_while_after_the_write(self):
+        # delivery tracks while the factory ran: the reconcile read the plan from before the write and put the old tracks back,
+        # and a read that flipped between old and new gave "kept changing while it was being written"
+        self.content = PLAN
+        write = self.gql
+        def lagging(query, variables):
+            old = self.content
+            out = write(query, variables)
+            if "documentUpdate" in query:
+                self.reads = [old, old, old, self.content]  # Linear serves the text from before the write for a few reads
+            return out
+        self.gql = lagging
+        with mock.patch.object(fc.fc_linear, "linear_gql", lagging), mock.patch.object(fc.fc_linear_cmd, "SETTLE_SECONDS", 30), mock.patch.object(fc.fc_linear_cmd, "SETTLE_POLL", 0):
+            self.run_verb("tracks", file=self.tracks_file, quote="x")
+        self.assertNotIn("3. Old", self.content)
+        self.assertIn("## Tracks\n\n1. Sign-in: NEB-7, NEB-9\n2. Onboarding: NEB-12 (after Sign-in)\n", self.content)
+        self.assertIn("## Waves", self.content)
+        self.assertIn("## Start today", self.content)
+
+    def test_a_reconcile_waits_for_another_process_writing_the_plan(self):
+        import fcntl, subprocess, sys as _sys
+        lock = fc.fc_delivery.lock_path(self.repo)
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        held = subprocess.Popen([_sys.executable, "-c", "import fcntl, sys, time; f = open(sys.argv[1], 'a'); fcntl.flock(f, fcntl.LOCK_EX); "
+                                 "print('held', flush=True); time.sleep(1)", str(lock)], stdout=subprocess.PIPE, text=True)
+        self.addCleanup(held.wait)
+        self.assertEqual(held.stdout.readline().strip(), "held")
+        start = time.monotonic()
+        self.content = PLAN
+        self.run_verb("reconcile")
+        self.assertGreater(time.monotonic() - start, 0.5)
 
     def test_the_same_tracks_again_write_nothing_and_add_no_history(self):
         self.content = PLAN

@@ -216,10 +216,13 @@ def linear_note(meta, body):
 
 LINEAR_BLOCKERS = "query($id: String!) { issue(id: $id) { inverseRelations { nodes { id type issue { id identifier } } } } }"
 
-def linear_blocked_by(issue, want):
-    """Make exactly the issues in `want` (identifiers) block `issue`: creates first, then deletes, so a failed create never leaves it under-blocked."""
+def linear_blocked_by(issue, want, add=(), drop=()):
+    """Make exactly the issues in `want` (identifiers) block `issue`, or with `want` None its blockers plus `add` less `drop`:
+    creates first, then deletes, so a failed create never leaves it under-blocked. Returns the identifiers it stopped blocking it."""
     rels = [r for r in linear_gql(LINEAR_BLOCKERS, {"id": issue["id"]})["issue"]["inverseRelations"]["nodes"] if r["type"] == "blocks"]
     have = {r["issue"]["identifier"]: r["id"] for r in rels}
+    if want is None:
+        want = [i for i in have if i not in drop] + [i for i in add if i not in have]
     for ident in want:
         if ident not in have:
             linear_gql("mutation($a: String!, $b: String!) { issueRelationCreate(input: {issueId: $a, relatedIssueId: $b, type: blocks}) { success } }",
@@ -227,6 +230,7 @@ def linear_blocked_by(issue, want):
     for ident, rid in have.items():
         if ident not in want:
             linear_gql("mutation($id: String!) { issueRelationDelete(id: $id) { success } }", {"id": rid})
+    return [i for i in have if i not in want]
 
 def linear_restore(ident, fields):
     """Put an issue's title, description, state, and blockers back as `fields` names them."""

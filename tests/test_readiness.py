@@ -139,15 +139,45 @@ class Judge(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "scope"):
             fc_readiness.judge(STATE, "ENG-7", deep_dive=False)
 
-    def test_the_state_keeps_the_story_whole_and_cuts_the_tech_docs_first(self):
-        doc = {"title": "ENG-7: tech doc", "content": "x" * 40000, "url": "u"}
-        chain = fc_readiness.story_chain(tree(labels_=("deep-dive",), docs=[doc]))
+    def test_the_judges_read_the_storys_tasks_and_a_long_features_tech_doc(self):
+        # NEB-2182: a 30k feature pushed its 11k tech doc out of the state and the 14 tasks were never in it, so the judge
+        # asked for what the tasks settle and to "attach" the linked tech doc
+        task = lambda n: {"identifier": f"ENG-7{n}", "title": f"Task {n}", "state": {"name": "Todo", "type": "unstarted"},
+                          "description": f"```compose\nid: t{n}\n```\nVitest runs with jsdom ({n}). " + "y" * 1500}
+        doc = {"title": "ENG-1: tech doc", "content": "The start script is node .output/server/index.mjs. " + "z" * 11000, "url": "u"}
+        chain = fc_readiness.story_chain(tree(feature=FEATURE + "w" * 30000, feature_labels=("Feature", "deep-dive"), docs=[doc],
+                                              tasks=[task(n) for n in range(14)]))
         state = fc_readiness.judge_state(chain)
+        self.assertEqual([t["id"] for t in state["tasks"]], [f"ENG-7{n}" for n in range(14)])
+        self.assertEqual(state["tasks"][3], {"id": "ENG-73", "title": "Task 3", "description": chain["tasks"][3]["description"]})
+        self.assertEqual(state["tech_docs"], [doc["content"]])
+        self.assertEqual(state["feature"], FEATURE + "w" * 30000)
+
+    def test_over_the_cap_the_epic_then_the_feature_go_before_the_tech_doc_and_the_tasks(self):
+        task = {"identifier": "ENG-71", "title": "t", "state": {"name": "Todo"}, "description": "```compose\nid: t\n```\n" + "y" * 20000}
+        doc = {"title": "ENG-7: tech doc", "content": "x" * 40000, "url": "u"}
+        big = lambda: fc_readiness.story_chain(tree(labels_=("deep-dive",), docs=[doc], tasks=[task], epic="e" * 10000, feature=FEATURE + "w" * 60000))
+        state = fc_readiness.judge_state(big())
         self.assertLessEqual(len(json.dumps(state)), fc_readiness.STATE_CAP)
         self.assertIn("Pay by card.", state["story"]["description"])
-        self.assertIn("A shop.", state["feature"])
+        self.assertEqual((state["epic"], state["tech_docs"], state["tasks"][0]["description"]), ("", [doc["content"]], task["description"]))
+        self.assertTrue(state["feature"].startswith("## Intent\n\nA shop."))
+        with mock.patch.object(fc_readiness, "STATE_CAP", 30000):
+            state = fc_readiness.judge_state(big())
+        self.assertLessEqual(len(json.dumps(state)), 30000)
+        self.assertEqual((state["epic"], state["feature"], state["tasks"][0]["description"]), ("", "", task["description"]))
+        self.assertTrue(state["tech_docs"][0].startswith("xxx"))
         asked = STORY + "\n## Open questions\n\n* Which brands?\n"
         self.assertNotIn("Open questions", fc_readiness.judge_state(fc_readiness.story_chain(tree(story=asked)))["story"]["description"])
+
+    def test_the_judges_are_told_the_tasks_are_part_of_the_story(self):
+        self.jev = {"kind": ("TECHNICAL", 0.9)}
+        self.strong.return_value = json.dumps({"items": {k: {"ready": True, "missing": ""} for k in ("intent", "scope", "testable", "context")}})
+        with mock.patch.object(fc_models, "jev_ask", wraps=fc_models.jev_ask) as ask:
+            fc_readiness.judge({**STATE, "tasks": []}, "ENG-7", deep_dive=False)
+        self.assertIn("what a task says, the story says", ask.call_args.args[3]["intent"]["instructions"]["rules"])
+        self.assertIn("its tasks", self.strong.call_args.args[0])
+        self.assertIn("its tasks", fc_readiness.READINESS_ITEMS["context"][0])
 
     def test_a_secret_in_the_story_text_does_not_reach_the_stronger_model(self):
         self.jev = {"kind": ("TECHNICAL", 0.9)}
@@ -317,9 +347,9 @@ class StoryReadiness(unittest.TestCase):
     def test_canceled_tasks_do_not_count_as_tasks(self):
         block = "```compose\nid: t\n```"
         self.assertTrue(fc_tasks.TASK_BLOCK.search(block), "fixture must be a task")
-        self.tree = tree(tasks=[{"state": {"name": "Canceled"}, "description": block}])
+        self.tree = tree(tasks=[{"identifier": "ENG-71", "state": {"name": "Canceled"}, "description": block}])
         self.assertFalse(fc_readiness.story_readiness(self.repo, "ENG-7")["has_tasks"])
-        self.tree = tree(tasks=[{"state": {"name": "Todo"}, "description": block}])
+        self.tree = tree(tasks=[{"identifier": "ENG-71", "state": {"name": "Todo"}, "description": block}])
         self.assertTrue(fc_readiness.story_readiness(self.repo, "ENG-7")["has_tasks"])
 
     def test_write_false_never_writes(self):

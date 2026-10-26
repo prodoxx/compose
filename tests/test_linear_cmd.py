@@ -35,7 +35,7 @@ class LinearProject(unittest.TestCase):
     def args(self, action, *target, **kw):
         return SimpleNamespace(**{**dict(repo=str(self.repo), project=None, action=action, target=list(target), body=False, comments=False, json=False,
                                          append=False, description=False, any_project=False, fresh=False, label=None, parent=None, search=None, state=None,
-                                         title=None, priority=None, blocked_by=None, file=None, section=None, expect=None, create=None, into=None, add_label=None, drop_label=None), **kw})
+                                         title=None, priority=None, blocked_by=None, file=None, section=None, expect=None, create=None, into=None, add_label=None, drop_label=None, add_blocked_by=None, drop_blocked_by=None), **kw})
 
     def fails(self, fn, *args):
         err = io.StringIO()
@@ -432,7 +432,7 @@ class LinearUpdate(unittest.TestCase):
         self.calls.clear()
         if body is not None:
             (self.repo / "body.md").write_text(body); kw["file"] = str(self.repo / "body.md")
-        with mock.patch.object(fc.fc_linear, "linear_issue", return_value={"id": "parent-id"}) as issue, mock.patch.object(fc.fc_linear, "linear_blocked_by") as blocked, redirect_stdout(io.StringIO()) as out:
+        with mock.patch.object(fc.fc_linear, "linear_issue", return_value={"id": "parent-id"}) as issue, mock.patch.object(fc.fc_linear, "linear_blocked_by", return_value=[]) as blocked, redirect_stdout(io.StringIO()) as out:
             fc.fc_linear_cmd.verb_update(self.args("update", "ENG-7", **kw))
         self.assertEqual(out.getvalue().strip(), "updated ENG-7")
         self.assertEqual([v for q, v in self.calls if self.READ in q], [{"id": "ENG-7"}])
@@ -508,7 +508,8 @@ class LinearUpdate(unittest.TestCase):
                          (1, "team Engineering has no label 'deep-dive'; compose linear labels --create deep-dive makes it"))
 
     def test_nothing_to_change_refuses_before_reading_the_issue(self):
-        want = (1, "update needs --title, --state, --parent, --label, --add-label, --drop-label, --priority, --blocked-by, or a body: --section, --append, or --description with --file or stdin")
+        want = (1, "update needs --title, --state, --parent, --label, --add-label, --drop-label, --priority, --blocked-by, --add-blocked-by, --drop-blocked-by, "
+                   "or a body: --section, --append, or --description with --file or stdin")
         self.assertEqual(self.fails(fc.fc_linear_cmd.verb_update, self.args("update", "ENG-7")), want)
         self.assertEqual(self.calls, [])
 
@@ -887,11 +888,36 @@ class LinearNoProject(unittest.TestCase):
         self.assertEqual([line for line in out.getvalue().splitlines() if line.strip()], ["ENG-7 Todo - Fix the cart", "updated ENG-7", "commented on ENG-7"])
         self.assertEqual(self.writes(), ["issueUpdate", "commentCreate"])
 
+    def test_add_and_drop_blocked_by_keep_the_other_blockers_and_blocked_by_says_what_it_removed(self):
+        # a planner ran update --blocked-by twice to add two blockers, and only the second stayed
+        self.issue["project"] = {"id": "p1", "name": "Shop"}
+        have = [{"id": "r2", "type": "blocks", "issue": {"id": "u2", "identifier": "ENG-2"}}, {"id": "r3", "type": "blocks", "issue": {"id": "u3", "identifier": "ENG-3"}}]
+        writes = []
+        def gql(query, variables):
+            if "issueRelationCreate" in query or "issueRelationDelete" in query:
+                writes.append(("create", variables["a"]) if "Create" in query else ("delete", variables["id"]))
+                return {}
+            return {"issue": {"inverseRelations": {"nodes": have}}} if "inverseRelations" in query else self.gql(query, variables)
+        def run(**kw):
+            writes.clear()
+            with mock.patch.object(fc.fc_linear, "linear_gql", gql), mock.patch.object(fc.fc_linear, "linear_issue", lambda i: {"id": "u-" + i}), \
+                    redirect_stdout(io.StringIO()) as out:
+                fc.fc_linear_cmd.verb_update(self.args("update", "ENG-7", **kw))
+            return writes[:], out.getvalue().splitlines()
+        self.assertEqual(run(add_blocked_by=["ENG-4", "ENG-2,ENG-5"]), ([("create", "u-ENG-4"), ("create", "u-ENG-5")], ["updated ENG-7"]))
+        self.assertEqual(run(drop_blocked_by=["ENG-3"]), ([("delete", "r3")], ["updated ENG-7"]))
+        self.assertEqual(run(blocked_by="ENG-4"), ([("create", "u-ENG-4"), ("delete", "r2"), ("delete", "r3")],
+                                                   ["updated ENG-7", "no longer blocked by: ENG-2, ENG-3 (--add-blocked-by adds and keeps the rest)"]))
+        self.assertEqual(self.fails(fc.fc_linear_cmd.verb_update, self.args("update", "ENG-7", blocked_by="ENG-4", add_blocked_by=["ENG-5"])),
+                         (1, "update takes --blocked-by (the whole list) or --add-blocked-by/--drop-blocked-by, not both"))
+        self.assertEqual(self.fails(fc.fc_linear_cmd.cmd_linear, self.args("create", title="T", add_blocked_by=["ENG-5"])),
+                         (1, "--add-blocked-by and --drop-blocked-by change an existing issue: compose linear update <id> takes them, and create takes --blocked-by"))
+
     def test_update_blocked_by_drops_empty_ids(self):
         self.issue["project"] = {"id": "p1", "name": "Shop"}
         for given, want in (("", []), ("NEB-1,,NEB-2", ["NEB-1", "NEB-2"]), (",NEB-3,", ["NEB-3"])):
             with self.subTest(given=given):
-                with mock.patch.object(fc.fc_linear, "linear_blocked_by") as blocked, redirect_stdout(io.StringIO()):
+                with mock.patch.object(fc.fc_linear, "linear_blocked_by", return_value=[]) as blocked, redirect_stdout(io.StringIO()):
                     fc.fc_linear_cmd.verb_update(self.args("update", "ENG-7", blocked_by=given))
                 blocked.assert_called_once_with(self.issue, want)
 

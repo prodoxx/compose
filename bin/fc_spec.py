@@ -29,10 +29,12 @@ def file_clashes(tasks):
     return clashes
 
 def path_pattern(path):
-    """The regex for `path` named in prose, with or without its extension, never as part of a longer path: the bare path followed by
-    another extension (`x.test.ts` for `x.ts`) is another file."""
-    bare = str(Path(path).with_suffix(""))
-    return rf"(?<![\w./-]){re.escape(path)}(?![\w])|(?<![\w./-]){re.escape(bare)}(?![\w/]|\.\w)"
+    """The regex for `path` named in prose, with or without its extension, never as part of a longer path or name: the path followed
+    by another extension (`x.test.ts` for `x.ts`, `.env.example` for `.env`) or a hyphen (`auth-client.ts` for `auth.ts`) is another
+    file. A dotfile's suffix is part of its name: `.env.example` without it is `.env`, another file."""
+    end = r"(?![\w-]|\.\w)"
+    bare = "" if Path(path).stem.startswith(".") else str(Path(path).with_suffix(""))
+    return rf"(?<![\w./-]){re.escape(path)}{end}" + (rf"|(?<![\w./-]){re.escape(bare)}(?![\w/-]|\.\w)" if bare and bare != path else "")
 
 def on_base(text, path, defined):
     """Whether every name a brief's `text` uses from the Python module at `path` is already defined there at the base (`defined(path,

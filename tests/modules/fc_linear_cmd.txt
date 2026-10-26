@@ -23,6 +23,7 @@ drop_get_cache
 verb_get
 verb_list
 verb_create
+ids
 verb_update
 verb_comment
 under_posture

@@ -1,5 +1,6 @@
 """`compose delivery`: the product delivery plan across features, read from Linear (seed, order); the plan is a document in the Linear project."""
-import json, sys, time
+import fcntl, json, sys, time
+from contextlib import contextmanager
 
 import fc_core, fc_config, fc_linear, fc_linear_cmd, fc_plan, fc_prd, fc_tasks
 
@@ -138,16 +139,41 @@ def last_reconcile(repo):
     path = state_path(repo)
     return json.loads(path.read_text()) if path.exists() else None
 
+def lock_path(repo):
+    return state_path(repo).with_name("delivery.lock")
+
+_HELD = set()
+
+@contextmanager
+def plan_lock(repo):
+    """Held while a process reads the plan, writes it and waits for Linear to serve the write, so the factory's reconcile
+    and a product owner's tracks never build on each other's half-written or not yet served plan. Re-entrant in one process."""
+    path = lock_path(repo)
+    if str(path) in _HELD:
+        yield
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        _HELD.add(str(path))
+        try:
+            yield
+        finally:
+            _HELD.discard(str(path))
+
 def write_doc(doc, build):
     """Write build(content) to the document, built from its content as it stands right before the write, so an edit made during
-    the run is kept: the document is read again, and when it changed since `doc` was read, built and checked once more."""
+    the run is kept: the document is read again, and when it changed since `doc` was read, built and checked once more.
+    Returns once Linear serves the write: it can serve the old text for seconds, and the next read builds on what it serves."""
     base = doc["content"] or ""
+    read = lambda: fc_linear.linear_gql(DOC_QUERY, {"id": doc["id"]})["document"]["content"] or ""
     for _ in range(2):
-        fresh = fc_linear.linear_gql(DOC_QUERY, {"id": doc["id"]})["document"]["content"] or ""
+        fresh = read()
         if fresh == base:
             content = build(base)
             if content.rstrip("\n") != base.rstrip("\n"):
                 fc_linear.linear_gql(DOC_UPDATE, {"id": doc["id"], "content": content})
+                fc_linear_cmd.await_write(read, base, content)
             return content
         base = fresh
     raise RuntimeError(f"{PRODUCT_TITLE} kept changing while it was being written; nothing written to it")
@@ -157,7 +183,14 @@ def _blocked_comment(added, removed, url):
     return f"{PRODUCT_TITLE} reconcile: {'; '.join(parts)}. The plan wins over Linear; change the plan to change this: {url}"
 
 def reconcile(repo, dry_run=False):
-    """Make Linear's blocks and Ready labels follow the plan; destructive fixes are only proposed. Idempotent."""
+    """Make Linear's blocks and Ready labels follow the plan; destructive fixes are only proposed. Idempotent.
+    A run that writes holds plan_lock from its read of the plan to its last write."""
+    if dry_run:
+        return _reconcile(repo, True)
+    with plan_lock(repo):
+        return _reconcile(repo, False)
+
+def _reconcile(repo, dry_run):
     plan = product_plan(repo)
     if not plan:
         sys.exit(NO_PLAN)
@@ -221,6 +254,11 @@ def verb_tracks(a):
     unknown = [i for i in dict.fromkeys(i for t in tracks for i in t["items"]) if i not in product["features"]]
     if unknown:
         sys.exit(f"delivery tracks: {', '.join(unknown)} {'is' if len(unknown) == 1 else 'are'} no issue in this project; nothing written")
+    with plan_lock(a.repo):
+        r = _write_tracks(a, text, product)
+    print(f"tracks set on {r['doc']}\n{summary(r)}")
+
+def _write_tracks(a, text, product):
     doc = product["doc"]
     if not doc:
         doc = fc_linear.linear_gql(DOC_CREATE, {"title": PRODUCT_TITLE, "content": fc_plan.product_skeleton(), "projectId": product["project"]["id"]})["documentCreate"]["document"]
@@ -231,8 +269,7 @@ def verb_tracks(a):
         content = fc_plan.replace_product_section(content, "## Tracks", "## Tracks\n\n" + text)
         return fc_plan.with_history(content, f'- {time.strftime("%Y-%m-%d")}: tracks set; the product owner said: "{words}"')
     write_doc(doc, build)
-    r = _reconciled(a.repo)
-    print(f"tracks set on {r['doc']}\n{summary(r)}")
+    return _reconciled(a.repo)
 
 def cmd_delivery(a):
     if not fc_config.LINEAR_KEY:
