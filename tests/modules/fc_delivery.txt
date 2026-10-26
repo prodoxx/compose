@@ -23,11 +23,16 @@ DOC_UPDATE
 DOC_CREATE
 state_path
 last_reconcile
+lock_path
+_HELD
+plan_lock
 write_doc
 _blocked_comment
 reconcile
+_reconcile
 summary
 _reconciled
 verb_reconcile
 verb_tracks
+_write_tracks
 cmd_delivery
