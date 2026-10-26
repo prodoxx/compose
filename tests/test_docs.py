@@ -32,7 +32,7 @@ class CliAndTasksDocs(unittest.TestCase):
         sec = self.section(read("docs/cli.md"), "### Teammates and supervision", "### Workspaces")
         for word in ("--figma", "--extra -", "brief"):
             self.assertIn(word, self.row(sec, "designer"))
-        for word in ("--only", "--print", "design-NNN"):
+        for word in ("--only", "--print", "--force", "design-NNN"):
             self.assertIn(word, self.row(sec, "designcrews"))
         figma = self.row(sec, "figma check\\|tree\\|judge\\|publish")
         for word in ("check --figma", "tree --only", "Framelink", "judge --only", "linear.json", "results/NNN.tree.txt", "MET", "NOT_MET", "UNCLEAR", "check --plan", "figma_caps", "publish --library", "publish: ask"):
@@ -1401,7 +1401,7 @@ class DesignWaitsDocs(unittest.TestCase):
         self.assertRegex(row, r"\bonly\b[^|]*\bblock(ers?|ed by)\b[^|]*In Review or Done")
         self.assertIn("<id> waits on <ids>", row)
         self.assertEqual(row.count("waits on"), 1)
-        for kept in ("design-NNN", "--only", "--max N", "--print", "design_concurrency"):
+        for kept in ("design-NNN", "--only", "--max N", "--print", "--force", "design_concurrency"):
             self.assertIn(kept, row)
         self.assertNotIn("—", row)
         self.assertEqual(row.count(" | "), 1, "still two cells")

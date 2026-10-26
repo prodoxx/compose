@@ -259,6 +259,13 @@ class Groundwork(unittest.TestCase):
         for flag in ("--parallel", "--force", "--redo"):
             self.assertIn(flag, out.getvalue())
 
+    def test_designcrews_takes_force_on_the_command_line(self):
+        out = io.StringIO()
+        with mock.patch.object(sys, "argv", ["compose", "designcrews", "--help"]), mock.patch("sys.stdout", out), self.assertRaises(SystemExit) as cm:
+            fc.main()
+        self.assertEqual(cm.exception.code, 0)
+        self.assertIn("--force", out.getvalue())
+
     def test_force_goes_on_to_every_writer_and_is_off_without_it(self):
         (self.proj / "results" / "contract.md").write_text("c")
         for flag, expect in ((True, [True, True]), (None, [False, False])):
@@ -820,7 +827,7 @@ class DesignCrews(unittest.TestCase):
             issue("001", nodes="Checkout/Cart, Checkout/Pay"), issue("002", kind="code", files="a.go"), issue("003", "Done", nodes="Home/Hero"),
             issue("004", "In Review", nodes="Home/Nav"), issue("005", nodes="Account/Profile")]})
 
-    def run_crews(self, only=None, print_=False, busy=(), max=None, live=(), redo=False):
+    def run_crews(self, only=None, print_=False, busy=(), max=None, live=(), redo=False, force=False):
         started, out = [], io.StringIO()
         def crew(ns):
             started.append(ns)
@@ -829,7 +836,7 @@ class DesignCrews(unittest.TestCase):
         with mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), mock.patch.object(fc.fc_herdr, "herdr_space") as space, \
                 mock.patch.object(fc.fc_herdr, "live_agents", return_value=agents), mock.patch.object(fc.fc_herdr, "herdr_project_space", return_value="w1"), \
                 mock.patch.object(fc.fc_crew, "cmd_crew", side_effect=crew), mock.patch.object(fc.fc_linear, "linear_event") as self.ev, mock.patch("sys.stdout", out):
-            fc.fc_figma.cmd_designcrews(SimpleNamespace(repo=".", project="p", only=only, print_=print_, max=max, redo=redo))
+            fc.fc_figma.cmd_designcrews(SimpleNamespace(repo=".", project="p", only=only, print_=print_, max=max, redo=redo, force=force))
         return started, out.getvalue(), space
 
     def test_print_shows_one_brief_per_open_design_task(self):
@@ -857,6 +864,10 @@ class DesignCrews(unittest.TestCase):
         self.assertEqual((ns.project, ns.action, ns.title, ns.force, ns.cwd, ns.model), ("p", "start", "design 005", False, None, None))
         self.assertEqual(ns.brief, fc.fc_figma.design_brief(meta, "AbCdEf123456", self.proj / "results"))
         self.assertEqual([ns.role for ns in self.run_crews(only="005")[0]], ["design-005"])
+
+    def test_force_is_passed_to_each_started_design_builder(self):
+        started, _, _ = self.run_crews(force=True)
+        self.assertEqual([ns.force for ns in started], [True, True])
 
     def test_starts_at_most_the_cap_and_prints_the_rest_with_the_command_to_start_them(self):
         started, out, _ = self.run_crews(max=1)

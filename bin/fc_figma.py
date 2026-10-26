@@ -187,7 +187,8 @@ def cmd_designcrews(a):
         was = fc_tasks.set_cached_state(proj, m["id"], "In Progress") if reopens else None
         try:
             fc_crew.cmd_crew(argparse.Namespace(repo=a.repo, project=proj.name, action="start", role=f"design-{m['id']}", title=f"design {m['id']}",
-                                        brief=design_brief(m, figma, proj / "results"), force=False, cwd=None, model=None))
+                                        brief=design_brief(m, figma, proj / "results"), force=getattr(a, "force", False),
+                                        cwd=None, model=None))
         except (SystemExit, Exception) as e:  # noqa: BLE001  one builder's failure must not stop the rest, and is never silent
             failed.append(m["id"])
             print(f"design-{m['id']} not started: {e}")

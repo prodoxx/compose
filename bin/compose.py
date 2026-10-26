@@ -283,6 +283,7 @@ def main():
             s.add_argument("--print", dest="print_", action="store_true", help="print the briefs instead of starting builders")
             s.add_argument("--redo", action="store_true", help="with --only: reopen tasks finished by hand or passed, even In Review, for a new builder; their old result is kept as <id>.json.before-redo")
             s.add_argument("--max", type=int, help="most builders to start at once (default: design_concurrency in verify.json, else parallel in ~/.compose/config.json, else 3)")
+            s.add_argument("--force", action="store_true", help="start the builders although the Mac runs on its battery")
         if name == "architect":
             s.add_argument("--change", required=True, help="an open change of course, e.g. C2: its own page, asking only what the evidence questions; "
                                                           "shaping a feature is the engineering manager's brainstorm (sections/0b.md), not an architect")
