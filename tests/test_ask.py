@@ -259,8 +259,8 @@ class Briefs(unittest.TestCase):
     def test_the_change_brief_carries_the_ask_rules(self):
         brief = fc.fc_briefs.CHANGE_BRIEF
         flat = " ".join(brief.split())
-        for want in ("visual questions open in Lavish: <url>", "`url:`", "--takeover", "180000 ms", "lavish-axi reply {page} --agent-reply",
-                     "`browser_disconnected`", "reminder:", "`yolo:`", "(yolo recommendation, unconfirmed, <date>)"):
+        for want in ("visual questions open in Lavish: <url>", "`url:`", "never poll it for them",
+                     "`yolo:`", "(yolo recommendation, unconfirmed, <date>)"):
             self.assertIn(want, flat)
         self.assertNotIn("\u2014", brief)
 

@@ -82,17 +82,13 @@ Screen that raised it: {reflect}
    The page shows pictures only, with no answer controls; answers come through the engineering manager.
 3. Write every question under Not yet specified on the map first, visual ones too; visual ones go on the page as well.
    Then ask once, all open questions in one line: open the page if any
-   (`npx -y lavish-axi {page}`), and report, before any poll, one line:
+   (`npx -y lavish-axi {page}`), and report one line:
    `compose report --project {slug} --as {name} needs-user "change {cid}: <issue>: <n> questions <ids>; recommendation <one
    line>; 'visual questions open in Lavish: <url>' when the page is open>"`, where <url> is the `url:` that `lavish-axi {page}` printed,
    copied, never retyped. The team lead forwards the line unchanged; the engineering manager reads them with
    `compose decisions --project {slug}` and asks the product owner one question at a time; answers travel by question id.
-4. Wait as the architect does: poll in rounds (`npx -y lavish-axi poll {page} --owner {name} --takeover`, Bash timeout
-   180000 ms, run again at once when a round ends with nothing); acknowledge answers on the page with
-   `npx -y lavish-axi reply {page} --agent-reply "<question ids> received"`; on `browser_disconnected` run
-   `npx -y lavish-axi {page}` once for its `url:` and report once `needs-user "reminder: change {cid}: ..."` with it, then poll again.
+4. Wait for the herdr prompt that brings each answer; the page takes no answers, so never poll it for them.
    Never loop or poll `compose linear` while you wait (shared hourly Linear budget): read the issue once, the herdr prompt brings the answer.
-   Never `end` or `--reopen` a session the product owner ended.
 5. You never write a Decisions so far line. Answers land through `compose decide --change {cid}`, run by the engineering manager with
    the product owner's words attached: each answer is `--new "<decision>" --closes <id>` and becomes a line
    `D<n>: <decision> (closes <id>) ({cid}; product owner, <date>; said: "<their words>")`. An answer that changes a decision also names it,
@@ -100,9 +96,8 @@ Screen that raised it: {reflect}
    An answer that starts `away:` or `yolo:` is the engineering manager's recommendation, never the product owner's:
    `compose decide` ends its line `(away recommendation, unconfirmed, <date>)` or `(yolo recommendation, unconfirmed, <date>)`, the one its prefix names.
    When the team lead says a decision landed, read the map once (`compose linear get <id> --body`) and go on from it.
-6. Evidence the team lead forwards while {cid} is open becomes new questions, asked the same way; visual ones on the same page, then
-   `npx -y lavish-axi poll {page} --agent-reply "<what changed>"` and wait again.
-7. When every question is closed: `npx -y lavish-axi end {page}` if the page was opened, then report `done` with each decision in one line.
+6. Evidence the team lead forwards while {cid} is open becomes new questions, asked the same way; visual ones on the same page, then wait again.
+7. When every question is closed: `npx -y lavish-axi end {page}` if the page was opened (never `end` or `--reopen` a session the product owner ended), then report `done` with each decision in one line.
    Do not touch tasks, stories, or the plan: the team lead re-plans from your answers.
 """
 

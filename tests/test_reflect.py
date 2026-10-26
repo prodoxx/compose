@@ -1008,7 +1008,9 @@ class ChangeBrief(unittest.TestCase):
         brief = self.brief("C1", extra="held: 003, 004")
         page = str(self.proj / "lavish" / "change-C1.html")
         self.assertIn("Text by default", brief)
-        self.assertIn(f"npx -y lavish-axi poll {page}", brief)
+        self.assertIn(f"npx -y lavish-axi {page}", brief)
+        self.assertNotIn("lavish-axi poll", brief)  # the page takes no answers: they come through the engineering manager
+        self.assertIn("never poll it for them", brief)
         self.assertIn("localStorage is wiped by the sandbox", brief)
         self.assertIn("its `evidence` field", brief)
         self.assertIn("`compose decide --change C1`", brief)

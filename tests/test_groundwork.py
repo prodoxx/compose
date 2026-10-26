@@ -1245,8 +1245,8 @@ class TerseTemplatesB(unittest.TestCase):
     SIZES = {"GROUNDWORK_BRIEF": 3250, "CHANGE_BRIEF": 3900}
     PLACEHOLDERS = {"GROUNDWORK_BRIEF": "contract e2e_dir slug stacks trunk verify wt",
                     "CHANGE_BRIEF": "cid feature name page reflect slug why wt"}
-    LAVISH = ["npx -y lavish-axi poll {page} --owner {name} --takeover", "lavish-axi reply {page} --agent-reply", "npx -y lavish-axi end {page}",
-              "npx -y lavish-axi {page}", "--reopen", "`yolo:`", "reminder:", "(yolo recommendation, unconfirmed, <date>)", "`away:`"]
+    LAVISH = ["npx -y lavish-axi end {page}", "never poll it for them",
+              "npx -y lavish-axi {page}", "--reopen", "`yolo:`", "(yolo recommendation, unconfirmed, <date>)", "`away:`"]
     KEPT = {"GROUNDWORK_BRIEF": ["`compose verify --project {slug} --prove`", '`working "stubs ready: <commit>; contract at {contract}"`',
                                  '`blocked "<task>: brief lacks <what>"`', "`compose timed`", "`protected:`", "`test:`"],
             "CHANGE_BRIEF": LAVISH + ["`evidence`", "`compose linear get <id> --body`", "change {cid}: "]}

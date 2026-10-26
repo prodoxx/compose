@@ -1344,7 +1344,7 @@ class QuestionsById(unittest.TestCase):
             with self.subTest(name):
                 text = getattr(fc_planner_brief if name == "PLANNER_BRIEF" else fc.fc_briefs, name)
                 self.assertEqual({f for _, f, _, _ in string.Formatter().parse(text) if f}, want)  # no stray {n} or {ids}
-        self.assertIn("npx -y lavish-axi poll {page}", fc.fc_briefs.CHANGE_BRIEF)  # visual questions still go through the Lavish page
+        self.assertIn("npx -y lavish-axi {page}", fc.fc_briefs.CHANGE_BRIEF)  # visual questions still go on the Lavish page
 
 
 LINEAR_TEXT_LINE = "Linear text: concise, readable English. Lead with the action, one idea per line, no preamble or recap."
