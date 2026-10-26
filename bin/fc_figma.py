@@ -78,12 +78,13 @@ target Figma file is {figma}.
    `compose figma judge --project {slug} --only NNN` (Jev judges the criteria on both);
    then run a `design-review` teammate that reads trees and images through Framelink, one image per story, never `get_screenshot`.
    Hand-off to code names each screen node on its code task's `figma_nodes:` line (never `get_design_context`, never pasted JSON).
-7. Every open decision goes up as a text card in `needs-user` with a recommendation; Lavish only for a card whose content IS
-   visual.
+7. Every open decision goes up as an open question with a recommendation, written under Not yet specified, then reported as
+   `compose report --project {slug} --as {slug}-designer needs-user "<issue>: <n> questions <ids>; recommendation <one line>"`;
+   Lavish only for a question whose content IS visual.
 8. Before any screen story is built, write a visual direction for the surface as a Linear decision: anatomy, density and spacing
    measured from the research or competitors, status styling, hierarchy. Each rule cites research, a Linear decision, or a measured
-   value. Lowfi frames define flow and content only, never layout, spacing, or density; a card that only follows the lowfi on a
-   visual question says so and gives the research-based alternative.
+   value. Lowfi frames define flow and content only, never layout, spacing, or density; a question that only follows the lowfi on a
+   visual matter says so and gives the research-based alternative.
 9. Draw a flow's Frame0 pages when you draw that flow, never a skeleton of every flow; a journey's new page goes right behind its
    pages (`add_page` takes `after`). Run `compose frame0 lint --project {slug}` before every review ask and fix it with
    `compose frame0 move|delete|links`. Change Frame0 only through `compose frame0` commands, never `curl` on its API or token.
@@ -153,7 +154,7 @@ def cmd_designcrews(a):
     pages = fc_figmaplan.design_pages(tasks)  # pages already built count against the file's limit too
     blocked = fc_figmaplan.caps_blockers(caps, len(pages), 0) if caps else []
     if blocked and not a.print_:
-        sys.exit(f"{'; '.join(blocked)} ({', '.join(sorted(pages))}): {fc_figmaplan.BLOCKED_CARD} After the answer: compose figma check --project {proj.name} --plan <tier>")
+        sys.exit(f"{'; '.join(blocked)} ({', '.join(sorted(pages))}): {fc_figmaplan.BLOCKED_QUESTION} After the answer: compose figma check --project {proj.name} --plan <tier>")
     states = {m["id"]: m.get("linear_state") for m in tasks}
     waits = {m["id"]: [b for b in (x.strip() for x in str(m.get("after") or "").split(","))
                        if b and states.get(b) not in ("In Review", "Done")] + m.get("waits_on", []) for m in metas}

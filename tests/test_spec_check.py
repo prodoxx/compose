@@ -109,10 +109,14 @@ class SpecCheck(unittest.TestCase):
         ok, level, gaps = check([task("ENG-3", "001")], desc)["ENG-1"]
         self.assertEqual((ok, len(gaps), has(gaps, "Open questions"), has(gaps, "Which payment provider?")), (False, 1, True, True))
 
-    def test_open_cards_under_not_yet_specified_still_fail_and_an_empty_section_is_settled(self):
+    def test_open_questions_under_not_yet_specified_still_fail_and_an_empty_section_is_settled(self):
+        held = "## Not yet specified\n\n- Q1: Which auth? - Recommendation: Clerk - every screen signs in\n\n"
+        ok, _, gaps = check([task("ENG-3", "001")], held + self.DESIGN)["ENG-1"]
+        self.assertEqual((ok, has(gaps, "Not yet specified"), has(gaps, "Q1: Which auth?"), has(gaps, "answer its open questions with `compose decide`")), (False, True, True, True))
+        self.assertFalse(has(gaps, "card"))
         card = "## Not yet specified\n\nQ1. Which auth?\nA. Clerk - affects: billing\nB. JWT - affects: work\nRecommendation: A\n\n"
         ok, _, gaps = check([task("ENG-3", "001")], card + self.DESIGN)["ENG-1"]
-        self.assertEqual((ok, has(gaps, "Not yet specified"), has(gaps, "Q1. Which auth?")), (False, True, True))
+        self.assertEqual((ok, has(gaps, "Q1. Which auth?")), (False, True))
         ok, _, gaps = check([task("ENG-3", "001")], "## Not yet specified\n\n" + self.DESIGN)["ENG-1"]
         self.assertEqual((ok, gaps), (True, []))
 

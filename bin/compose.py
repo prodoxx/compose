@@ -126,8 +126,8 @@ def main():
                             ("away", fc_yolo.cmd_yolo, "the product owner is away until their first message: [--push] [words] enters, `decided \"<q>: <a>\"` logs an answer taken, --clear-words empties the words, `digest` prints the digest, `off` prints it and archives"),
                             ("yolo", fc_yolo.cmd_yolo, "the engineering manager answers until an explicit off, and the product owner may steer: [--push] [words] enters, `decided \"<q>: <a>\"` logs an answer taken, --clear-words empties the words, `digest` prints the digest, `off` prints it and archives"),
                             ("change", fc_change.cmd_change, "start | done | undo | keep|part|discard <task id> [--files a,b] a change of course: what changed in Linear and why, undoable; settle paused work"),
-                            ("decisions", fc_decide.cmd_decisions, "print the project's pending-decisions page: every open card in full, when it was asked, and the decisions so far; --issue picks another map"),
-                            ("decide", fc_decide.cmd_decide, "record the product owner's answers on the map (`\"Q1: A\" ...` or --accept-all) with their words attached: --quote \"<what they said>\"; without it, only under away or yolo, as unconfirmed"),
+                            ("decisions", fc_decide.cmd_decisions, "print the project's pending-decisions page: every open question with its recommendation and when it was asked, then the decisions to confirm; --issue picks another map"),
+                            ("decide", fc_decide.cmd_decide, "record the product owner's decisions on the map (--new \"<decision>\" --closes Q1, --drop Q2, or --accept-all) with their words attached: --quote \"<what they said>\"; without it, only under away or yolo, as unconfirmed; it prints the open questions left"),
                             ("reconcile", fc_reconcile.cmd_reconcile, "the one-time cleanup of a messy Linear project: list | check --file | show | apply --go | notices"),
                             ("crew", fc_crew.cmd_crew, "start | list | focus | stop teammates, the Claude sessions in the project's herdr space (the team lead, the architect, helpers)"),
                             ("report", fc_crew.cmd_report, "a teammate session reports up: working | needs-user | blocked | done, with one line"),
@@ -318,12 +318,14 @@ def main():
             s.add_argument("--file", help="check: the sheet of how every open ticket is sorted (outside the repo)")
             s.add_argument("--go", help="apply: the product owner's words, verbatim")
         if name == "decide":
-            s.add_argument("answers", nargs="*", help='"<card id>: <letter or answer>", one per card, e.g. "Q1: A" "Q2: own JWT"; a bare id ("Q3", "D2") confirms the line already recorded')
-            s.add_argument("--new", action="append", default=[], help="a decision reached in conversation, with no card: recorded as the issue's next D<n> under Decisions so far; repeat for more")
-            s.add_argument("--replaces", help="with exactly one --new: the live D<n> decision it replaces; the old line is struck through, (replaced by D<m>)")
+            s.add_argument("answers", nargs="*", help='a bare id ("Q3", "D2") confirms the line already recorded; the old "Q1: A" form still answers an open question')
+            s.add_argument("--new", action="append", default=[], help="a decision, in a sentence: recorded as the issue's next D<n> under Decisions so far; repeat for more")
+            s.add_argument("--closes", action="append", default=[], help="with exactly one --new: the open question it answers, e.g. Q3; the question leaves Not yet specified; repeat for more")
+            s.add_argument("--drop", action="append", default=[], help="an open question that no longer applies: recorded as a D<n> line saying so, and it leaves Not yet specified; repeat for more")
+            s.add_argument("--replaces", help="with exactly one --new: the live decision it replaces; the old line is struck through, (replaced by D<m>), or (C<n>) with --change")
             s.add_argument("--quote", help="the product owner's words, verbatim: the decision is recorded only with them")
-            s.add_argument("--accept-all", action="store_true", help="record every open card's recommendation (answers given win)")
-            s.add_argument("--change", help="the open change of course these cards belong to, e.g. C2: the line each card supersedes is struck through")
+            s.add_argument("--accept-all", action="store_true", help="record every open question's recommendation as its own unconfirmed D<n> line (decisions given win)")
+            s.add_argument("--change", help="the open change of course these decisions belong to, e.g. C2: a --replaces line is struck through with (C2)")
         if name == "change":
             s.add_argument("action", choices=("start", "done", "undo", "keep", "part", "discard"))
             s.add_argument("id", nargs="?", help="undo: the change to undo, e.g. C2; keep|part|discard: the paused task id")

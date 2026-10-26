@@ -196,7 +196,7 @@ def spec_check(data, checks=(), defined=None):
     out = []
     desc = (data["feature"].get("description") or "")
     gaps = []
-    for name, fix in (("Not yet specified", "answer its cards with `compose decide`, or say `None`"),
+    for name, fix in (("Not yet specified", "answer its open questions with `compose decide`, or say `None`"),
                       ("Open questions", "the design is approved only once they are answered and the section is empty")):
         held = fc_change.map_section(desc, name).split("\n", 1)[0].strip()  # an absent or empty section, or one saying None, is settled
         if held and held.rstrip(".").strip().lower() != "none":

@@ -74,33 +74,30 @@ CHANGE_BRIEF = """You are architect teammate for change of course {cid} on proje
 Screen that raised it: {reflect}
 1. Read the map, the evidence (screen file above, its `evidence` field, team lead's notes below),
    and the code it cites (`trail ask "<question>" --source`).
-2. Write one card per decision line the evidence questions, in the card format: `W1. <question>` / `Supersedes: <the line as recorded>` /
-   `Why: <the evidence, quoted verbatim, with its source>` / `A. keep it as is - affects: nothing` (always among them) / `B. <option> - affects: <what>`
-   (two to four options) / `Recommendation: <letter> - <why>`. `compose report` refuses a card short of any of these. Never
-   choose for the product owner. Text by default; visual only when options are pictures, and then never asked as text. Visual cards go on one Lavish page, never the architect's earlier page: {page}
-   Build it as the architect does: same reads, card forms, accept-all button, and prompts.
-3. Write every card in full under Not yet specified on the map first, visual ones too, with a card id per card, never reusing an id;
-   visual cards go on the page as well. Then ask once, all open cards in one line: open the page if any
-   (`npx -y lavish-axi {page}`), and report, before any poll, one line:
-   `compose report --project {slug} --as {name} needs-user "change {cid}: <issue>: <n> cards <ids>; recommendation <one
-   line>; 'visual cards open in Lavish: <url>' when the page is open>"`, where <url> is the `url:` that `lavish-axi {page}` printed,
-   copied, never retyped. The team lead forwards the line unchanged; the engineering manager opens the project's page
-   (`compose decisions --project {slug}`) for the product owner, never the cards pasted in full; answers travel by card id.
-4. Wait as the architect does: poll in rounds (`npx -y lavish-axi poll {page} --owner {name} --takeover`, Bash timeout
-   180000 ms, run again at once when a round ends with nothing); acknowledge answers on the page with
-   `npx -y lavish-axi reply {page} --agent-reply "<card ids> received"`; on `browser_disconnected` run
-   `npx -y lavish-axi {page}` once for its `url:` and report once `needs-user "reminder: change {cid}: ..."` with it, then poll again.
+2. Write one question per decision line the evidence questions:
+   `- {cid}-1: <question> (replaces <the D id it would replace>) - Recommendation: <recommendation> - <the evidence, quoted verbatim, with its source>`,
+   ids {cid}-1, {cid}-2 and on; never reuse an id. Keeping the line is always an answer.
+   `compose report` refuses a question without a recommendation. Never choose for the product owner.
+   Text by default; visual only when the choices are pictures, then never asked as text. Visual questions go on one Lavish page, never the architect's earlier page: {page}
+   The page shows pictures only, with no answer controls; answers come through the engineering manager.
+3. Write every question under Not yet specified on the map first, visual ones too; visual ones go on the page as well.
+   Then ask once, all open questions in one line: open the page if any
+   (`npx -y lavish-axi {page}`), and report one line:
+   `compose report --project {slug} --as {name} needs-user "change {cid}: <issue>: <n> questions <ids>; recommendation <one
+   line>; 'visual questions open in Lavish: <url>' when the page is open>"`, where <url> is the `url:` that `lavish-axi {page}` printed,
+   copied, never retyped. The team lead forwards the line unchanged; the engineering manager reads them with
+   `compose decisions --project {slug}` and asks the product owner one question at a time; answers travel by question id.
+4. Wait for the herdr prompt that brings each answer; the page takes no answers, so never poll it for them.
    Never loop or poll `compose linear` while you wait (shared hourly Linear budget): read the issue once, the herdr prompt brings the answer.
-   Never `end` or `--reopen` a session the product owner ended. Answers arrive in the poll's `text` column, not as a data field.
 5. You never write a Decisions so far line. Answers land through `compose decide --change {cid}`, run by the engineering manager with
-   the product owner's words attached: each card moves to a line `<card id>: <answer> ({cid}; product owner, <date>; said: "<their words>")`,
-   and the line the card supersedes is struck through, `~~<old line>~~ ({cid})`; "keep it as is" strikes nothing.
+   the product owner's words attached: each answer is `--new "<decision>" --closes <id>` and becomes a line
+   `D<n>: <decision> (closes <id>) ({cid}; product owner, <date>; said: "<their words>")`. An answer that changes a decision also names it,
+   `--replaces <D id>`, and that line is struck through, `~~<old line>~~ ({cid})`; an answer that keeps it strikes nothing (`D4 stands: ...`).
    An answer that starts `away:` or `yolo:` is the engineering manager's recommendation, never the product owner's:
    `compose decide` ends its line `(away recommendation, unconfirmed, <date>)` or `(yolo recommendation, unconfirmed, <date>)`, the one its prefix names.
    When the team lead says a decision landed, read the map once (`compose linear get <id> --body`) and go on from it.
-6. Evidence the team lead forwards while {cid} is open becomes new cards, asked the same way; visual ones on the same page, then
-   `npx -y lavish-axi poll {page} --agent-reply "<what changed>"` and wait again.
-7. When every card is answered: `npx -y lavish-axi end {page}` if the page was opened, then report `done` with each answer in one line.
+6. Evidence the team lead forwards while {cid} is open becomes new questions, asked the same way; visual ones on the same page, then wait again.
+7. When every question is closed: `npx -y lavish-axi end {page}` if the page was opened (never `end` or `--reopen` a session the product owner ended), then report `done` with each decision in one line.
    Do not touch tasks, stories, or the plan: the team lead re-plans from your answers.
 """
 

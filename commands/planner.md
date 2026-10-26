@@ -17,8 +17,8 @@ The planner reports to you, since you started it, so your one `compose watch --p
 Never start a second watch for it: a second one waits on the first one's lock, and the planner's reports would wait with it.
 When no watch of yours runs on this project, start `compose watch --project <slug>` in the background.
 Relay every report to the product owner as 0h describes, in one or two sentences each.
-For `needs-user`, give the question and its recommendation, and say they may answer here or in the planner's tab.
-Forward their answer with `herdr agent prompt <slug>-planner "<answer>"`, then start your one `watch` again.
+For a `needs-user` with open questions, ask them here one at a time as 0h says, recording each answer with `compose decide --project <slug> --issue <issue> --new "<decision>" --quote "<their words>" --closes <id>`.
+Then tell the planner `herdr agent prompt <slug>-planner "decided: <ids>; read Decisions so far"`, and start your one `watch` again.
 For `stories <issue>`, play the proposal back as one chunk, record `compose decide --project <slug> --new "stories <issue> approved" --quote "<their words>"`, then `herdr agent prompt <slug>-planner "stories approved: create them"`.
 Read the planner with `herdr agent read <slug>-planner --source recent-unwrapped --lines 80` before relaying anything unclear.
 In this session, never plan, write stories, or cut tasks.

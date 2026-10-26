@@ -55,7 +55,7 @@ def gates(chain):
     held = [i for i in (story, feature) if i]
     for i in held:
         if any(l.strip().rstrip(".").lower() != "none" for l in fc_change.map_section(i.get("description"), "Not yet specified").splitlines() if l.strip()):
-            add("cards", i["identifier"], f"Answer the open cards on {i['identifier']} with compose decide (0b).")
+            add("questions", i["identifier"], f"Answer the open questions under Not yet specified on {i['identifier']} with compose decide (0b).")
     for i in held:
         n = len([q for q in fc_linear.open_questions(i.get("description")) if not TAG_RE.search(q)])
         if n:
@@ -167,7 +167,7 @@ def judge(state, story, deep_dive):
 
 
 CHECK_VERSION = 1
-HOMED = ('design', 'cards', 'open questions')  # gaps with a home of their own: reported, never written on the story
+HOMED = ('design', 'questions', 'open questions')  # gaps with a home of their own: reported, never written on the story
 
 
 def cache_path(repo):

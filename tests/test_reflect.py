@@ -1008,12 +1008,15 @@ class ChangeBrief(unittest.TestCase):
         brief = self.brief("C1", extra="held: 003, 004")
         page = str(self.proj / "lavish" / "change-C1.html")
         self.assertIn("Text by default", brief)
-        self.assertIn(f"npx -y lavish-axi poll {page}", brief)
+        self.assertIn(f"npx -y lavish-axi {page}", brief)
+        self.assertNotIn("lavish-axi poll", brief)  # the page takes no answers: they come through the engineering manager
+        self.assertIn("never poll it for them", brief)
         self.assertIn("localStorage is wiped by the sandbox", brief)
         self.assertIn("its `evidence` field", brief)
         self.assertIn("`compose decide --change C1`", brief)
         self.assertIn("struck through, `~~<old line>~~ (C1)`", brief)
-        self.assertIn('"keep it as is" strikes nothing', brief)
+        self.assertIn("an answer that keeps it strikes nothing", brief)
+        self.assertIn("`- C1-1: <question> (replaces <the D id it would replace>) - Recommendation:", " ".join(brief.split()))
         self.assertIn("Do not touch tasks, stories, or the plan", brief)
         self.assertTrue(brief.rstrip().endswith("held: 003, 004"))
 

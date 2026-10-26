@@ -34,14 +34,15 @@ class Gates(unittest.TestCase):
     def test_a_specced_story_passes_every_gate(self):
         self.assertEqual(fc_readiness.gates(fc_readiness.story_chain(tree())), [])
 
-    def test_open_cards_and_their_open_questions_block_but_readiness_lines_do_not(self):
+    def test_open_questions_on_the_map_and_under_open_questions_block_but_readiness_lines_do_not(self):
         mine = STORY + "\n## Open questions\n\n* Where does ENG-7 stop? (readiness check, 2026-10-25)\n"
         self.assertEqual(fc_readiness.gates(fc_readiness.story_chain(tree(story=mine))), [])
         theirs = mine + "* Which card brands?\n"
         self.assertEqual([x["question"] for x in fc_readiness.gates(fc_readiness.story_chain(tree(story=theirs)))],
                          ["ENG-7 has open questions waiting for the product owner (1)."])
-        carded = STORY + "\n## Not yet specified\n\nQ1. Which processor?\n"
-        self.assertEqual([x["item"] for x in fc_readiness.gates(fc_readiness.story_chain(tree(story=carded)))], ["cards"])
+        held = STORY + "\n## Not yet specified\n\n- Q1: Which processor? - Recommendation: Stripe - fees\n"
+        self.assertEqual([(x["item"], x["question"]) for x in fc_readiness.gates(fc_readiness.story_chain(tree(story=held)))],
+                         [("questions", "Answer the open questions under Not yet specified on ENG-7 with compose decide (0b).")])
 
     def test_deep_dive_on_the_epic_needs_its_tech_doc_linked_and_approved(self):
         epic = "## Intent\n\nPayments.\n"
@@ -267,7 +268,7 @@ class StoryReadiness(unittest.TestCase):
         story = STORY + "\n## Not yet specified\n\n- Which flow?\n\n## Open questions\n\n- Which card brands?\n"
         self.tree = tree(story=story, feature="## Intent\n\nA shop.\n")
         r = fc_readiness.story_readiness(self.repo, "ENG-7")
-        self.assertEqual({m["item"] for m in r["missing"]}, {"design", "cards", "open questions"})
+        self.assertEqual({m["item"] for m in r["missing"]}, {"design", "questions", "open questions"})
         self.assertEqual(self.updates, [])
 
     def test_a_multi_line_question_is_one_tagged_line(self):

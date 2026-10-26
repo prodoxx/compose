@@ -527,7 +527,7 @@ class FigmaJudge(unittest.TestCase):
 
 
 class FigmaCaps(unittest.TestCase):
-    """The capability preflight: plan limits recorded once, a blocking limit is one up-front card, never a failing write."""
+    """The capability preflight: plan limits recorded once, a blocking limit is one up-front open question, never a failing write."""
     def setUp(self):
         self.proj = Path(tempfile.mkdtemp()).resolve() / ".compose" / "p"
         (self.proj / "results").mkdir(parents=True)
@@ -560,7 +560,8 @@ class FigmaCaps(unittest.TestCase):
         self.assertIn("plan starter; pages per file 3; modes per collection 1; library publish no", out)
         self.assertIn("the file has 2 page(s) now", out)
         self.assertIn("BLOCKED variable modes: the design system needs 2 per collection (Light and Dark), the starter plan allows 1", out)
-        self.assertIn("raise ONE needs-user card", out)
+        self.assertIn("raise ONE open question", out)
+        self.assertNotIn("card", out)
         self.assertIn("measure them with the probe", out)
         self.assertEqual(self.caps()["plan"], "starter")
         self.assertEqual(self.caps()["source"], "table")
@@ -609,12 +610,12 @@ class FigmaCaps(unittest.TestCase):
             with self.assertRaises(SystemExit) as e:
                 fc.fc_figma.cmd_designcrews(SimpleNamespace(repo=".", project="p", only=None, print_=False, max=None, redo=False))
         self.assertIn("pages: the design needs 4 per file, the starter plan allows 3", str(e.exception))
-        self.assertIn("raise ONE needs-user card", str(e.exception))
+        self.assertIn("raise ONE open question", str(e.exception))
 
     def test_the_probe_and_the_publish_step_are_in_the_designer_brief_and_the_stored_caps_follow_it(self):
         brief = fc.fc_figma.DESIGNER_BRIEF.format(slug="p", wt="/w", feature="ENG-1", figma="AbCd")
         for text in ("Capability preflight", "compose figma check --project p --plan", "figma.createPage()", "addMode", "create_new_file", "compose-probe",
-                     "--pages <pages> --modes <modes>", "one needs-user card", "compose figma publish --project p --library", "`publish: none`", "`publish: ask`"):
+                     "--pages <pages> --modes <modes>", "the one open question", "compose figma publish --project p --library", "`publish: none`", "`publish: ask`"):
             self.assertIn(text, brief)
         wt = Path(tempfile.mkdtemp())
         for caps, line in ((None, "Figma capabilities: not checked yet"), (fc.fc_figma.fc_figmaplan.figma_caps("pro"), "Figma capabilities (table): plan professional")):
@@ -958,6 +959,10 @@ class FigmaConnectorBriefs(unittest.TestCase):
             self.assertIn("mcp__plugin_figma_figma__*", brief)
             self.assertIn("one ToolSearch select call", brief)
             self.assertIn("Never use another `plugin:*figma*` server", brief)
+
+    def test_designer_reports_open_questions_through_the_needs_user_gate(self):
+        designer = " ".join(fc.fc_figma.DESIGNER_BRIEF.format(slug="p", wt="/w", feature="ENG-1", figma="AbCd").split())
+        self.assertIn('`compose report --project p --as p-designer needs-user "<issue>: <n> questions <ids>; recommendation <one line>"`', designer)
 
     def test_designer_brief_reads_tokens_through_trail(self):
         designer = " ".join(fc.fc_figma.DESIGNER_BRIEF.format(slug="p", wt="/w", feature="ENG-1", figma="AbCd").split())

@@ -76,8 +76,8 @@ def caps_blockers(caps, need_pages=None, need_modes=DESIGN_SYSTEM_MODES):
         out.append(f"pages: the design needs {need_pages} per file, the {caps['plan']} plan allows {lim}")
     return out
 
-BLOCKED_CARD = ("BLOCKED by the Figma plan. Before any planning, raise ONE needs-user card with a recommendation: upgrade the plan, or design around the limit "
-                "(say what it costs: which tasks reword or merge). Rewording tasks around a limit before that answer is wasted if the plan is upgraded.")
+BLOCKED_QUESTION = ("BLOCKED by the Figma plan. Before any planning, raise ONE open question in needs-user with a recommendation: upgrade the plan, "
+                    "or design around the limit (say what it costs: which tasks reword or merge). Rewording tasks around a limit before that answer is wasted if the plan is upgraded.")
 
 def design_pages(tasks):
     """The distinct Figma pages the design tasks name in `nodes:` (<page>/<name>)."""
@@ -106,11 +106,11 @@ PROBE_STEPS = ("Capability preflight, once, before any plan, story, or task; nev
                "   c. BLOCKED, or an unknown tier: measure before raising anything. Load `figma:figma-create-new-file`, create a scratch file `compose-probe` with `create_new_file`, "
                "run this once with `use_figma` on it, then rerun b with its result added as `--pages <pages> --modes <modes>`:\n"
                "   " + PROBE_SCRIPT.replace("{", "{{").replace("}", "}}").replace("\n", "\n   ") + "\n"
-               "   d. Still BLOCKED: the check prints the one needs-user card to raise now (upgrade vs design around), before planning. After an upgrade, rerun b.\n"
+               "   d. Still BLOCKED: the check prints the one open question to raise now (upgrade vs design around), before planning. After an upgrade, rerun b.\n"
                "   Plan inside the Figma capabilities line it leaves under the brief, and put that line in the feature's Linear Decisions.")
 PUBLISH_STEP = ("Before you ask the product owner to publish a library, run `compose figma publish --project {slug} --library <library url or key> [--keys <component keys the consumer needs>]` "
                 "and obey its first line: `publish: none` means nothing is pending, so do not ask (say \"nothing to publish\" and carry on); `publish: open` means an ask is already out, "
-                "so add to it and do not ask again; only `publish: ask` may reach the product owner, once per review round, batched with that round's other cards. "
+                "so add to it and do not ask again; only `publish: ask` may reach the product owner, once per review round, batched with that round's other questions. "
                 "Never assert that a publish is pending or done without that line.")
 
 PUBLISH_SLACK = timedelta(minutes=2)  # a publish and the file edit it carries land a moment apart
@@ -148,7 +148,7 @@ def publish_ruling(data, library, keys, api, withdraw=False):
     caps = data.get("figma_caps") or {}
     if caps and not caps.get("library_publish", True):
         return (f"publish: none\nthe {caps['plan']} plan cannot publish a library: do not ask; keep the library and its consumers in one file, "
-                "or raise the upgrade card"), data
+                "or raise the upgrade question"), data
     try:
         verdict, reason, last = publish_state(library, keys, api)
     except RuntimeError as e:
@@ -176,6 +176,6 @@ def capabilities_report(data, plan, pages, modes, pages_now, need_pages, need_mo
     lines = [caps_line(caps) + (f"; the file has {pages_now} page(s) now" if pages_now else "")]
     blocked = caps_blockers(caps, need_pages, DESIGN_SYSTEM_MODES if need_modes is None else need_modes)
     if blocked:
-        lines += [f"BLOCKED {b}" for b in blocked] + [BLOCKED_CARD + ("" if caps["source"] == "probe" else
-                 " The limits are the tier's predicted ones: measure them with the probe (brief step 3c) before raising the card.")]
+        lines += [f"BLOCKED {b}" for b in blocked] + [BLOCKED_QUESTION + ("" if caps["source"] == "probe" else
+                 " The limits are the tier's predicted ones: measure them with the probe (brief step 3c) before raising the question.")]
     return lines, bool(blocked)
