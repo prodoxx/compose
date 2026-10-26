@@ -292,7 +292,8 @@ class FigmaJudge(unittest.TestCase):
             judge_task("ENG-6", "004", "Pay", [crit, "Has a card field"])]})
         doc = {"nodes": [{"id": "1:2", "type": "FRAME", "children": [
             {"id": "5:1", "type": "INSTANCE", "children": [{"id": "I5:1;7:2", "type": "RECTANGLE", "inInstance": "5:1"}]},
-            {"id": "1:3", "type": "RECTANGLE"}]}]}
+            {"id": "1:3", "type": "RECTANGLE", "name": "Divider"}]}]}
+        doc["nodes"][0]["children"][0]["children"].append({"id": "I5:1;7:3", "type": "FRAME", "name": "Card header", "inInstance": "5:1"})
         (self.proj / "results" / "004.tree.txt").write_text("NODE 1:2\n" + json.dumps(doc, indent=2) + "\n")
         inside, loose = ({"violated": True, "evidence": f"Node {i} is type RECTANGLE, not INSTANCE or FRAME"} for i in ("I5:1;7:2", "1:3"))
         res = self.judge("004", {"Pay": [("NOT_MET", 0.9), ("NOT_MET", 0.9)]}, confirm=inside, reask="MET", blocks=True)
@@ -305,6 +306,11 @@ class FigmaJudge(unittest.TestCase):
         both = {"violated": True, "evidence": "Node 5:1 is an INSTANCE but I5:1;7:2 is type RECTANGLE, not INSTANCE or FRAME"}  # the instance itself is named too
         res = self.judge("004", {"Pay": [("NOT_MET", 0.9), ("NOT_MET", 0.9)]}, confirm=both, reask="MET", blocks=True)
         self.assertEqual(res["criteria"][0]["confirmed"], False)
+        for evidence, confirmed in (('Node 1:2 holds a FRAME "Card header" that is not a layout frame', False),  # a named container and a node named only by its name
+                                    ('Node 1:2 holds a RECTANGLE "Divider" that is not an instance', True),  # a hand-drawn node, though it also names the container
+                                    ('Node 1:2 holds a "Card header" and a "Divider"', True)):
+            res = self.judge("004", {"Pay": [("NOT_MET", 0.9), ("NOT_MET", 0.9)]}, confirm={"violated": True, "evidence": evidence}, reask="MET", blocks=True)
+            self.assertEqual(res["criteria"][0]["confirmed"], confirmed, evidence)
 
     def test_a_confirm_error_blocks_with_no_re_ask(self):
         res = self.judge("004", {"Pay": [("NOT_MET", 0.9)]}, fail=RuntimeError("down"), reask="MET", blocks=True)
