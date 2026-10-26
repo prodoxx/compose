@@ -696,6 +696,24 @@ class LinearCommentLabelsDoc(unittest.TestCase):
         self.assertEqual(self.run_verb("doc", "list"), ["d1 2026-10-18 PRD", "d2 2026-10-17 Architecture"])
         self.assertEqual(self.sent("project(id: $id) { documents(first: 100, after: $after)"), [{"id": "p1", "after": None}, {"id": "p1", "after": "c1"}])
 
+    def doc_pages(self):
+        return [{"pageInfo": {"hasNextPage": True, "endCursor": "c1"}, "nodes": [{"id": "d1", "title": "PRD", "updatedAt": "2026-10-18T17:15:38.008Z", "url": "https://linear.app/d1"}]},
+                {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": [{"id": "d2", "title": "Architecture", "updatedAt": "2026-10-17T09:00:00.000Z", "url": "https://linear.app/d2"}]}]
+
+    def test_doc_list_plain_output_is_unchanged_when_the_url_is_read(self):
+        self.pages = self.doc_pages()
+        with redirect_stdout(io.StringIO()) as out:
+            fc.fc_linear_cmd.verb_doc(self.a("doc", "list"))
+        self.assertEqual(out.getvalue(), "d1 2026-10-18 PRD\nd2 2026-10-17 Architecture\n")
+        self.assertTrue(all("nodes { id title updatedAt url }" in q for q, _ in self.calls if "documents(" in q))
+
+    def test_doc_list_json_prints_one_list_with_every_page_and_the_url(self):
+        self.pages = self.doc_pages()
+        with redirect_stdout(io.StringIO()) as out:
+            fc.fc_linear_cmd.verb_doc(self.a("doc", "list", json=True))
+        self.assertEqual(json.loads(out.getvalue()), [{"id": "d1", "updatedAt": "2026-10-18T17:15:38.008Z", "title": "PRD", "url": "https://linear.app/d1"},
+                                                      {"id": "d2", "updatedAt": "2026-10-17T09:00:00.000Z", "title": "Architecture", "url": "https://linear.app/d2"}])
+
     def test_doc_update_sets_the_title_and_each_body_flag_on_the_read_content(self):
         content, sent = "# PRD\n\n## Plan\n\nold\n\n## Notes\n\nkeep\n", lambda: [v["in"] for v in self.sent("documentUpdate(id: $id, input: $in) { success }")]
         self.doc = {"id": "did", "title": "PRD", "content": content, "url": self.DOC_URL, "project": {"id": "p1", "name": "Shop"}}
