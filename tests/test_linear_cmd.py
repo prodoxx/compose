@@ -341,9 +341,21 @@ class LinearCreate(unittest.TestCase):
 
     def test_create_sends_every_flag_then_sets_the_blockers(self):
         (body := self.repo / "body.md").write_text("Steps.")
-        sent, issue, blocked = self.create(file=str(body), parent="ENG-1", state="todo", label=["BUG"], blocked_by="ENG-2,ENG-3")
+        sent, issue, blocked = self.create(file=str(body), parent="ENG-1", state="todo", label=["BUG"], blocked_by=["ENG-2,ENG-3"])
         self.assertEqual(sent, [{"teamId": "t1", "projectId": "p1", "title": "Fix it", "description": "Steps.", "parentId": "parent-id", "stateId": "s1", "labelIds": ["l1"]}])
         issue.assert_any_call("ENG-1"); blocked.assert_called_once_with({"id": "new-id"}, ["ENG-2", "ENG-3"])
+
+    def test_a_repeated_blocked_by_keeps_every_blocker(self):
+        # a planner passed --blocked-by twice to create and only the last blocker was linked
+        import compose
+        got = []
+        argv = ["compose", "linear", "create", "--title", "T", "--blocked-by", "ENG-2", "--blocked-by", "ENG-3,ENG-4"]
+        with mock.patch.object(compose.fc_linear_cmd, "cmd_linear", side_effect=lambda a: got.append(a.blocked_by)), mock.patch("sys.argv", argv), \
+             mock.patch.object(compose.fc_proc, "nice_floor"), mock.patch.object(compose.fc_proc, "on_termination"):  # the parse alone, not the process setup
+            compose.main()
+        self.assertEqual(fc.fc_linear_cmd.ids(got[0]), ["ENG-2", "ENG-3", "ENG-4"])
+        _, _, blocked = self.create(blocked_by=got[0])
+        blocked.assert_called_once_with({"id": "new-id"}, ["ENG-2", "ENG-3", "ENG-4"])
 
     def test_priority_takes_a_name_or_linears_number_on_create_and_update(self):
         for given, want in (("urgent", 1), ("High", 2), ("medium", 3), ("low", 4), ("none", 0), ("0", 0), ("4", 4)):
@@ -432,14 +444,14 @@ class LinearUpdate(unittest.TestCase):
         self.assertEqual(self.calls, [])
 
     def test_blockers_are_set_on_the_read_issue(self):
-        sent, _, blocked = self.update(blocked_by="ENG-2,ENG-3")
+        sent, _, blocked = self.update(blocked_by=["ENG-2,ENG-3"])
         self.assertEqual((sent, blocked.call_args.args), (None, (self.issue, ["ENG-2", "ENG-3"])))  # no empty issueUpdate before them
-        (blocked := self.update(blocked_by="")[2]).assert_called_once(); self.assertEqual(blocked.call_args.args[0], self.issue); self.assertFalse([x for x in blocked.call_args.args[1] if x])
-        self.assertEqual(self.update(blocked_by="ENG-2", title="T")[0], {"title": "T"})
+        (blocked := self.update(blocked_by=[""])[2]).assert_called_once(); self.assertEqual(blocked.call_args.args[0], self.issue); self.assertFalse([x for x in blocked.call_args.args[1] if x])
+        self.assertEqual(self.update(blocked_by=["ENG-2"], title="T")[0], {"title": "T"})
 
     def test_a_body_file_without_a_body_flag_refuses_and_writes_nothing(self):
         (self.repo / "brief.md").write_text("## Goal\nnew brief\n")
-        for kw in ({}, {"title": "T"}, {"blocked_by": "ENG-2"}):
+        for kw in ({}, {"title": "T"}, {"blocked_by": ["ENG-2"]}):
             self.assertEqual(self.fails(fc.fc_linear_cmd.verb_update, self.args("update", "ENG-7", file=str(self.repo / "brief.md"), **kw)),
                              (1, "update --file needs --section, --append, or --description"))
         self.assertEqual(self.calls, [])
@@ -839,9 +851,9 @@ class LinearNoProject(unittest.TestCase):
             return writes[:], out.getvalue().splitlines()
         self.assertEqual(run(add_blocked_by=["ENG-4", "ENG-2,ENG-5"]), ([("create", "u-ENG-4"), ("create", "u-ENG-5")], ["updated ENG-7"]))
         self.assertEqual(run(drop_blocked_by=["ENG-3"]), ([("delete", "r3")], ["updated ENG-7"]))
-        self.assertEqual(run(blocked_by="ENG-4"), ([("create", "u-ENG-4"), ("delete", "r2"), ("delete", "r3")],
+        self.assertEqual(run(blocked_by=["ENG-4"]), ([("create", "u-ENG-4"), ("delete", "r2"), ("delete", "r3")],
                                                    ["updated ENG-7", "no longer blocked by: ENG-2, ENG-3 (--add-blocked-by adds and keeps the rest)"]))
-        self.assertEqual(self.fails(fc.fc_linear_cmd.verb_update, self.args("update", "ENG-7", blocked_by="ENG-4", add_blocked_by=["ENG-5"])),
+        self.assertEqual(self.fails(fc.fc_linear_cmd.verb_update, self.args("update", "ENG-7", blocked_by=["ENG-4"], add_blocked_by=["ENG-5"])),
                          (1, "update takes --blocked-by (the whole list) or --add-blocked-by/--drop-blocked-by, not both"))
         self.assertEqual(self.fails(fc.fc_linear_cmd.cmd_linear, self.args("create", title="T", add_blocked_by=["ENG-5"])),
                          (1, "--add-blocked-by and --drop-blocked-by change an existing issue: compose linear update <id> takes them, and create takes --blocked-by"))
@@ -851,5 +863,5 @@ class LinearNoProject(unittest.TestCase):
         for given, want in (("", []), ("NEB-1,,NEB-2", ["NEB-1", "NEB-2"]), (",NEB-3,", ["NEB-3"])):
             with self.subTest(given=given):
                 with mock.patch.object(fc.fc_linear, "linear_blocked_by", return_value=[]) as blocked, redirect_stdout(io.StringIO()):
-                    fc.fc_linear_cmd.verb_update(self.args("update", "ENG-7", blocked_by=given))
+                    fc.fc_linear_cmd.verb_update(self.args("update", "ENG-7", blocked_by=[given]))
                 blocked.assert_called_once_with(self.issue, want)

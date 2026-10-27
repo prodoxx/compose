@@ -267,8 +267,8 @@ def verb_create(a):
     if a.parent:
         inp["parentId"] = fc_linear.linear_issue(a.parent)["id"]
     issue = fc_linear.linear_gql("mutation($in: IssueCreateInput!) { issueCreate(input: $in) { issue { id identifier } } }", {"in": inp})["issueCreate"]["issue"]
-    if a.blocked_by:
-        fc_linear.linear_blocked_by({"id": issue["id"]}, a.blocked_by.split(","))
+    if ids(a.blocked_by):  # repeated or comma-separated: every one is a blocker
+        fc_linear.linear_blocked_by({"id": issue["id"]}, ids(a.blocked_by))
     print(f"created {issue['identifier']}")
 
 def ids(values):
@@ -305,7 +305,7 @@ def verb_update(a):
             await_write(lambda: fc_linear.linear_gql("query($id: String!) { issue(id: $id) { description } }", {"id": issue["id"]})["issue"]["description"], issue["description"], inp["description"])
     dropped = []
     if a.blocked_by is not None:
-        dropped = fc_linear.linear_blocked_by(issue, ids([a.blocked_by]))
+        dropped = fc_linear.linear_blocked_by(issue, ids(a.blocked_by))
     elif add or drop:
         fc_linear.linear_blocked_by(issue, None, add=add, drop=drop)
     print(f"updated {issue['identifier']}")
