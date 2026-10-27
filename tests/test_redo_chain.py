@@ -100,23 +100,24 @@ class RedoMidChain(unittest.TestCase):
         self.assertEqual(self.git("show", "fast/p/005:c.txt"), "twelve")
 
     def test_a_stacked_task_rebases_only_the_layers_through_its_dependency_and_leaves_the_ones_above_for_the_redone_layer(self):
-        # 005 sits on 012 without needing it. run --only 011,012 --redo --no-stack: while 012 is rebuilt on the new 011, 005 keeps
-        # the old 011 and 012 (moving it onto 011 would leave it off 012 for good, as no stack pass follows)
+        # 013 sits on 012 without needing it (its id keeps it above 012: a lower id would put it right above 010).
+        # run --only 011,012 --redo --no-stack: while 012 is rebuilt on the new 011, 013 keeps the old 011 and 012 (moving it onto 011 would leave it off 012 for good, as no stack pass follows)
+        self.git("branch", "-m", "fast/p/005", "fast/p/013")
         tasks = json.loads((self.proj / "results" / "tasks.json").read_text())
-        tasks["tasks"] = [{**t, "after": {"005": "010"}.get(t["id"], t["after"])} for t in tasks["tasks"]]
+        tasks["tasks"] = [{**t, "id": "013" if t["id"] == "005" else t["id"], "after": "010" if t["id"] == "005" else t["after"]} for t in tasks["tasks"]]
         (self.proj / "results" / "tasks.json").write_text(json.dumps(tasks))
         fc.fc_worktree.replace_branch(self.repo, self.proj, "fast/p/011")
         self.layer("011", "fast/p/010", "c.txt", "new\n")
         fc.fc_worktree.replace_branch(self.repo, self.proj, "fast/p/012")
-        above = self.git("rev-parse", "fast/p/005")
+        above = self.git("rev-parse", "fast/p/013")
         base, _ = fc.fc_implement.task_base(self.repo, self.proj, {"id": "012", "after": "011"})
         self.assertEqual(base, "fast/p/011")
-        self.assertEqual(self.git("rev-parse", "fast/p/005"), above)
+        self.assertEqual(self.git("rev-parse", "fast/p/013"), above)
         self.layer("012", "fast/p/011", "012.txt", "new\n")
         chain = fc.fc_layers.linearize(self.repo, self.proj, "main", fc.fc_worktree.stack_worktree(self.repo, self.proj, "main"))
         self.assertEqual(fc.fc_layers.STACK_STOP, "")
-        self.assertEqual(chain, [f"fast/p/{t}" for t in ("010", "011", "012", "005")])
-        self.assertEqual(self.git("log", "--format=%s", "main..fast/p/005"), "task 005\ntask 012\ntask 011\ntask 010")
+        self.assertEqual(chain, [f"fast/p/{t}" for t in ("010", "011", "012", "013")])
+        self.assertEqual(self.git("log", "--format=%s", "main..fast/p/013"), "task 005\ntask 012\ntask 011\ntask 010")
         self.assertEqual(self.git("for-each-ref", "refs/compose/replaced/"), "")
 
     def test_layers_above_a_replaced_layer_that_moved_up_the_chain_drop_its_old_commit(self):
@@ -149,19 +150,20 @@ class RedoMidChain(unittest.TestCase):
         self.assertEqual(self.git("show", "fast/p/013:012.txt"), "new")
 
     def test_a_layer_built_on_layers_restacked_since_replays_only_its_own_commit_onto_the_layer_below_it(self):
-        # 005 (after 012) was built while 010-012 sat on main; a later pass put 004 below them and 013 above 012, then 005 passed
+        # 014 (after 012; its id keeps it above 013, which a lower id would not) was built while 010-012 sat on main; a later pass put 004 below them and 013 above 012, then 014 passed
         self.git("branch", "-m", "fast/p/005", "held")
         tasks = json.loads((self.proj / "results" / "tasks.json").read_text())
+        tasks["tasks"] = [{**t, "id": "014" if t["id"] == "005" else t["id"]} for t in tasks["tasks"]]
         tasks["tasks"] += [{"id": "004", "after": ""}, {"id": "013", "after": "012"}]
         (self.proj / "results" / "tasks.json").write_text(json.dumps(tasks))
         self.layer("004", "main", "004.txt", "new\n")
         fc.fc_layers.linearize(self.repo, self.proj, "main", fc.fc_worktree.stack_worktree(self.repo, self.proj, "main"))
         self.layer("013", "fast/p/012", "012.txt", "thirteen\n")
-        self.git("branch", "-m", "held", "fast/p/005")
+        self.git("branch", "-m", "held", "fast/p/014")
         chain = fc.fc_layers.linearize(self.repo, self.proj, "main", fc.fc_worktree.stack_worktree(self.repo, self.proj, "main"))
         self.assertEqual(fc.fc_layers.STACK_STOP, "")
-        self.assertEqual(chain, [f"fast/p/{t}" for t in ("004", "010", "011", "012", "013", "005")])
-        self.assertEqual(self.git("log", "--format=%s", "fast/p/013..fast/p/005"), "task 005")
+        self.assertEqual(chain, [f"fast/p/{t}" for t in ("004", "010", "011", "012", "013", "014")])
+        self.assertEqual(self.git("log", "--format=%s", "fast/p/013..fast/p/014"), "task 005")
 
     def test_a_task_built_on_a_low_layer_goes_to_its_own_place_and_moves_no_layer(self):
         # 006 after 010 starts on 010, as a run bases it, so it counts as many commits as 011; its place is still after 005
