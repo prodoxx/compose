@@ -315,6 +315,15 @@ class ProductPlace(unittest.TestCase):
         self.assertEqual(fc_plan.replace_product_section(out, "## Waves", "v"), fc_plan.replace_section(out, "## Waves", "v"))  # present: replaced in place
 
 
+class LinearMarkdown(unittest.TestCase):
+    def test_what_linear_rewrites_on_save_is_the_same_text(self):
+        ours = "## Tracks\n\n- A: [NEB-7](https://linear.app/x/issue/NEB-7/a-(b))\n  + nested  \n"
+        theirs = "## Tracks\n\n* A: [NEB-7](<https://linear.app/x/issue/NEB-7/a-(b)>)\n  * nested"  # bullets as *, link targets in <>, trailing space gone
+        self.assertTrue(fc_plan.same_markdown(ours, theirs))
+        self.assertFalse(fc_plan.same_markdown(ours, theirs.replace("NEB-7/a", "NEB-8/a")))
+        self.assertFalse(fc_plan.same_markdown("1. A\n2. B", "1. B\n2. A"))  # order is content
+        self.assertEqual(fc_plan.linear_markdown("x - y\n-z"), "x - y\n-z")  # a dash that is no bullet stays
+
 class ProductSeed(unittest.TestCase):
     def setUp(self):
         self.f = {f["id"]: f for f in (feat("NEB-7"), feat("NEB-9", "Todo", ("NEB-7", "Todo")), feat("NEB-12", "Todo", ("NEB-7", "Todo")),

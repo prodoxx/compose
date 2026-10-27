@@ -127,6 +127,17 @@ class OneLevel(unittest.TestCase):
         self.assertNotIn("day", ft.ORDER_FILTER)
 
 
+    def test_a_verified_sibling_story_counts_as_a_level(self):
+        # story 2 builds on story 1 verified and unmerged; at night story 3 on story 2 would be a second level
+        story = lambda ident, state, *blockers: {"id": ident, "state": state, "blockers": [{"id": b, "state": st, "labels": []} for b, st in blockers]}
+        plan = {"features": {"NEB-1": {**self.feature("NEB-1", "In Progress"), "stories": [
+            story("NEB-2", "In Review"), story("NEB-3", "In Review", ("NEB-2", "In Review")), story("NEB-4", "Todo", ("NEB-3", "In Review")),
+            story("NEB-5", "Todo", ("NEB-2", "In Review")), story("NEB-6", "Todo", ("NEB-2", "Done"))]},
+            "NEB-9": {**self.feature("NEB-9", "Todo", [("NEB-1", "In Review")]), "stories": [story("NEB-10", "Todo", ("NEB-11", "In Review")), story("NEB-11", "In Review")]}}}
+        entries = [self.entry(i, "NEB-1") for i in ("NEB-4", "NEB-5", "NEB-6")] + [self.entry("NEB-10", "NEB-9")]
+        self.assertEqual([ns.unmerged_stories(plan, e) for e in entries], [2, 1, 0, 1])
+        self.assertEqual([e["id"] for e in ns.one_level(plan, entries, {"mode": "night", "dispatched": {}})], ["NEB-5", "NEB-6"])
+
 class UsageWaits(unittest.TestCase):
     def setUp(self):
         self.panes, self.prompted = {}, []

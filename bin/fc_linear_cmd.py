@@ -139,7 +139,7 @@ def await_write(read, old, new):
     """Return once `read()` no longer gives `old`, the text a body write replaced.
     Linear can serve a body from before the last write for several seconds, and the next section write starts from that read, so it would put the whole body back without this one."""
     old = (old or "").strip()
-    if (new or "").strip() == old:
+    if fc_plan.same_markdown(new, old):
         return
     deadline = time.monotonic() + SETTLE_SECONDS
     while (read() or "").strip() == old:

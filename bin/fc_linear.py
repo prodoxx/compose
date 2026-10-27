@@ -375,29 +375,36 @@ def linear_reconcile(proj, verified=False):
 
 NEEDS_SHAPING = "needs-shaping"
 
-def task_holds(issue):
-    """The unfinished blockers outside the issue that hold back any of its children (a story's tasks), each named by its
-    parent story (by itself when it has none), in first-seen order. A child read without its relations holds nothing."""
+def freed(b, its_feature, feature):
+    """A blocker no longer holds back what it blocks: finished (fc_tasks.blocker_finished), or verified (In Review) under the same
+    feature, whose stack the blocked work builds on (fc_plan.base_built)."""
+    s, ls = b["state"]["name"] or "", [l["name"] for l in b["labels"]["nodes"]]
+    return fc_tasks.blocker_finished(s, ls) or (feature is not None and its_feature == feature and fc_plan.base_built(s, ls))
+
+def task_holds(issue, feature=None):
+    """The blockers outside the issue that still hold back any of its children (a story's tasks; freed, with `feature` the story's
+    feature), each named by its parent story (by itself when it has none), in first-seen order. A child read without its relations holds nothing."""
     kids = [c for c in ((issue.get("children") or {}).get("nodes") or ()) if ((c.get("state") or {}).get("name") or "").lower() not in fc_tasks.CANCELED]
     own, out = {c.get("identifier") for c in kids} | {issue.get("identifier")}, []
     for r in (r for c in kids for r in ((c.get("inverseRelations") or {}).get("nodes") or ())):
         b = r["issue"]
         who = (b.get("parent") or {}).get("identifier") or b["identifier"]
         if (r["type"] == "blocks" and b["identifier"] not in own and who not in own and who not in out
-                and not fc_tasks.blocker_finished(b["state"]["name"], [l["name"] for l in b["labels"]["nodes"]])):
+                and not freed(b, ((b.get("parent") or {}).get("parent") or {}).get("identifier"), feature)):
             out.append(who)
     return out
 
-def ready_ids(issues):
+def ready_ids(issues, parent=None):
     """The identifiers, in input order, of the issues that can start now: state Todo or Backlog and every `blocks`
-    blocker finished (Done or Canceled, or In Review carrying the Design label), none of their tasks waiting on another
-    story's (task_holds), and none carries the needs-shaping label."""
+    blocker freed (Done or Canceled, In Review carrying the Design label, or In Review under the same `parent`: a story
+    verified in its feature's stack frees its siblings), none of their tasks waiting on another story's (task_holds), and
+    none carries the needs-shaping label."""
     return [i["identifier"] for i in issues
             if (i["state"]["name"] or "").lower() in ("todo", "backlog")
             and NEEDS_SHAPING not in [l["name"].lower() for l in i["labels"]["nodes"]]
-            and all(fc_tasks.blocker_finished(r["issue"]["state"]["name"], [l["name"] for l in r["issue"]["labels"]["nodes"]])
+            and all(freed(r["issue"], (r["issue"].get("parent") or {}).get("identifier"), parent)
                     for r in i["inverseRelations"]["nodes"] if r["type"] == "blocks")
-            and not task_holds(i)]
+            and not task_holds(i, parent)]
 
 def open_questions(description):
     """The list items (`-` or `*` bullets) of the `## Open questions` section: an H2 heading with an optional suffix, running to the
@@ -407,18 +414,18 @@ def open_questions(description):
     items = [b.group(1) for b in map(re.compile(r"^\s*[-*]\s+(.*\S)").match, (m.group(1) if m else "").splitlines()) if b]
     return [i for i in items if i.strip().rstrip(".").lower() != "none"]
 
-LINEAR_READY_TREE = """query($id: String!) { issue(id: $id) { team { labels { nodes { id name } } }
-  children { nodes { ...ReadyNode } } parent { children { nodes { ...ReadyNode } } }
+LINEAR_READY_TREE = """query($id: String!) { issue(id: $id) { identifier team { labels { nodes { id name } } }
+  children { nodes { ...ReadyNode } } parent { identifier children { nodes { ...ReadyNode } } }
   inverseRelations(first: 50) { nodes { type issue { identifier state { name } labels { nodes { name } } } } } } }
 fragment ReadyNode on Issue { id identifier title description state { name } labels { nodes { id name } }
-  children { nodes { identifier state { name } inverseRelations(first: 50) { nodes { type issue { identifier state { name } labels { nodes { name } } parent { identifier } } } } } }
-  inverseRelations(first: 250) { nodes { type issue { identifier state { name } labels { nodes { name } } } } } }"""
+  children { nodes { identifier state { name } inverseRelations(first: 50) { nodes { type issue { identifier state { name } labels { nodes { name } } parent { identifier parent { identifier } } } } } } }
+  inverseRelations(first: 250) { nodes { type issue { identifier state { name } labels { nodes { name } } parent { identifier } } } } }"""
 
 def linear_mark_ready(feature):
     """Set the team's Ready label on the feature's children that can start now and take it off the rest, the same for the
     epic's children when the feature has one; one read, then one update per issue whose labels change. A story with no task
     that is not Canceled has nothing to start, so it is not ready; a feature needs no story. Returns the ready issues, the
-    feature's children first. No story is ready while a feature that blocks this one is not built yet. An issue with open questions waits."""
+    feature's children first. No story is ready while a feature that blocks this one is not built yet; a sibling verified (In Review) blocks nothing. An issue with open questions waits."""
     tree = linear_gql(LINEAR_READY_TREE, {"id": feature})["issue"]
     ready_label = next((l["id"] for l in tree["team"]["labels"]["nodes"] if l["name"].lower() == "ready"), None)
     if not ready_label:
@@ -427,11 +434,11 @@ def linear_mark_ready(feature):
     out = []
     waiting = any(r["type"] == "blocks" and not fc_plan.base_built(r["issue"]["state"]["name"] or "", [l["name"] for l in r["issue"]["labels"]["nodes"]])
                   for r in tree["inverseRelations"]["nodes"])
-    groups = [(tree["children"]["nodes"], True), *([(tree["parent"]["children"]["nodes"], False)] if tree["parent"] else [])]
-    for group, stories in groups:
+    groups = [(tree["children"]["nodes"], True, tree.get("identifier")), *([(tree["parent"]["children"]["nodes"], False, tree["parent"].get("identifier"))] if tree["parent"] else [])]
+    for group, stories, parent in groups:
         cut = {n["identifier"] for n in group if any((c["state"]["name"] or "").lower() != "canceled" for c in n["children"]["nodes"])}
         asking = {n["identifier"] for n in group if open_questions(n.get("description"))}
-        ready = {i for i in ready_ids(group) if (i in cut or not stories) and i not in asking and not (stories and waiting)}
+        ready = {i for i in ready_ids(group, parent) if (i in cut or not stories) and i not in asking and not (stories and waiting)}
         for n in group:
             have = [l["id"] for l in n["labels"]["nodes"]]
             if n["identifier"] in ready:
@@ -472,7 +479,7 @@ def linear_plan(feature):
     content = doc["content"]
     for heading, text in fc_plan.plan_sections(lanes).items():
         content = fc_plan.replace_section(content, heading, text)
-    if content.rstrip("\n") != doc["content"].rstrip("\n"):
+    if not fc_plan.same_markdown(content, doc["content"]):
         linear_gql("mutation($id: String!, $content: String!) { documentUpdate(id: $id, input: {content: $content}) { success } }", {"id": doc["id"], "content": content})
 
 def ready_line(items):

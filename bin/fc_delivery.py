@@ -171,7 +171,7 @@ def write_doc(doc, build):
         fresh = read()
         if fresh == base:
             content = build(base)
-            if content.rstrip("\n") != base.rstrip("\n"):
+            if not fc_plan.same_markdown(content, base):
                 fc_linear.linear_gql(DOC_UPDATE, {"id": doc["id"], "content": content})
                 fc_linear_cmd.await_write(read, base, content)
             return content

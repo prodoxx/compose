@@ -77,10 +77,19 @@ def unmerged_depth(plan, feature, seen=()) -> int:
               if fc_plan.base_built(b["state"], b.get("labels") or []) and not fc_tasks.blocker_finished(b["state"], b.get("labels") or [])]
     return 1 + max((unmerged_depth(plan, b["id"], seen) for b in deeper if b["id"] not in seen), default=0) if deeper else 0
 
+def unmerged_stories(plan, entry, seen=()) -> int:
+    """How many verified-but-unmerged (In Review) stories of its own feature the entry builds on, one above another: 0 with none."""
+    stories = {s["id"]: s for s in (plan["features"].get(entry["feature"]) or {}).get("stories") or []}
+    seen = {*seen, entry["id"]}
+    deeper = [b["id"] for b in (stories.get(entry["id"]) or {}).get("blockers") or [] if b["id"] in stories and b["id"] not in seen
+              and fc_plan.base_built(b["state"], b.get("labels") or []) and not fc_tasks.blocker_finished(b["state"], b.get("labels") or [])]
+    return 1 + max(unmerged_stories(plan, {**entry, "id": b}, seen) for b in deeper) if deeper else 0
+
 def one_level(plan, entries, state) -> list:
-    """At night, only stories at most one unmerged level deep, plus those already in flight."""
+    """At night, only stories at most one unmerged level deep, counting the features and the stories of its own feature they
+    build on, plus those already in flight."""
     live = set(fc_factoryturn.in_flight(plan, state))
-    return [e for e in entries if e["id"] in live or unmerged_depth(plan, e["feature"]) <= 1]
+    return [e for e in entries if e["id"] in live or unmerged_depth(plan, e["feature"]) + unmerged_stories(plan, e) <= 1]
 
 fc_factoryturn.ORDER_FILTER["night"] = one_level
 
