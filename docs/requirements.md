@@ -115,7 +115,7 @@ These need no install.
 | Tool | Used for |
 |---|---|
 | `caffeinate` (macOS) | keeps the Mac awake while a run, resume, verify, watch, or live teammate works (`caffeinate -dims -w <pid>`) |
-| `pmset` (macOS) | `doctor` and the start of a run warn when the Mac is on battery, because closing the lid sleeps it; `run`, `resume`, `verify`, and `crew start` stop on battery unless `--force` |
+| `pmset` (macOS) | `doctor` and the start of a run warn when the Mac is on battery, because closing the lid sleeps it; `run`, `resume`, `verify`, and `crew start` stop on battery at 10% or less unless `--force` |
 | docker | `doctor` and the start of a run warn about a container that keeps restarting, only when docker is installed and running |
 
 ## Environment variables

@@ -152,6 +152,8 @@ def status_lines(repo, state):
         lines.append(f'  no planning offers until {clock(state["declined_until"])[:5]}')
     return lines
 
+START_WAIT = 30  # seconds start waits for the new loop to take its lock or die, before it calls it started
+
 def _exited(pid):
     try:
         return os.waitpid(pid, os.WNOHANG)[0] == pid
@@ -168,7 +170,7 @@ def verb_start(a, repo):
         state["stopped"], state["pid"] = None, None  # the old pid would read as a lost loop until the new one takes the lock
         state["manager_pane"] = os.environ.get("HERDR_PANE_ID") or state["manager_pane"]
     pid = spawn_loop(repo)
-    for _ in range(30):  # the loop takes its lock a moment after it starts
+    for _ in range(START_WAIT * 10):  # the loop takes its lock a moment after it starts, longer on a loaded machine
         if running(repo):
             break
         if _exited(pid):

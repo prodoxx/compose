@@ -78,7 +78,7 @@ It also reports, all at once and with the fix for each, what would stop or spoil
 
 `run`, `resume`, and `verify` make the same checks at their start, so a run never stops later to ask about them.
 While they work, compose holds a macOS `caffeinate -dims -w <pid>` assertion so the Mac and its display stay awake, and releases it when the process ends.
-Closing the lid on battery still sleeps the Mac, which `caffeinate` cannot prevent: plug it in or leave the lid open. On battery, `run`, `resume`, `verify`, and `crew start` refuse to start and say so; `--force` starts anyway.
+Closing the lid on battery still sleeps the Mac, which `caffeinate` cannot prevent: plug it in or leave the lid open. On battery at 10% or less, `run`, `resume`, `verify`, and `crew start` refuse to start and say so; `--force` starts anyway.
 compose changes no power setting.
 Offline, `COMPOSE_NO_PREFLIGHT=1` skips the key calls, the gh check, and the machine warnings.
 

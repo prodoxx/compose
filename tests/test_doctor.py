@@ -579,8 +579,8 @@ class Preflight(unittest.TestCase):
 
     def test_a_mac_on_battery_stops_the_start_with_the_fix_unless_forced_and_doctor_only_warns(self):
         self.fake("gh", "gh version 2.94.0")
-        low = "the Mac is on battery at 62%: closing the lid sleeps it and the work stops, and it can die before the end; plug it in, or run again with --force to start anyway; `compose watch` says `event power=ac` once it is plugged in"
-        with self.serve(openrouter=Answer({}), linear=Answer({})), mock.patch.object(fc_checks, "battery_report", return_value="Now drawing from 'Battery Power'\n 62%; discharging"):
+        low = "the Mac is on battery at 6%: it can die before the work ends; plug it in, or run again with --force to start anyway; `compose watch` says `event power=ac` once it is plugged in"
+        with self.serve(openrouter=Answer({}), linear=Answer({})), mock.patch.object(fc_checks, "battery_report", return_value="Now drawing from 'Battery Power'\n 6%; discharging"):
             msg, _ = self.stop()
             self.assertEqual(msg.splitlines()[1:], ["  " + low])
             fc.fc_init.start_checks(self.repo, force=True)

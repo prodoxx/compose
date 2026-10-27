@@ -228,7 +228,7 @@ def main():
             s.add_argument("--only", help="comma-separated task ids: each task's own change, against the layer it sits on")
             s.add_argument("--range", help="<base>..<tip>: a change that is not a task branch, such as a merged feature; --only then names the tasks whose brief and criteria it is judged against")
         if name in ("run", "resume", "verify"):
-            s.add_argument("--force", action="store_true", help="start although the Mac runs on its battery, or (run, resume) the OpenRouter key's credit looks too low for the tasks that start at once")
+            s.add_argument("--force", action="store_true", help="start although the Mac's battery is nearly empty, or (run, resume) the OpenRouter key's credit looks too low for the tasks that start at once")
         if name == "resume":
             s.add_argument("--parallel", type=int, help="tasks at once (default: parallel in ~/.compose/config.json, else the halted run's)")
         if name == "done":
@@ -283,7 +283,7 @@ def main():
             s.add_argument("--print", dest="print_", action="store_true", help="print the briefs instead of starting builders")
             s.add_argument("--redo", action="store_true", help="with --only: reopen tasks finished by hand or passed, even In Review, for a new builder; their old result is kept as <id>.json.before-redo")
             s.add_argument("--max", type=int, help="most builders to start at once (default: design_concurrency in verify.json, else parallel in ~/.compose/config.json, else 3)")
-            s.add_argument("--force", action="store_true", help="start the builders although the Mac runs on its battery")
+            s.add_argument("--force", action="store_true", help="start the builders although the Mac's battery is nearly empty")
         if name == "architect":
             s.add_argument("--change", required=True, help="an open change of course, e.g. C2: its own page, asking only what the evidence questions; "
                                                           "shaping a feature is the engineering manager's brainstorm (sections/0b.md), not an architect")
@@ -295,7 +295,7 @@ def main():
             s.add_argument("--collect", action="store_true", help="cherry-pick every test-writing teammate's commits onto the project branch in task order")
             s.add_argument("--redo", action="store_true", help="rewrite the tests of passed tasks too, for a re-plan that changed their briefs (as run --redo)")
             s.add_argument("--parallel", type=int, help="writers to start at once, Claude Code ones too (default: parallel in ~/.compose/config.json, and claude_parallel for Claude writers)")
-            s.add_argument("--force", action="store_true", help="start the writers although the Mac runs on its battery")
+            s.add_argument("--force", action="store_true", help="start the writers although the Mac's battery is nearly empty")
         if name == "triage":
             s.add_argument("--only", help="comma-separated task ids (default: every passed task)")
         if name == "reflect":
@@ -336,7 +336,7 @@ def main():
             s.add_argument("--role", help="orchestrator (the team lead), architect, or a helper's job; the agent is named <slug>-<role>")
             s.add_argument("--title", help="tab label, e.g. the ticket's title")
             s.add_argument("--brief", help="what to do; `-` reads it from stdin")
-            s.add_argument("--force", action="store_true", help="stop: close it even though it has not reported done; start: start although the Mac runs on its battery")
+            s.add_argument("--force", action="store_true", help="stop: close it even though it has not reported done; start: start although the Mac's battery is nearly empty")
             s.add_argument("--cwd", help="start: run the session in its own new worktree of this repo (a plain folder: in it) instead of the project worktree")
             s.add_argument("--work-repo", help="start: work on its own new worktree of this repo from a session in the project worktree, so a repo Claude Code never trusted (the CLI's own checkout) never shows the trust prompt")
             s.add_argument("--model", help="start: claude:<model-id>, or a name under models.crew (e.g. small); default models.crew[<role>], then models.crew.default")

@@ -12,6 +12,7 @@ _saved
 _pane
 run_loop
 status_lines
+START_WAIT
 _exited
 verb_start
 verb_stop
