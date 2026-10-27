@@ -356,8 +356,8 @@ def yolo_mark(proj, events):
     return [e + hint if re.match(r"event crew=\S+ state=needs-user ", e) else e for e in events]
 
 def watch_filter(events, slug, sources, direct=(), others=()):
-    """`--from` names the teammates whose reports wake you (the engineering manager watches only its team lead); without it you get
-    everything except the team lead's own reports, which go up to the engineering manager. `direct` names the teammates that report to
+    """`--from` names the teammates whose reports wake you (the engineering manager watches only its team lead, lead_sources when it
+    names nobody); without it you get everything except the team lead's own reports, which go up to the engineering manager. `direct` names the teammates that report to
     this watcher (crew_reporting_to): a planner or designer the engineering manager started itself passes whatever `--from` says, so
     its needs-user and blocked reach the product owner (manager_attention) while the `--from orchestrator` watch runs. `others` names
     another engineering manager session's teammates (watch_scope): none of their lines wakes this one unless `--from` names them."""
@@ -391,6 +391,17 @@ def watch_scope(proj, snap):
     return ([n for n in fc_crew.crew_reporting_to(proj, "manager") if owner.get(n, mine) == mine],
             [n for n, by in owner.items() if by != mine])
 
+def lead_sources(proj, others=()):
+    """What an engineering manager's watch without `--from` listens to: its team lead, once the project has one (the `--from orchestrator`
+    watch), so a watch started bare never drops the team lead's needs-user, blocked and done. Not a team lead another live session
+    drives (`others`, watch_scope). The team lead's own watch runs with COMPOSE_ROLE, or from the pane its record names after a restart
+    lost that env, and keeps everything but its own reports."""
+    lead = fc_herdr.agent_name(proj.name, "orchestrator")
+    c = fc_crew.crew_record(proj, lead)
+    if os.environ.get("COMPOSE_ROLE") or not c or c.get("closed") or lead in others or crew_in_pane(proj, os.environ.get("HERDR_PANE_ID")) == lead:
+        return []
+    return [lead]
+
 def cmd_watch(a, rewake=False):
     """Sleep on the project until something a team lead must act on happens, print it, exit. Zero tokens while waiting:
     run it in the background and let its exit wake you. `--now` prints the current state as events and exits.
@@ -399,12 +410,13 @@ def cmd_watch(a, rewake=False):
     proj = fc_core.project_dir(a); repo = Path(a.repo).resolve()
     sources = [fc_herdr.agent_ref(proj.name, x.strip()) for x in (a.from_ or "").split(",") if x.strip()]
     key = watch_key()
-    quiet = is_quiet(a, proj, sources)
+    quiet = is_quiet(a, proj, sources or lead_sources(proj))
     if a.now:
         cur = watch_snapshot(repo, proj)
         empty = {"tasks": {}, "agents": {}, "run": cur["run"] or cur.get("ended"), "verify": None, "halt": None,
                  "crew": {n: r[:-1] for n, r in cur["crew"].items()}}  # each teammate's latest report, once
-        lines = yolo_mark(proj, watch_filter(watch_events(empty, cur, started=True), proj.name, sources, *watch_scope(proj, cur)))
+        direct, others = watch_scope(proj, cur)
+        lines = yolo_mark(proj, watch_filter(watch_events(empty, cur, started=True), proj.name, sources or lead_sources(proj, others), direct, others))
         if y := fc_tasks.yolo_state(proj):
             lines.insert(0, f"event {y['mode']}=on push={'yes' if y.get('push') else 'no'} since={y['since']!r} by={fc_tasks.yolo_by(y)!r} words={y.get('words', '')!r}")
         if cur["run"]:
@@ -441,7 +453,8 @@ def cmd_watch(a, rewake=False):
         scope = lambda snap: watch_scope(proj, snap)
         def look(after, stalls):
             lines = watch_events(before, after) + (owner_lines(proj.name, before, after) if not os.environ.get("COMPOSE_ROLE") else []) + load_events(proj, key)
-            return yolo_mark(proj, watch_filter(lines + stalls, proj.name, sources, *scope(after)))
+            direct, others = scope(after)
+            return yolo_mark(proj, watch_filter(lines + stalls, proj.name, sources or lead_sources(proj, others), direct, others))
         while True:
             time.sleep(a.interval)
             if rewake and os.getppid() != parent:

@@ -958,6 +958,27 @@ class ManagerSessions(unittest.TestCase):
         fc.fc_crew.write_report(self.proj, "hw-planner", "needs-user", "z")
         self.assertEqual(self.woke_on(self.watch(self.A, "planner")), ["hw-planner"])  # named in --from: it asked for it
 
+    def test_a_bare_watch_hears_its_own_team_lead_and_never_another_sessions(self):
+        """An engineering manager's watch started without `--from` is the `--from orchestrator` watch once a team lead exists, so
+        the team lead's needs-user, blocked and done wake it; another live session's team lead still does not."""
+        self.watch(self.A, now=True); self.watch(self.B, now=True)
+        fc.fc_crew.write_report(self.proj, ORCH, "needs-user", "4 open questions")
+        self.assertEqual(self.woke_on(self.watch(self.B)), [ORCH])
+        self.assertEqual(self.woke_on(self.watch(self.A)), [])
+
+    def test_the_team_leads_own_bare_watch_skips_its_reports_after_a_restart_lost_its_role(self):
+        """A team lead restored after a restart runs without COMPOSE_ROLE: its record's pane says who it is, so it never listens to itself."""
+        rec = self.proj / "results" / "crew" / f"{ORCH}.json"
+        rec.write_text(json.dumps({**json.loads(rec.read_text()), "pane": "w1:p7"}))
+        env = mock.patch.dict(os.environ, {k: v for k, v in os.environ.items() if k not in ("COMPOSE_ROLE", "HERDR_PANE_ID")}, clear=True); env.start(); self.addCleanup(env.stop)
+        self.assertEqual(fc.fc_watch.lead_sources(self.proj), [ORCH])
+        with mock.patch.dict(os.environ, {"HERDR_PANE_ID": "w1:p7"}):
+            self.assertEqual(fc.fc_watch.lead_sources(self.proj), [])
+        with mock.patch.dict(os.environ, {"COMPOSE_ROLE": "orchestrator"}):
+            self.assertEqual(fc.fc_watch.lead_sources(self.proj), [])
+        rec.write_text(json.dumps({**json.loads(rec.read_text()), "closed": "done"}))
+        self.assertEqual(fc.fc_watch.lead_sources(self.proj), [])
+
     def test_a_teammate_whose_session_ended_is_adopted(self):
         """B's session closed: its planner and team lead are anyone's, so a new engineering manager session picks the project up."""
         self.watch(self.A, "designer", now=True)

@@ -245,7 +245,7 @@ def main():
             s.add_argument("--takeover", action="store_true", help="watch from this session although another live engineering manager session drives the project (its teammates then report here)")
             s.add_argument("--attention", action="store_true", help="wake only for what needs attention (done, needs-user, blocked, tool-bug, a stall, payment, a crash, a sign-in screen); progress lines print in the same wake as the next one. The default for --from orchestrator")
             s.add_argument("--all", action="store_true", help="wake on every progress line too, even for --from orchestrator")
-            s.add_argument("--from", dest="from_", help="only these teammates wake you (roles or agent names, comma-separated); the engineering manager passes orchestrator, its team lead's role")
+            s.add_argument("--from", dest="from_", help="only these teammates wake you (roles or agent names, comma-separated); the engineering manager passes orchestrator, its team lead's role, and gets it by default once a team lead exists")
         if name == "status":
             s.add_argument("--history", nargs="?", type=int, const=fc_history.SHOWN, metavar="N", help=f"the last N (default {fc_history.SHOWN}) lines of this repository's run history (runs, task results, verify rounds), kept outside the worktrees, instead of the board")
             s.add_argument("--digest", action="store_true", help="one line per project: tasks done, run, last verify and why it failed, questions waiting")

@@ -31,6 +31,7 @@ INFO_HOLD
 POWER_EVERY
 watch_key
 watch_scope
+lead_sources
 cmd_watch
 cmd_rewake
 crew_in_pane
