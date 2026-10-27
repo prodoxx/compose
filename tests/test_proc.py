@@ -458,5 +458,37 @@ class Recorded(unittest.TestCase):
         ap.assert_not_called()
 
 
+class Detached(unittest.TestCase):
+    """A command that starts a child in a group of its own (Playwright's webServer does) leaves nothing running when it is killed."""
+
+    PARENT = ("import subprocess, time; "
+              "print(subprocess.Popen(['sleep', '60'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True).pid, flush=True); time.sleep(60)")
+
+    def gone(self, pid):
+        deadline = time.time() + 3
+        while time.time() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return True
+            time.sleep(0.1)
+        return False
+
+    def test_a_timed_command_that_times_out_takes_its_detached_child_with_it(self):
+        r = fc.fc_implement.timed(f"{sys.executable} -c \"{self.PARENT}\"", os.getcwd(), 1)
+        child = int(r.stdout.split()[0])
+        self.addCleanup(lambda: self.gone(child) or os.kill(child, 9))
+        self.assertEqual(r.returncode, 124)
+        self.assertTrue(self.gone(child), "the child in its own group is still running")
+
+    def test_kill_group_takes_the_detached_children_of_the_group_with_it(self):
+        p = subprocess.Popen([sys.executable, "-c", self.PARENT], stdout=subprocess.PIPE, text=True, start_new_session=True)
+        child = int(p.stdout.readline()); p.stdout.close()
+        self.addCleanup(lambda: self.gone(child) or os.kill(child, 9))
+        fc.fc_proc.kill_group(p.pid)
+        p.wait(5)
+        self.assertTrue(self.gone(child), "the child in its own group is still running")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -80,23 +80,54 @@ def run_limited(cmd, cwd=None, env=None, timeout=None):
         return subprocess.CompletedProcess(cmd, 124, e.stdout or "", err)
 
 
-def kill_group(pid):
-    """SIGTERM to the process group `pid`, SIGKILL after 5 s if it is still alive; a group already gone is not an error."""
+def children_outside(pid):
+    """Pids of the processes that descend from `pid` and sit in a group other than its own: a server a test runner starts in
+    a group of its own (Playwright's webServer), which a kill of the group does not reach. [] when `ps` is not there."""
     try:
-        os.killpg(pid, signal.SIGTERM)
+        rows = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,pgid="], capture_output=True, text=True, timeout=10).stdout.splitlines()
+    except (OSError, subprocess.SubprocessError):
+        return []
+    kids = {}
+    for row in rows:
+        if len(parts := row.split()) == 3 and all(x.isdigit() for x in parts):
+            kids.setdefault(int(parts[1]), []).append((int(parts[0]), int(parts[2])))
+    found, todo = [], [pid]
+    while todo:
+        for child, group in kids.get(todo.pop(), []):
+            todo.append(child)
+            if group != pid:
+                found.append(child)
+    return found
+
+
+def _signal(pid, sig, group=False):
+    """Send `sig` to a process, or to the group `pid` leads; False when it is gone (macOS says EPERM for a group of zombies)."""
+    try:
+        (os.killpg if group else os.kill)(pid, sig)
     except (ProcessLookupError, PermissionError):
+        return False
+    return True
+
+
+def kill_group(pid, proc=None):
+    """SIGTERM to the process group `pid` and to what it started in groups of their own, SIGKILL after 5 s to whatever is still
+    alive; a group already gone is not an error. `proc` is the Popen of the leader when the caller is its parent: it is reaped
+    while this waits, as a zombie leader keeps its group alive on Linux."""
+    outside = children_outside(pid)  # before the signal: once the leader is gone they are reparented and cannot be found
+    term = _signal(pid, signal.SIGTERM, group=True)
+    term = any([_signal(child, signal.SIGTERM) for child in outside]) or term
+    if not term:
         return
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
-        try:
-            os.killpg(pid, 0)
-        except (ProcessLookupError, PermissionError):  # gone, or (macOS) every member is a zombie: nothing alive left
+        if proc:
+            proc.poll()
+        if not any([_signal(pid, 0, group=True)] + [_signal(child, 0) for child in outside]):  # gone, or only zombies
             return
         time.sleep(0.1)
-    try:
-        os.killpg(pid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-        pass
+    for child in outside:
+        _signal(child, signal.SIGKILL)
+    _signal(pid, signal.SIGKILL, group=True)
 
 
 def stop():
