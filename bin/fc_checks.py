@@ -146,6 +146,7 @@ def chromium_installed():
     return (cache / versions[0] / f"chrome-mac-{arch}/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing").exists()
 
 LOAD_FACTOR = 2  # the 5-minute load average that is "far above" the core count: this many times it
+BATTERY_FLOOR = 10  # percent of charge at or under which a Mac on battery refuses to start work
 CRASH_RESTARTS, CRASH_WINDOW = 3, 120  # a container restarted this many times, the last one under this many seconds ago, is in a crash loop
 
 def battery_report():
@@ -162,21 +163,21 @@ def on_battery():
     return "Battery Power" in battery_report()
 
 def battery_stop(force=False):
-    """The line that stops a start while the Mac runs on its battery, with why and how to override; None on AC power, when pmset
-    cannot say, with `force`, and under COMPOSE_NO_PREFLIGHT=1. A closed lid sleeps a Mac on battery, which caffeinate cannot
-    prevent, so long work starts on AC: the first item of the startup checklist."""
+    """The line that stops a start while the Mac runs on a nearly empty battery (BATTERY_FLOOR or less), with why and how to
+    override; None on AC power, with charge to spare, when pmset cannot say or names no charge, with `force`, and under
+    COMPOSE_NO_PREFLIGHT=1. A charged battery starts: caffeinate holds the Mac awake, and only a closed lid sleeps it (a warning)."""
     if force or os.environ.get("COMPOSE_NO_PREFLIGHT"):
         return None
     out = battery_report()
-    if "Battery Power" not in out:
+    m = re.search(r"(\d+)%", out)
+    if "Battery Power" not in out or not m or int(m[1]) > BATTERY_FLOOR:
         return None
-    charge = f" at {m[1]}%" if (m := re.search(r"(\d+)%", out)) else ""
     try:  # `compose watch` says `event power=ac` once the Mac is plugged in, so what stopped here starts again with no ask
         POWER_HELD.parent.mkdir(parents=True, exist_ok=True)
-        fc_core.atomic_write(POWER_HELD, json.dumps({"at": time.time(), "charge": int(m[1]) if m else None}))
+        fc_core.atomic_write(POWER_HELD, json.dumps({"at": time.time(), "charge": int(m[1])}))
     except OSError:
         pass
-    return (f"the Mac is on battery{charge}: closing the lid sleeps it and the work stops, and it can die before the end; plug it in, "
+    return (f"the Mac is on battery at {m[1]}%: it can die before the work ends; plug it in, "
             "or run again with --force to start anyway; `compose watch` says `event power=ac` once it is plugged in")
 
 POWER_HELD = fc_config.CONFIG_PATH.parent / "live" / "battery-held"  # the last battery_stop: {"at": epoch seconds, "charge": percent}

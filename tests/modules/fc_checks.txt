@@ -11,6 +11,7 @@ rerere_set
 jev_synced
 chromium_installed
 LOAD_FACTOR
+BATTERY_FLOOR
 CRASH_RESTARTS
 CRASH_WINDOW
 battery_report

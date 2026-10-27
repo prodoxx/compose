@@ -91,24 +91,28 @@ class Machine(unittest.TestCase):
     def batt(self, power, pct):
         self.fake("pmset", f"echo \"Now drawing from '{power}'\"\necho \" -InternalBattery-0 (id=4653155)\t{pct}%; discharging; 3:12 remaining present: true\"")
 
-    def test_battery_stop_names_the_charge_and_the_override_whenever_the_mac_is_on_battery(self):
+    def test_battery_stop_stops_only_a_nearly_empty_battery_and_names_the_charge_and_the_override(self):
         self.assertIsNone(C.battery_stop())  # no pmset
-        self.batt("Battery Power", 64)
-        self.assertEqual(C.battery_stop(), "the Mac is on battery at 64%: closing the lid sleeps it and the work stops, and it can die before the end; plug it in, "
+        self.batt("Battery Power", 97)  # on battery with charge to spare: the work starts
+        self.assertIsNone(C.battery_stop())
+        self.batt("Battery Power", 11)
+        self.assertIsNone(C.battery_stop())
+        self.batt("Battery Power", 10)
+        self.assertEqual(C.battery_stop(), "the Mac is on battery at 10%: it can die before the work ends; plug it in, "
                                            "or run again with --force to start anyway; `compose watch` says `event power=ac` once it is plugged in")
         self.assertIsNone(C.battery_stop(force=True))
         with mock.patch.dict(os.environ, {"COMPOSE_NO_PREFLIGHT": "1"}):
             self.assertIsNone(C.battery_stop())
-        self.batt("AC Power", 12)  # charging at 12% is fine
+        self.batt("AC Power", 5)  # charging at 5% is fine
         self.assertIsNone(C.battery_stop())
-        self.fake("pmset", 'echo "Now drawing from \'Battery Power\'"')  # a charge that cannot be read still stops: the lid is the risk
-        self.assertEqual(C.battery_stop()[:36], "the Mac is on battery: closing the l")
+        self.fake("pmset", 'echo "Now drawing from \'Battery Power\'"')  # a charge that cannot be read is not known to be low
+        self.assertIsNone(C.battery_stop())
 
     def test_a_battery_stop_is_announced_once_per_watcher_when_the_mac_is_plugged_in(self):
         held = Path(tempfile.mkdtemp()) / "live" / "battery-held"
         with mock.patch.object(C, "POWER_HELD", held):
             self.assertEqual(C.power_back(None), (None, None))  # nothing stopped
-            self.batt("Battery Power", 20)
+            self.batt("Battery Power", 8)
             self.assertIsNotNone(C.battery_stop())
             self.assertEqual(C.power_back(None), (None, None))  # still on battery
             self.batt("AC Power", 21)
