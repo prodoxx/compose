@@ -427,6 +427,14 @@ class ReadyRule(unittest.TestCase):
                          ["NEB-2"])
 
 
+class Writes(unittest.TestCase):
+    def test_only_a_mutation_counts_as_a_write(self):
+        with mock.patch.object(fc.fc_linear.fc_linearapi, "linear_gql", return_value={}), mock.patch.object(fc.fc_linear, "WRITES", [0]):
+            for q in ("query { viewer { id } }", "  mutation { issueUpdate { success } }", "{ issues { nodes { id } } }"):
+                fc.fc_linear.linear_gql(q, {})
+            self.assertEqual(fc.fc_linear.WRITES, [1])
+
+
 class MarkReady(unittest.TestCase):
     UPDATE = "mutation($id: String!, $labels: [String!]!) { issueUpdate(id: $id, input: {labelIds: $labels}) { success } }"
 

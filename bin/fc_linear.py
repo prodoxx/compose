@@ -71,8 +71,12 @@ LINEAR_ISSUE = """query($id: String!) { issue(id: $id) { id identifier descripti
   team { states { nodes { id name type } } } parent { identifier } children { nodes { identifier state { name type } } } } }"""
 _linear_warned = []
 
+WRITES = [0]  # the mutations this process sent: a caller tells by it whether a step wrote to Linear
+
 def linear_gql(query, variables):
     """fc_linearapi.linear_gql, the one name every read and write here goes through (and a test replaces)."""
+    if query.lstrip().startswith("mutation"):
+        WRITES[0] += 1
     return fc_linearapi.linear_gql(query, variables)
 
 def linear_issue(ident):

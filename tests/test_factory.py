@@ -351,9 +351,14 @@ class Turn(unittest.TestCase):
         n = [0]
         def product_plan(repo):
             n[0] += 1; self.calls.append(f"product_plan:{n[0]}")
+            for f in self.plan["features"].values():  # the texts as Linear holds them at this read
+                for i in [f, *f["stories"]]:
+                    i["description"] = self.descriptions.get(i["id"], "")
             return self.plan_value if hasattr(self, "plan_value") else self.plan
+        self.writes = True  # the fake reconcile writes to Linear, so the turn reads the plan again
         def reconcile(repo, dry_run=False):
-            self.calls.append("reconcile"); return self.reconciled
+            self.calls.append("reconcile"); ft.fc_linear.WRITES[0] += self.writes
+            return self.reconciled
         def dispatch(repo, plan, e, kind, state, now):
             state["dispatched"][e["id"]] = {"feature": e["feature"], "project": "sign-in", "kind": kind, "at": now}
             return f"event factory=dispatched story={e['id']}"
@@ -362,7 +367,6 @@ class Turn(unittest.TestCase):
         self.dispatch = unittest.mock.Mock(side_effect=dispatch)
         self.held = unittest.mock.Mock(return_value=False)
         self.hold_changed = unittest.mock.Mock(return_value="event factory=held story=x")
-        issue = lambda ident: {"id": ident, "description": self.descriptions.get(ident, "")}
         def plan_and_reconcile(repo):
             plan = self.product_plan(repo)
             return (plan, self.reconcile(repo)) if plan else (None, None)
@@ -372,7 +376,7 @@ class Turn(unittest.TestCase):
                              (ft.fc_delivery, "plan_and_reconcile", plan_and_reconcile), (ft.fc_delivery, "stamp", lambda repo: next(self.stamps)),
                              (ft.fc_plan, "order_entries", lambda tracks, features: [dict(e) for e in self.entries]),
                              (ft.fc_readiness, "story_readiness", lambda repo, s, **kw: self.results[s]),
-                             (ft.fc_load, "held", self.held), (ft.fc_linear, "linear_issue", issue),
+                             (ft.fc_load, "held", self.held),
                              (ft, "leads_or_none", lambda repo: None if self.leads is None else dict(self.leads)),
                              (ft, "dispatch", self.dispatch), (ft, "hold_changed", self.hold_changed),
                              (ft, "project_for", lambda repo, feature: ("sign-in", self.wt, self.wt / "sign-in"))):
@@ -415,12 +419,16 @@ class Turn(unittest.TestCase):
         self.dispatch.assert_not_called()
 
     def test_a_quiet_project_keeps_the_plan_read_and_a_change_or_the_full_read_age_reads_it_again(self):
-        self.stamps = iter(["a", "a", "a", "b", "b", "b", "b"])
-        for now in (100.0, 200.0, 300.0, 300.0 + ft.FULL_READ_SECONDS):
-            ft.turn(self.repo, self.state, now)
-        # 100: read and reconciled, unchanged after; 200: same stamp, kept; 300: changed, read; the last: same stamp, but the read is old
+        self.stamps = iter(["a", "b", "b", "c", "d", "d"])
+        turn = lambda now, writes: (setattr(self, "writes", writes), ft.turn(self.repo, self.state, now))
+        turn(100.0, True)  # read, reconciled with a write: read again, and stamped after its write ("b")
+        turn(200.0, False)  # "b": the project is quiet, nothing read
+        turn(300.0, False)  # "c": changed, read and reconciled without a write: not read again
+        turn(400.0, False)  # "d": changed again
+        turn(400.0 + ft.FULL_READ_SECONDS, False)  # "d", but the last full read is old
         self.assertEqual([c for c in self.calls if c == "reconcile" or c.startswith("product_plan")],
-                         ["product_plan:1", "reconcile", "product_plan:2", "reconcile", "product_plan:3", "reconcile"])
+                         ["product_plan:1", "reconcile", "product_plan:2", "product_plan:3", "reconcile", "product_plan:4", "reconcile",
+                          "product_plan:5", "reconcile"])
 
     def test_a_restart_dispatches_nothing_twice(self):  # NEB-10 dispatched before the crash, NEB-11 started by hand
         self.state["dispatched"] = {"NEB-10": {"feature": "NEB-9", "project": "sign-in", "kind": "build", "at": 1.0}}

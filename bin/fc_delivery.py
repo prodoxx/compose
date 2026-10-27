@@ -23,7 +23,7 @@ NOT_FOUND = "Entity not found: Issue"  # Linear's whole answer for an issue id i
 
 def _issue(n):
     """A Linear issue node as the plan's modules read it."""
-    return {"id": n["identifier"], "title": n["title"], "url": n.get("url") or "", "state": n["state"]["name"] or "",
+    return {"id": n["identifier"], "title": n["title"], "url": n.get("url") or "", "state": n["state"]["name"] or "", "description": n.get("description") or "",
             "labels": [l["name"] for l in n["labels"]["nodes"]], "parent": (n.get("parent") or {}).get("identifier"), "plan_url": None, "stories": [],
             "blockers": [{"id": r["issue"]["identifier"], "state": r["issue"]["state"]["name"] or "",
                           "labels": [l["name"] for l in r["issue"]["labels"]["nodes"]]} for r in n["inverseRelations"]["nodes"] if r["type"] == "blocks"]}

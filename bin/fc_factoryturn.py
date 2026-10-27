@@ -298,17 +298,15 @@ def _settle(repo, plan, state, out):
         state["prints"].pop(story, None)
 
 def _watch(repo, plan, entries, state, out):
-    """Hold the tasks of an in-flight story whose text, decisions or place in the plan changed since the last look."""
+    """Hold the tasks of an in-flight story whose text, decisions or place in the plan changed since the last look: the texts are
+    the plan's, read this turn or kept while Linear showed no change."""
     waits = {e["id"]: e["waits_on"] for e in entries}
-    descriptions = {}
     for story in in_flight(plan, state):
         feature = next((fid for fid, f in plan["features"].items() if any(s["id"] == story for s in f.get("stories") or [])), None)
         got = project_for(repo, feature) if feature else None
         if not got:
             continue
-        if feature not in descriptions:
-            descriptions[feature] = fc_linear.linear_issue(feature).get("description") or ""
-        new = fingerprint(descriptions[feature], fc_linear.linear_issue(story).get("description") or "")
+        new = fingerprint(plan["features"][feature]["description"], story_of(plan, story)["description"])
         new["waits_on"] = list(waits.get(story) or [])
         old = state["prints"].get(story)
         refs = changed_refs(old, new, story) if old else []
@@ -416,18 +414,20 @@ def _stamp(repo):
 
 def _plan(repo, now):
     """(plan, proposed fixes), or (None, None) with no plan yet. The plan is read and reconciled only when the project changed in
-    Linear since the last turn or the last full read is FULL_READ_SECONDS old, and read again only when the reconcile changed it:
+    Linear since the last turn or the last full read is FULL_READ_SECONDS old, and read again only when the reconcile wrote to it:
     a quiet project costs a turn one read, not one per feature and story group."""
     before, seen = _stamp(repo), _PLANS.pop(str(repo), None)
     if seen and before is not None and seen["stamp"] == before and now - seen["at"] < FULL_READ_SECONDS:
         _PLANS[str(repo)] = seen
         return copy.deepcopy(seen["plan"]), seen["proposed"]
+    writes = fc_linear.WRITES[0]
     plan, result = fc_delivery.plan_and_reconcile(repo)
     if plan is None:
         return None, None
     proposed = (result or {}).get("proposed") or []
-    after = _stamp(repo) if before is not None else None
-    if after is None or after != before:  # the reconcile wrote, or Linear changed while it ran
+    after = before
+    if fc_linear.WRITES[0] != writes:  # the stamp after its own writes, so the next turn does not take them for a change
+        after = _stamp(repo) if before is not None else None
         plan = fc_delivery.product_plan(repo)
         if plan is None:
             raise RuntimeError("the product delivery plan went away during the turn")
