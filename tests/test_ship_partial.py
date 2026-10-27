@@ -44,6 +44,18 @@ class PartialSubmit(Ship):
         self.assertTrue({"002.src", "003.src"} <= self.pushed()[1])
         self.assertTrue((self.proj / "results" / "prs.json").exists())
 
+    def test_a_task_after_a_higher_id_is_not_held_behind_the_tasks_between_them(self):
+        """001 waits for 003, so it sits right above 003 and below 002: 002 failing holds 002 alone."""
+        tasks = json.loads((self.proj / "results" / "tasks.json").read_text())
+        tasks["tasks"][0]["after"] = "003"
+        (self.proj / "results" / "tasks.json").write_text(json.dumps(tasks))
+        self.result("002", "failed")
+        out, code = self.submit()
+        self.assertEqual(code, 0, out)
+        self.assertTrue(any("stack  hold  002 is failed; 002 not submitted" in l for l in out), out)
+        self.assertTrue({"001.src", "003.src"} <= self.pushed()[1])
+        self.assertFalse(self.pushed()[1] & {"002.src", "t002.test"})
+
     def test_a_pending_first_task_stops_with_nothing_pushed(self):
         (self.proj / "results" / "001.json").unlink()
         out, code = self.submit()

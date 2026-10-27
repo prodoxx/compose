@@ -147,24 +147,23 @@ def task_branches(repo, proj):
 
 def layer_order(tasks):
     """The ids of `tasks` bottom to top as one stack: a task after its `after:` tasks among them, a `kind: toolchain` task (it sets
-    up the tools verify's checks run) before the rest, then by id. The one rule the chain (stack_order, then chain_order) and
-    `compose tasks` share, so the order a planner reviews is the order the stack gets."""
+    up the tools verify's checks run) before the rest, then by id. A task whose `after:` task has a higher id is placed right above
+    that task, never after the whole pass over the ids, so a story's tasks stay together when a later story's tasks have ids in
+    between. The one rule the chain (stack_order, then chain_order) and `compose tasks` share, so the order a planner reviews is
+    the order the stack gets."""
     metas = {m["id"]: m for m in tasks}
     ids = sorted(metas, key=lambda t: (metas[t].get("kind") != "toolchain", t))
     order, placed = [], set()
-    while len(order) < len(ids):
-        progressed = False
-        for tid in ids:
-            if tid in placed:
-                continue
-            deps = [d.strip() for d in str(metas[tid].get("after") or "").split(",") if d.strip() in metas]
-            if all(d in placed for d in deps):
-                order.append(tid)
-                placed.add(tid)
-                progressed = True
-        if not progressed:  # a dependency cycle in `after:`; fall back to id order for the rest
-            order += [t for t in ids if t not in placed]
-            break
+    def place(tid):
+        placed.add(tid)  # before its dependencies, so a cycle in `after:` ends here instead of looping
+        deps = {d.strip() for d in str(metas[tid].get("after") or "").split(",")} & set(metas)
+        for dep in sorted(deps, key=ids.index):
+            if dep not in placed:
+                place(dep)
+        order.append(tid)
+    for tid in ids:
+        if tid not in placed:
+            place(tid)
     return order
 
 def stack_order(repo, proj, tasks=None):
