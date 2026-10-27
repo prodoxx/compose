@@ -1,11 +1,76 @@
 import hermetic  # first: no test sees the real home
-import contextlib, io, json, os, shutil, subprocess, sys, tempfile, unittest
+import contextlib, importlib.machinery, importlib.util, io, json, os, shutil, subprocess, sys, tempfile, unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_e2e import fc, fake_uv, FAKE_AGENT  # the loaded compose, a uv stand-in and jev's stand-in Agent
+os.environ["COMPOSE_E2E_HEADLESS"] = "1"  # testing the tool itself never opens a browser window; real projects keep theirs
 os.environ["HERDR_ENV"] = ""
+
+_spec = importlib.util.spec_from_loader("fc", importlib.machinery.SourceFileLoader("fc", str(Path(__file__).resolve().parents[1] / "bin" / "compose.py")))
+fc = importlib.util.module_from_spec(_spec)
+for _m in [m for m in sys.modules if m.startswith("fc_") and m not in ("fc_cost", "fc_mcp", "fc_sessions")]: del sys.modules[_m]
+_spec.loader.exec_module(fc)
+
+
+FAKE_AGENT = '''"""A stand-in for jev's Agent, steered by $FAKE_JEV, under the real `python -m jev_ultrafast`."""
+import json, os, pathlib
+
+class Agent:
+    def __init__(self, url, goals, record_dir=None, secrets=None, **_):
+        self.spec, self.url, self.record, self.history = json.loads(os.environ.get("FAKE_JEV") or "{}"), url, record_dir, []
+        self.status, self.reason = "ready", None
+        if self.spec.get("seen"):
+            pathlib.Path(self.spec["seen"]).write_text(json.dumps({"secrets": secrets, "bu": os.environ.get("BU_CDP_URL")}))
+        if self.spec.get("tab"):  # the case's tab, open until the agent closes
+            pathlib.Path(self.spec["tab"]).write_text(url)
+        if record_dir:
+            pathlib.Path(record_dir).mkdir(parents=True, exist_ok=True)
+            (pathlib.Path(record_dir) / "000000.jpg").write_bytes(b"jpg")
+
+    def snapshot(self):
+        return {"status": self.status, "stop_reason": self.reason, "elapsed_ms": 40 * len(self.history), "history": list(self.history),
+                "page": {"url": self.spec.get("url", self.url)}, "decisions": [], "text_calls": []}
+
+    def run(self):
+        for i, status in enumerate(self.spec.get("statuses", ["done"])):
+            self.history.append({"step": i + 1, "kind": "click", "action": f"Next {i + 1}", "page_changed": status != "blocked"})
+            self.status, self.reason = status, self.spec.get("reason") if status == "blocked" else None
+            yield self.snapshot()
+        if self.spec.get("raise"):
+            raise ValueError(self.spec["raise"])
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        if self.spec.get("tab"):
+            pathlib.Path(self.spec["tab"]).unlink()
+'''
+
+# The jev case's `uv run --quiet [--env-file F] python ...`, run with this interpreter: no real uv, no python of uv's choosing.
+FAKE_UV = f'''#!{sys.executable}
+import os, sys
+args = sys.argv[1:]
+assert args[:2] == ["run", "--quiet"], args
+args = args[2:]
+if args[0] == "--env-file":  # as uv does, the process env wins
+    for line in open(args[1]).read().splitlines():
+        k, eq, v = line.partition("=")
+        if eq and not k.lstrip().startswith("#"):
+            os.environ.setdefault(k.strip(), v.strip().strip("\\"'"))
+    args = args[2:]
+assert args[0] == "python", args
+os.execv(sys.executable, [sys.executable, *args[1:]])
+'''
+
+
+def fake_uv(test):
+    """Put FAKE_UV first on PATH for the test."""
+    d = Path(tempfile.mkdtemp()); (d / "uv").write_text(FAKE_UV); (d / "uv").chmod(0o755)
+    p = mock.patch.dict(os.environ, {"PATH": f"{d}{os.pathsep}{os.environ['PATH']}"}); p.start(); test.addCleanup(p.stop)
+
+
+
 
 
 def case(name, url, **kw):
