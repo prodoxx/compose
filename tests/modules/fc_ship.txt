@@ -4,6 +4,9 @@ LAND_METHODS
 run_check
 checked
 layer_commands
+InstallFailed
+ready
+install_refusal
 against_base
 ids_text
 MISSING_SCRIPT

@@ -35,15 +35,32 @@ def layer_commands(proj, layer, checks, top):
     tests = {m["id"]: m.get("test") for m in fc_tasks.code_tasks(fc_tasks.load_tasks(proj))}
     return list(dict.fromkeys([c for c in checks if top or not fc_proc.suite(c)] + [tests[t] for t in layer["tested"] if tests.get(t)]))
 
+class InstallFailed(RuntimeError):
+    """verify.json `install` failed in the CLI's worktree: the message is the scrubbed tail of what it printed."""
+
+def ready(repo, wt, cfg):
+    """fc_worktree.ready_checkout with verify.json `install`, its failure (a broken lockfile, a tool not on PATH) raised as InstallFailed."""
+    try:
+        fc_worktree.ready_checkout(repo, wt, install=cfg.get("install"))
+    except (RuntimeError, OSError) as e:
+        lines = [l for l in fc_core.scrub(str(e)).splitlines()[1:] if l.strip()] or [str(e)]
+        raise InstallFailed("\n".join(lines[-12:]))
+
+def install_refusal(name, e, base=""):
+    return (f"{name}: install failed" + (f" on the base {base[:9]}, where its failing checks are compared" if base else "") +
+            f" (verify.json `install`):\n{e}\nNothing was pushed. Make the install pass on {'the base' if base else 'this layer'}"
+            " (a lockfile in step with its package files, the tool on PATH), then run `compose stack --submit` again")
+
 def against_base(repo, cfg, wt, base, top, failed, ran):
     """{command: (new, touched, accepted, unknown)} for the failing ids of a layer (`failed`: command -> ids), judged by what the same
     command does on `base`, the commit the stack grows from. `new`: ids that pass there; `touched`: ids that fail there too, in a test or
     module the stack's diff (base to `top`) changes; `accepted`: ids that fail there too and the stack does not touch; `unknown`: the
-    base run timed out or named no failing test, so nothing can be told apart. The base runs each command once (`ran`)."""
+    base run timed out or named no failing test, so nothing can be told apart. The base runs each command once (`ran`).
+    InstallFailed when the install fails on the base."""
     todo = [c for c in failed if c not in ran]
     if todo:
         fc_core.sh(["git", "checkout", "-q", "--detach", base], wt)
-        fc_worktree.ready_checkout(repo, wt, install=cfg.get("install"))
+        ready(repo, wt, cfg)
         ran.update(fc_gate.check_state(checked(f"base {base[:9]}", {}), todo, wt, 0))
     touched, verdict = fc_gate.touches(wt, base, fc_core.sh(["git", "diff", "--name-only", base, top], repo).stdout.split()), {}
     for c, ids in failed.items():
@@ -90,7 +107,7 @@ def layer_checks(repo, proj, layers, trunk, wt, fresh=False):
     seen = json.loads(kept.read_text()) if kept.exists() else {}
     top, below = fc_core.sh(["git", "rev-parse", layers[-1]["branch"]], repo).stdout.strip(), fc_stack.layer_base(repo, proj, trunk)
     base = fc_core.sh(["git", "merge-base", below, top], repo, check=False).stdout.strip() or fc_core.sh(["git", "rev-parse", below], repo).stdout.strip()
-    on_base, accepted, own = {}, 0, set(fc_verify.at_root(checks, roots, wt))
+    on_base, accepted, own = {}, 0, set(checks)
     for i, l in enumerate(layers, 1):
         tip = fc_core.sh(["git", "rev-parse", l["branch"]], repo).stdout.strip()
         name = f"layer {i} of {len(layers)} ({l['branch']})"
@@ -101,16 +118,19 @@ def layer_checks(repo, proj, layers, trunk, wt, fresh=False):
             fc_core.say(f"layers ok    {name}  unchanged since its checks passed")
             continue
         fc_core.say(f"layers scope {name}  " + ("its tasks' tests and every check" if i == len(layers) else "its tasks' tests and the cheap checks") + (": " + "; ".join(cmds) if cmds else ": nothing to run"))
-        tree, ready = fc_green.tree_of(repo, tip), False
+        tree, checked_out = fc_green.tree_of(repo, tip), False
         failed, outs = {}, {}
         for c in cmds:
             if line := fc_green.taken(proj, tree, c, fresh):
                 fc_core.say(f"layers {name}  {line}")
                 continue
-            if not ready:  # a layer whose commands are all green on its tree is not even checked out
+            if not checked_out:  # a layer whose commands are all green on its tree is not even checked out
                 fc_core.sh(["git", "checkout", "-q", "--detach", tip], wt)
-                fc_worktree.ready_checkout(repo, wt, install=cfg.get("install"))
-                ready = True
+                try:
+                    ready(repo, wt, cfg)
+                except InstallFailed as e:
+                    return install_refusal(name, e)
+                checked_out = True
             state = fc_gate.check_state(checked(name, outs), [c], wt, 0)[c]
             fc_green.record(proj, tree, c, state["exit"])
             if state["exit"] and i < len(layers) and c in own and (script := missing_script(outs[c])):
@@ -121,7 +141,11 @@ def layer_checks(repo, proj, layers, trunk, wt, fresh=False):
             if state["exit"]:
                 failed[c] = state["failing"]
         leaned = False
-        for c, (new, hit, ok, unknown) in (against_base(repo, cfg, wt, base, top, failed, on_base).items() if failed else ()):
+        try:
+            verdicts = against_base(repo, cfg, wt, base, top, failed, on_base) if failed else {}
+        except InstallFailed as e:
+            return install_refusal(name, e, base)
+        for c, (new, hit, ok, unknown) in verdicts.items():
             if unknown or new or hit:
                 why = (f"cannot tell whether {ids_text(new)} fail on the base too: its run on the base {base[:9]} timed out or names no failing test" if unknown else
                        "; ".join(x for x in (f"passes on the base {base[:9]}, fails here: {ids_text(new)}" if new else "",

@@ -683,6 +683,13 @@ class PathsAtStackTop(unittest.TestCase):
         self.assertEqual(seen["e2e"], [{"name": "login", "url": f"file://{root}/index.html", "goal": "Log in", "setup": f"{top}/login.sh",
                                         "env": {"DATA": f"{root}/fixtures"}, "assert": f"python3 {top}/check.py --root={root}"}])
 
+    def test_a_path_already_at_a_root_under_the_main_checkout_is_not_moved_again(self):
+        main = Path(tempfile.mkdtemp()).resolve() / "app"
+        repo, root = main / ".treehouse" / "app-1" / "2" / "app", main / ".treehouse" / "app-1" / "4" / "app"
+        once = fc.fc_verify.at_root([f"bash {main}/scripts/lint.sh", f"cd {repo}/app && bun run build"], (repo, main), root)
+        self.assertEqual(once, [f"bash {root}/scripts/lint.sh", f"cd {root}/app && bun run build"])
+        self.assertEqual(fc.fc_verify.at_root(once, (repo, main), root), once)  # the slot sits under the main checkout: no double move
+
     def test_a_project_file_the_stack_top_does_not_have_stays_in_the_project_worktree(self):
         base = Path(tempfile.mkdtemp()).resolve()
         repo, root = base / "app-feature", base / "slot" / "app"
