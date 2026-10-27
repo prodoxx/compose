@@ -441,19 +441,32 @@ class MarkReady(unittest.TestCase):
     def group(self, ident):
         return self.children if ident == "ENG-1" else self.parent["children"]["nodes"]
 
+    def root(self):
+        return {"id": "id-ENG-1", "identifier": "ENG-1", "team": {"labels": {"nodes": self.team}}, "parent": self.parent, "inverseRelations": {"nodes": self.feature_rels}}
+
     def gql(self, query, variables):
         """Linear with the feature ENG-1 (children: self.children) under self.parent: the root read, then a page of an issue's
         children (ReadyNode each, no children of their own) and a page of its grandchildren (by its uuid, each naming its parent)."""
         if query == fc.fc_linear.LINEAR_READY_ROOT:
             self.reads.append(("root", variables["id"]))
-            return {"issue": {"id": "id-ENG-1", "identifier": "ENG-1", "team": {"labels": {"nodes": self.team}}, "parent": self.parent,
-                              "inverseRelations": {"nodes": self.feature_rels}}}
+            return {"issue": self.root()}
         if query == fc.fc_linear.LINEAR_READY_CHILDREN:
             self.reads.append(("children", variables["id"]))
             return {"issue": {"children": self.page([{k: v for k, v in n.items() if k != "children"} for n in self.group(variables["id"])])}}
         if query == fc.fc_linear.LINEAR_READY_GRANDCHILDREN:
             self.reads.append(("grandchildren", variables["id"]))
             return {"issues": self.page([{**c, "parent": {"identifier": n["identifier"]}} for n in self.group(variables["id"][3:]) for c in n["children"]["nodes"]])}
+        heads = {"id-ENG-1": "ENG-1", **({self.parent["id"]: self.parent["identifier"]} if self.parent else {})}
+        if query == fc.fc_linear.LINEAR_READY_ROOTS:
+            self.reads.append(("roots", variables["ids"]))
+            return {"issues": self.page([self.root() for i in variables["ids"] if i == "ENG-1"])}
+        if query == fc.fc_linear.LINEAR_READY_KIDS:
+            self.reads.append(("kids", variables["ids"]))
+            return {"issues": self.page([{**{k: v for k, v in n.items() if k != "children"}, "parent": {"identifier": heads[h]}}
+                                         for h in variables["ids"] for n in self.group(heads[h])])}
+        if query == fc.fc_linear.LINEAR_READY_GRANDKIDS:
+            self.reads.append(("grandkids", variables["ids"]))
+            return {"issues": self.page([{**c, "parent": {"identifier": n["identifier"]}} for h in variables["ids"] for n in self.group(heads[h]) for c in n["children"]["nodes"]])}
         self.assertEqual(query, self.UPDATE)
         self.updates.append(variables)
         return {"issueUpdate": {"success": True}}
@@ -542,6 +555,23 @@ class MarkReady(unittest.TestCase):
         self.assertCountEqual(self.updates, [{"id": "id-ENG-9", "labels": ["l-ready"]}, {"id": "id-ENG-5", "labels": []},
                                              {"id": "id-ENG-3", "labels": ["l-ready"]}])
         self.assertCountEqual(self.said, ["linear ENG-9 -> Ready", "linear ENG-5 -> not Ready", "linear ENG-3 -> Ready"])
+
+    def test_one_set_of_reads_for_every_feature_marks_the_same_as_reading_each(self):
+        self.team = [{"id": "l-ready", "name": "READY"}]
+        self.children = [self.node("ENG-9", "Todo"), self.node("ENG-8", "Todo", "READY", blocked=True)]
+        self.parent = {"id": "id-ENG-0", "identifier": "ENG-0", "children": {"nodes": [
+            self.node("ENG-1", "Todo", "READY", tasks=()), self.node("ENG-5", "In Progress", "READY"), self.node("ENG-3", "Todo", tasks=())]}}
+        reads = fc.fc_linear.ready_reads(["ENG-1"])
+        self.assertEqual(self.reads, [("roots", ["ENG-1"]), ("kids", ["id-ENG-1", "id-ENG-0"]), ("grandkids", ["id-ENG-1", "id-ENG-0"])])
+        batched = fc.fc_linear.linear_mark_ready("ENG-1", marked=set(), reads=reads)
+        self.assertEqual(self.reads[3:], [])  # the marks read nothing more
+        each, writes = self.updates[:], self.updates.clear()
+        self.assertEqual((batched, writes), (fc.fc_linear.linear_mark_ready("ENG-1", marked=set()), None))
+        self.assertEqual(each, self.updates)
+
+    def test_a_feature_the_reads_do_not_hold_is_no_issue(self):
+        with self.assertRaisesRegex(RuntimeError, "no issue ENG-7"):
+            fc.fc_linear.linear_mark_ready("ENG-7", reads={"roots": {}, "groups": {}})
 
     def test_a_group_marked_already_is_not_read_again(self):
         # a reconcile marks every feature of the plan: with one shared `marked` set, each epic's children are read and marked once

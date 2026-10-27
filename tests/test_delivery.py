@@ -32,7 +32,8 @@ class Fake(unittest.TestCase):
         self.tracks_file = self.repo / "tracks.md"
         self.tracks_file.write_text(TRACKS)
         self.stories = [node("NEB-10", "Todo", parent="NEB-9")]
-        for mod, name, value in ((fc.fc_config, "LINEAR_KEY", KEY), (fc.fc_config, "WORKSPACE", "work"), (fc.fc_linear, "linear_gql", self.gql)):
+        for mod, name, value in ((fc.fc_config, "LINEAR_KEY", KEY), (fc.fc_config, "WORKSPACE", "work"), (fc.fc_linear, "linear_gql", self.gql),
+                                 (fc.fc_linear, "ready_reads", lambda items: {"roots": {}, "groups": {}})):
             p = mock.patch.object(mod, name, value); p.start(); self.addCleanup(p.stop)
 
     def set_docs(self, docs, content):
@@ -176,7 +177,7 @@ class Reconcile(Fake):
         self.nodes = [node("NEB-7", "Done"), node("NEB-9", "Todo", ("NEB-7", "Done")), node("NEB-12", "Todo", ("NEB-5", "Todo"), ("NEB-40", "Todo")),
                       node("NEB-5", "Todo"), node("NEB-30", "Todo")]
         self.comments = []
-        self.mark = mock.Mock(side_effect=lambda ident, marked=None: [{"id": "NEB-10", "title": "T NEB-10"}] if ident == "NEB-9" else [])
+        self.mark = mock.Mock(side_effect=lambda ident, marked=None, reads=None: [{"id": "NEB-10", "title": "T NEB-10"}] if ident == "NEB-9" else [])
         self.blocked_by = mock.Mock()
         for name, value in (("linear_issue", self.issue), ("linear_blocked_by", self.blocked_by), ("linear_mark_ready", self.mark),
                             ("linear_comment", lambda issue, body: self.comments.append((issue["identifier"], body)))):

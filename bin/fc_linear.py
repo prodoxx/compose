@@ -353,10 +353,20 @@ def open_questions(description):
 # nested two levels deep cost millions, most of the key's 3,000,000 points an hour, in one call.
 READY_NODE = """fragment ReadyNode on Issue { id identifier title url description state { name } labels(first: 10) { nodes { id name } }
   inverseRelations(first: 25) { nodes { type issue { identifier state { name } labels(first: 10) { nodes { name } } parent { identifier parent { identifier } } } } } }"""
-LINEAR_READY_ROOT = """query($id: String!) { issue(id: $id) { id identifier title url description project { id } labels(first: 10) { nodes { name } }
+READY_ROOT = """id identifier title url description project { id } labels(first: 10) { nodes { name } }
   team { labels(first: 5, filter: { name: { eqIgnoreCase: "Ready" } }) { nodes { id name } } }
   parent { id identifier title url description project { id } labels(first: 10) { nodes { name } } }
-  inverseRelations(first: 25) { nodes { type issue { identifier state { name } labels(first: 10) { nodes { name } } } } } } }"""
+  inverseRelations(first: 25) { nodes { type issue { identifier state { name } labels(first: 10) { nodes { name } } } } }"""
+LINEAR_READY_ROOT = "query($id: String!) { issue(id: $id) { %s } }" % READY_ROOT
+# ready_reads: what linear_mark_ready reads, for many features at once (Linear's id filter takes identifiers too).
+LINEAR_READY_ROOTS = """query($ids: [ID!], $after: String) { issues(first: 50, after: $after, filter: { id: { in: $ids } }) {
+  pageInfo { hasNextPage endCursor } nodes { %s } } }""" % READY_ROOT
+LINEAR_READY_KIDS = """query($ids: [ID!], $after: String) { issues(first: 50, after: $after, filter: { parent: { id: { in: $ids } } }) {
+  pageInfo { hasNextPage endCursor } nodes { ...ReadyNode parent { identifier } } } }
+""" + READY_NODE
+LINEAR_READY_GRANDKIDS = """query($ids: [ID!], $after: String) { issues(first: 50, after: $after, filter: { parent: { parent: { id: { in: $ids } } } }) {
+  pageInfo { hasNextPage endCursor } nodes { ...ReadyNode parent { identifier } } } }
+""" + READY_NODE
 LINEAR_READY_CHILDREN = """query($id: String!, $after: String) { issue(id: $id) { children(first: 50, after: $after) {
   pageInfo { hasNextPage endCursor } nodes { ...ReadyNode } } } }
 """ + READY_NODE
@@ -375,15 +385,31 @@ def linear_group(ident, uuid):
         n["children"] = {"nodes": kids.get(n["identifier"], [])}
     return nodes
 
-def linear_mark_ready(feature, marked=None):
+def ready_reads(features):
+    """What linear_mark_ready reads for each of `features` and their epics, in a few paged reads for all of them at once:
+    {"roots": {feature: its root}, "groups": {feature or epic: its linear_group}}. A reconcile over every feature reads this
+    once, not three reads per feature."""
+    roots = {n["identifier"]: n for n in linear_pages(LINEAR_READY_ROOTS, {"ids": list(features)}, "issues")} if features else {}
+    heads = {n["identifier"]: n["id"] for r in roots.values() for n in (r, r["parent"]) if n}
+    kids = linear_pages(LINEAR_READY_KIDS, {"ids": list(heads.values())}, "issues") if heads else []
+    grand = {}
+    for g in linear_pages(LINEAR_READY_GRANDKIDS, {"ids": list(heads.values())}, "issues") if kids else []:
+        grand.setdefault(g["parent"]["identifier"], []).append(g)
+    groups = {h: [] for h in heads}
+    for n in kids:
+        n["children"] = {"nodes": grand.get(n["identifier"], [])}
+        groups[n["parent"]["identifier"]].append(n)
+    return {"roots": roots, "groups": groups}
+
+def linear_mark_ready(feature, marked=None, reads=None):
     """Set the team's Ready label on the feature's children that can start now and take it off the rest, the same for the
     epic's children when the feature has one; one read per group, then one update per issue whose labels change. A story with
     no task that is not Canceled has nothing to start, so it is not ready; a feature needs no story. Returns the ready issues,
     the feature's children first. No story is ready while a feature that blocks this one is not built yet; a sibling verified
     (In Review) blocks nothing. An issue with open questions waits. `marked`, a set, names the features and epics whose
     children this run marked already: their group is skipped, and each group marked here is added, so a reconcile over
-    every feature reads each epic once."""
-    root = linear_gql(LINEAR_READY_ROOT, {"id": feature})["issue"]
+    every feature reads each epic once. `reads`, ready_reads' answer, stands in for the reads."""
+    root = reads["roots"].get(feature) if reads else linear_gql(LINEAR_READY_ROOT, {"id": feature})["issue"]
     if not root:
         raise RuntimeError(f"no issue {feature}")
     ready_label = next((l["id"] for l in root["team"]["labels"]["nodes"] if l["name"].lower() == "ready"), None)
@@ -397,7 +423,7 @@ def linear_mark_ready(feature, marked=None):
         if not node or (marked is not None and node["identifier"] in marked):
             continue
         parent = node["identifier"]
-        group = linear_group(parent, node["id"])
+        group = reads["groups"][parent] if reads else linear_group(parent, node["id"])
         cut = {n["identifier"] for n in group if any((c["state"]["name"] or "").lower() != "canceled" for c in n["children"]["nodes"])}
         asking = {n["identifier"] for n in group if open_questions(n.get("description"))}
         ready = {i for i in ready_ids(group, parent) if (i in cut or not stories) and i not in asking and not (stories and waiting)}
