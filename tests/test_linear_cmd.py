@@ -555,6 +555,7 @@ class LinearStaleRead(unittest.TestCase):
         err = self.update("new plan", section="## Plan")
         self.assertIn("still serves the old text", err)
         self.assertEqual(self.clock[0], fc.fc_linear_cmd.SETTLE_SECONDS)
+        self.assertEqual(10 ** 6 - self.stale, 7)  # the reads back off: seven requests over the wait, not one every half second
 
 class LinearCommentLabelsDoc(unittest.TestCase):
     ISSUE, LABELS, DOC = "issue(id: $id) { id identifier project { id name } }", "team(id: $id) { labels(first: 250) { nodes { id name } } }", "document(id: $id) { title content url }"

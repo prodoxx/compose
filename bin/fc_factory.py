@@ -23,6 +23,20 @@ def alive(pid):
         return True
     return True
 
+def code_stamp():
+    """What the CLI's code is now: each module's name, size and change time. A loop runs for days, and `compose update` changes
+    the code under it: Python keeps what it imported, so a loop started before a fix never runs the fix."""
+    return sorted((f.name, f.stat().st_size, f.stat().st_mtime_ns) for f in Path(__file__).resolve().parent.glob("*.py"))
+
+def renewed(start, settle=1.0):
+    """Whether the code changed since `start` (a code_stamp) and has stood still for `settle` seconds, so an update half
+    written is not what the loop starts again on."""
+    now = code_stamp()
+    if now == start:
+        return False
+    time.sleep(settle)
+    return code_stamp() == now
+
 def clock(t=None):
     return time.strftime("%H:%M:%S", time.localtime(t))
 
@@ -105,8 +119,10 @@ def run_loop(repo, turns=None):
     previous = signal.signal(signal.SIGTERM, lambda signum, frame: stop.append(signum))
     try:
         with fc_factorystate.edit(repo) as state:
-            state["pid"], state["started"] = os.getpid(), time.time()
-        done = 0
+            if state.get("pid") != os.getpid():  # the same pid is this loop started again on new code: it runs since it first started
+                state["started"] = time.time()
+            state["pid"] = os.getpid()
+        code, done = code_stamp(), 0
         while not stop and (turns is None or done < turns):
             try:
                 state = fc_factorystate.load_state(repo)
@@ -129,9 +145,15 @@ def run_loop(repo, turns=None):
             done += 1
             if not stop and (turns is None or done < turns):
                 _sleep(fc_config.FACTORY["turn_seconds"], lambda: bool(stop))
+            if not stop and turns is None and renewed(code):
+                break
+        else:
+            return
     finally:
         signal.signal(signal.SIGTERM, previous)
         lock.close()
+    print(f"[{clock()}] factory: the CLI changed; the loop starts again on it", flush=True)
+    os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve().parent / "compose.py"), "factory", "loop", "--repo", str(repo)])
 
 def status_lines(repo, state):
     p = fc_factorystate.pace(state)

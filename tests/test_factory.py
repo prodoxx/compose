@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import json, os, subprocess, tempfile, unittest, unittest.mock
+import contextlib, io, json, os, subprocess, tempfile, unittest, unittest.mock
 from pathlib import Path
 import importlib.machinery, importlib.util, sys
 # tests/test_modules.py fails a test file without the next line
@@ -782,6 +782,19 @@ class Verbs(unittest.TestCase):
         with mock.patch.object(fc.fc_factoryturn, "turn", turn):
             fc.fc_factory.run_loop(self.repo)
         self.assertEqual((turns, len(st.events_since(self.repo, 0))), ([False, True], 1))
+
+    def test_new_cli_code_starts_the_loop_again_on_it_after_the_turn_keeping_when_it_started(self):
+        mock = self.mock
+        self.save(pid=os.getpid(), started=5.0)  # the loop this process was before the exec
+        stamps = iter(["old", "old", "new", "new"])
+        with mock.patch.object(fc.fc_factoryturn, "turn", return_value=["event factory=x"]), mock.patch.object(fc.fc_factory, "code_stamp", lambda: next(stamps)), \
+             mock.patch.object(fc.fc_factory, "_sleep"), mock.patch.object(fc.fc_factory.time, "sleep"), mock.patch.object(fc.fc_factory.os, "execv") as execv, \
+             contextlib.redirect_stdout(io.StringIO()) as out:
+            fc.fc_factory.run_loop(self.repo)
+        self.assertEqual(len(st.events_since(self.repo, 0)), 2)  # the code changed after the first turn: the exec comes after the second
+        self.assertEqual(execv.call_args.args[1][-4:], ["factory", "loop", "--repo", str(self.repo)])
+        self.assertIn("the loop starts again on it", out.getvalue())
+        self.assertEqual(st.load_state(self.repo)["started"], 5.0)
 
     def test_each_dispatch_reaches_disk_during_the_turn(self):
         mock = self.mock

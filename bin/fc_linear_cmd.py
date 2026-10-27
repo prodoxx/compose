@@ -137,16 +137,18 @@ SETTLE_SECONDS, SETTLE_POLL = 30, 0.5
 
 def await_write(read, old, new):
     """Return once `read()` no longer gives `old`, the text a body write replaced.
-    Linear can serve a body from before the last write for several seconds, and the next section write starts from that read, so it would put the whole body back without this one."""
+    Linear can serve a body from before the last write for several seconds, and the next section write starts from that read, so it would put the whole body back without this one.
+    The reads back off, SETTLE_POLL doubling: seven over the whole wait."""
     old = (old or "").strip()
     if fc_plan.same_markdown(new, old):
         return
-    deadline = time.monotonic() + SETTLE_SECONDS
+    deadline, pause = time.monotonic() + SETTLE_SECONDS, SETTLE_POLL
     while (read() or "").strip() == old:
         if time.monotonic() >= deadline:
             print(f"warning: Linear still serves the old text {SETTLE_SECONDS}s after the write: read it again, and write the next change only once it shows", file=sys.stderr)
             return
-        time.sleep(SETTLE_POLL)
+        time.sleep(min(pause, max(0, deadline - time.monotonic())))
+        pause *= 2  # a read is a request out of the key's 2,500 an hour: a write slow to show costs a handful, not one every half second
 
 def verb_project(a):
     writes = writes_body(a, "project")
