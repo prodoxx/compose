@@ -234,6 +234,13 @@ class Ask(unittest.TestCase):
         self.assertEqual(self.sent(), [])
         self.assertFalse((self.proj / "results" / "asked.json").exists(), "a refused question is not marked asked")
 
+    def test_a_question_that_lists_lettered_options_is_refused(self):
+        out = self.ask_on_map("## Not yet specified\n- Q2: Where does Delete live? A) the page header; B) a More menu - Recommendation: A, one click - decides S10\n")
+        self.assertIn("Q2 lists lettered options: ask it open and put the options in its recommendation", out)
+        self.assertEqual(self.sent(), [])
+        out = self.ask_on_map("## Not yet specified\n- Q2: Where does Delete live? - Recommendation: the page header (A) over a More menu (B); one click - decides S10\n")
+        self.assertNotIn("not reported", out)  # options weighed in the recommendation are fine
+
     def test_lettered_options_are_no_longer_required(self):
         out = self.ask_on_map("## Not yet specified\n- Q2: Which auth? - Recommendation: Clerk - less to build\n")
         self.assertNotIn("not reported", out)

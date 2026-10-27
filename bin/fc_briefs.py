@@ -77,7 +77,8 @@ Screen that raised it: {reflect}
 2. Write one question per decision line the evidence questions:
    `- {cid}-1: <question> (replaces <the D id it would replace>) - Recommendation: <recommendation> - <the evidence, quoted verbatim, with its source>`,
    ids {cid}-1, {cid}-2 and on; never reuse an id. Keeping the line is always an answer.
-   `compose report` refuses a question without a recommendation. Never choose for the product owner.
+   `compose report` refuses a question without a recommendation, or one that lists lettered options: ask it open, and weigh the
+   options in the recommendation. Never choose for the product owner.
    Text by default; visual only when the choices are pictures, then never asked as text. Visual questions go on one Lavish page, never the architect's earlier page: {page}
    The page shows pictures only, with no answer controls; answers come through the engineering manager.
 3. Write every question under Not yet specified on the map first, visual ones too; visual ones go on the page as well.
