@@ -520,6 +520,11 @@ def with_assets(value, assets):
         return [with_assets(v, assets) for v in value]
     return value
 
+class TooBig(RuntimeError):
+    """TypeSafe refused the request as more input tokens than Jev reads (HTTP 400 max_tokens_exceeded, at 32768 tokens): the same
+    request never passes, a smaller state can."""
+
+
 def jev_ask(env, cfg, state, questions, label):
     """One TypeSafe (Jev) request: choice questions against one state, on the cost ledger. Returns Jev's whole reply.
     An Image in the state or the questions goes as an image asset, with the header that turns images on."""
@@ -532,7 +537,12 @@ def jev_ask(env, cfg, state, questions, label):
         body["assets"] = {r: {k: v for k, v in a.items() if k != "path"} for r, a in assets.items()}
         headers["TypeSafe-Danger-Zone-Images"] = "true"
     req = urllib.request.Request("https://api.typesafe.ai/v1/systemone", data=json.dumps(body).encode(), headers=headers)
-    out = http_json(req, f"typesafe ({label})", timeout=180 if assets else 90)
+    try:
+        out = http_json(req, f"typesafe ({label})", timeout=180 if assets else 90)
+    except RuntimeError as e:
+        if "max_tokens_exceeded" in str(e):
+            raise TooBig(str(e)) from e
+        raise
     u = out.get("usage", {}) or {}
     price = (cfg.get("prices") or {}).get("typesafe_per_call")
     fc_core.LEDGER.add("typesafe", u.get("input_tokens") or u.get("prompt_tokens") or u.get("total_tokens") or 0, u.get("output_tokens") or 0,

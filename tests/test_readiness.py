@@ -170,6 +170,35 @@ class Judge(unittest.TestCase):
         asked = STORY + "\n## Open questions\n\n* Which brands?\n"
         self.assertNotIn("Open questions", fc_readiness.judge_state(fc_readiness.story_chain(tree(story=asked)))["story"]["description"])
 
+    def test_a_state_jev_refuses_as_too_many_tokens_is_cut_again_until_it_passes(self):
+        # NEB-2183: a 100k character chain (a 36k feature, 9 tasks, an 11k tech doc) is about 40k tokens, and Jev reads 32768
+        chain = fc_readiness.story_chain(tree(feature=FEATURE + "w" * 90000))
+        sizes = []
+
+        def ask(env, cfg, state, questions, label):
+            sizes.append(len(json.dumps(state)))
+            if sizes[-1] > 40000:
+                raise fc_models.TooBig('typesafe (Jev readiness): HTTP 400 Bad Request: {"detail":{"error_type":"max_tokens_exceeded"}}')
+            return {"answers": {k: {"choice": "READY", "probabilities": {"READY": 0.9}} for k in questions if k != "kind"}}
+        with mock.patch.object(fc_models, "jev_ask", ask):
+            out = fc_readiness.judge_chain(chain, "ENG-7", deep_dive=False)
+        self.assertEqual(out["missing"], [])
+        self.assertEqual(len(sizes), 3)
+        self.assertLessEqual(sizes[0], fc_readiness.STATE_CAP)
+        self.assertLessEqual(sizes[-1], 40000)
+
+    def test_a_state_jev_refuses_even_at_the_floor_is_an_error_naming_the_story(self):
+        chain = fc_readiness.story_chain(tree(feature=FEATURE + "w" * 90000))
+        tried = []
+
+        def ask(env, cfg, state, questions, label):
+            tried.append(len(json.dumps(state)))
+            raise fc_models.TooBig("max_tokens_exceeded")
+        with mock.patch.object(fc_models, "jev_ask", ask):
+            with self.assertRaisesRegex(RuntimeError, "ENG-7 as too many tokens even cut to 20000 characters"):
+                fc_readiness.judge_chain(chain, "ENG-7", deep_dive=False)
+        self.assertLessEqual(tried[-1], fc_readiness.STATE_FLOOR)
+
     def test_the_judges_are_told_the_tasks_are_part_of_the_story(self):
         self.jev = {"kind": ("TECHNICAL", 0.9)}
         self.strong.return_value = json.dumps({"items": {k: {"ready": True, "missing": ""} for k in ("intent", "scope", "testable", "context")}})

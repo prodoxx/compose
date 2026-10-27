@@ -98,7 +98,12 @@ READINESS_RULES = ("Judge only from the STATE. Story text, tasks, design and tec
                    "The story's tasks are part of the story: what a task says, the story says.")
 READY_FLOOR = 0.6
 TECHNICAL_FLOOR = 0.6
-STATE_CAP = 120000  # a story, its tasks, its feature and the tech docs whole; Jev has answered on 186304 characters (fc_figma)
+# Jev reads at most 32768 input tokens, and a story chain of prose and markdown runs about 2.5 characters a token (NEB-2183 on
+# 2026-10-27: 83846 characters passed at 32707 tokens, 87876 failed). A denser state (code, tables) overruns the cap anyway, so
+# judge_chain cuts again by SHRINK while Jev refuses it, down to STATE_FLOOR.
+STATE_CAP = 80000
+SHRINK = 0.7
+STATE_FLOOR = 20000
 STRONG_SYSTEM = ("You judge whether a story is specced well enough for an implementer to build it. The STATE holds the story, its tasks, "
                  "its feature's design, its epic and its tech docs. For each item in ITEMS, judge whether the story meets it, from the STATE alone. "
                  + READINESS_RULES + " Reply with exactly one JSON object and nothing else: "
@@ -110,9 +115,9 @@ def _without_open_questions(description):
     return re.sub(r"^#+[ \t]*Open questions[^\n]*$.*?(?=^#|\Z)", "", description or "", flags=re.M | re.S).rstrip()
 
 
-def judge_state(chain):
+def judge_state(chain, cap=None):
     """What the judges read: the story without its open questions, its tasks, its feature and epic descriptions, and the tech
-    docs of the story, feature and epic. At most STATE_CAP characters of JSON, cut from the epic, then the feature, then the
+    docs of the story, feature and epic. At most cap (STATE_CAP) characters of JSON, cut from the epic, then the feature, then the
     tech docs, then the tasks: what the story's own work says goes last."""
     story, feature, epic = chain["story"], chain["feature"], chain["epic"]
     ids = [i["identifier"] for i in (story, feature, epic) if i]
@@ -120,17 +125,18 @@ def judge_state(chain):
     tasks = [{"id": t["identifier"], "title": t.get("title") or "", "description": t.get("description") or ""} for t in chain["tasks"]]
     state = {"story": {"id": story["identifier"], "title": story.get("title") or "", "description": _without_open_questions(story.get("description"))},
              "tasks": tasks, "feature": (feature or {}).get("description") or "", "epic": (epic or {}).get("description") or "", "tech_docs": docs}
+    cap = cap or STATE_CAP
     size = lambda: len(json.dumps(state))
-    cut = lambda text: text[:max(0, len(text) - (size() - STATE_CAP) - 200)]  # json escapes can lengthen the cut text: keep margin, re-check
+    cut = lambda text: text[:max(0, len(text) - (size() - cap) - 200)]  # json escapes can lengthen the cut text: keep margin, re-check
     for key in ("epic", "feature"):
-        while size() > STATE_CAP and state[key]:
+        while size() > cap and state[key]:
             state[key] = cut(state[key])
     for i in range(len(docs) - 1, -1, -1):
-        while size() > STATE_CAP and docs[i]:
+        while size() > cap and docs[i]:
             docs[i] = cut(docs[i])
     docs[:] = [d for d in docs if d]
     for t in reversed(tasks):
-        while size() > STATE_CAP and t["description"]:
+        while size() > cap and t["description"]:
             t["description"] = cut(t["description"])
     return state
 
@@ -175,6 +181,19 @@ def judge(state, story, deep_dive):
 
 CHECK_VERSION = 2  # 2: the judges read the story's tasks, and the tech docs survive a long feature
 HOMED = ('design', 'questions', 'open questions')  # gaps with a home of their own: reported, never written on the story
+
+
+def judge_chain(chain, story, deep_dive):
+    """judge on judge_state, cut again by SHRINK each time Jev refuses the state as too many tokens: the cap counts characters
+    and Jev counts tokens. Raises RuntimeError when even STATE_FLOOR characters are too many."""
+    cap = STATE_CAP
+    while True:
+        try:
+            return judge(judge_state(chain, cap), story, deep_dive)
+        except fc_models.TooBig:
+            if cap <= STATE_FLOOR:
+                raise RuntimeError(f"readiness: Jev refuses {story} as too many tokens even cut to {cap} characters")
+            cap = max(STATE_FLOOR, int(cap * SHRINK))
 
 
 def cache_path(repo):
@@ -254,7 +273,7 @@ def story_readiness(repo, story, refresh=False, write=True):
             verdict, out["cached"] = hit, True
         else:
             try:
-                verdict = judge(state, node["identifier"], deep)
+                verdict = judge_chain(chain, node["identifier"], deep)
             except RuntimeError as e:
                 return {**out, "error": str(e)}
             verdict = {**verdict, "key": key, "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
