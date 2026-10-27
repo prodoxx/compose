@@ -166,6 +166,7 @@ def timed(cmd, cwd, limit, env=None, stdin=subprocess.DEVNULL, check=True):
         p = subprocess.Popen(cmd, cwd=cwd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                              stdin=stdin, start_new_session=True, env=env)
         fc_proc.RUNNING.add(p.pid)
+        fc_proc.watch(p.pid)
         try:
             fc_started.record(p.pid, "timed", None, waiter=os.getpid(), until=time.time() + limit, cwd=str(cwd))
             out, err = p.communicate(timeout=limit)
@@ -176,6 +177,7 @@ def timed(cmd, cwd, limit, env=None, stdin=subprocess.DEVNULL, check=True):
             return subprocess.CompletedProcess(cmd, 124, out[-2000:], (err[-1000:] + "\n" + HANG_HINT.format(limit=limit)).strip())
         finally:
             fc_proc.RUNNING.discard(p.pid)
+            fc_proc.settle(p.pid)  # what it started that outlives it: a test runner's server, say
             fc_started.forget(p.pid)
             fc_core.flag_home(before, f"`{cmd}`", sid=p.pid)  # the command runs in a session of its own
 

@@ -196,7 +196,7 @@ HOME_WRITES = "home-writes.jsonl"  # the journal: one line per write the CLI mak
 HOME_WRITES_MAX = 64 * 1024  # bytes; past it the journal keeps its newer half
 HOME_WRITES_SLACK = 10  # seconds a journal line may predate home_state: a write is journaled just before its file is replaced
 HOME_HASH_MAX = 1 << 20  # bytes; a larger file is compared by size and mtime, not content
-CLI_OWN = {"model-probe.json", "skill-seen", "tool-bugs", "tool-bugs.jsonl", "test-slots", "live", "linear-get", "history.jsonl", "started", "usage", "load.json", "load.lock", "shed.json", HOME_WRITES}  # what other compose processes write there at any time
+CLI_OWN = {"model-probe.json", "skill-seen", "tool-bugs", "tool-bugs.jsonl", "test-slots", "live", "linear-get", "history.jsonl", "started", "usage", "load.json", "load.lock", "shed.json", "pace", HOME_WRITES}  # what other compose processes write there at any time
 CLI_CHECKOUT = Path(__file__).resolve().parents[1]  # left out of home_state where it is under ~/.compose: code, not config
 
 SCRATCH_PREFIX = "compose-config-"

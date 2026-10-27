@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import importlib.machinery, importlib.util, json, os, shutil, subprocess, sys, tempfile, threading, time, types, unittest
+import importlib.machinery, importlib.util, json, os, shlex, shutil, subprocess, sys, tempfile, threading, time, types, unittest
 from pathlib import Path
 from unittest import mock
 os.environ["HERDR_ENV"] = ""
@@ -473,6 +473,33 @@ class Detached(unittest.TestCase):
         self.addCleanup(lambda: self.gone(child) or os.kill(child, 9))
         self.assertEqual(r.returncode, 124)
         self.assertTrue(self.gone(child), "the child in its own group is still running")
+
+    def test_a_command_that_ends_by_itself_takes_its_detached_child_with_it_even_once_its_parent_is_gone(self):
+        """The child's parent exits before the command does, so the child hangs under pid 1: only what the watch saw leads to it."""
+        orphan = ("import subprocess, time; "
+                  "print(subprocess.Popen(['sh', '-c', 'sleep 60 2>/dev/null & echo $!; sleep 0.3'], stdout=subprocess.PIPE, start_new_session=True).stdout.readline().decode().strip(), flush=True); time.sleep(0.6)")
+        with mock.patch.object(fc.fc_proc, "WATCH_EVERY", 0.1):
+            for name, go in (("run", lambda c: fc.fc_proc.run([sys.executable, "-c", c], timeout=30)), ("timed", lambda c: fc.fc_implement.timed(shlex.join([sys.executable, "-c", c]), os.getcwd(), 30))):
+                r = go(orphan)
+                child = int(r.stdout.split()[0])
+                self.addCleanup(lambda child=child: self.gone(child) or os.kill(child, 9))
+                self.assertEqual(r.returncode, 0, name)
+                self.assertTrue(self.gone(child), f"{name}: the detached child outlived the command")
+        self.assertEqual(fc.fc_proc.WATCHED, {})
+
+    def test_what_is_left_in_the_commands_own_group_ends_with_it(self):
+        r = fc.fc_proc.run(["sh", "-c", "sleep 60 >/dev/null 2>&1 & echo $!"], timeout=30)
+        child = int(r.stdout.split()[0])
+        self.addCleanup(lambda: self.gone(child) or os.kill(child, 9))
+        self.assertTrue(self.gone(child), "the background job outlived its shell")
+
+    def test_outside_follows_what_was_seen_by_its_start_time_and_never_a_reused_pid(self):
+        table = {10: (1, 10, "a"), 11: (10, 10, "b"), 12: (11, 12, "c"), 13: (12, 12, "d"), 20: (1, 20, "e"), 21: (20, 21, "f"), 30: (1, 30, "g")}
+        out = fc.fc_proc.outside
+        self.assertEqual(out(table, 10), {12: "c", 13: "d"})  # outside the group, at any depth, through a child inside it
+        self.assertEqual(out(table, 99, {20: "e", 30: "old"}, leader=False), {20: "e", 21: "f"})  # 30 has a new start: another process now
+        self.assertEqual(out(table, 10, leader=False), {})  # a leader gone: its pid may be someone else's
+        self.assertEqual(out({}, 10, {12: "c"}), {})  # no ps: nothing found, nothing killed
 
 
 if __name__ == "__main__":

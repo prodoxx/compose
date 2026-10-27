@@ -34,6 +34,7 @@ def run(cmd, cwd=None, env=None, timeout=None, input=None):
     p = subprocess.Popen(cmd, cwd=cwd, env=env, stdin=subprocess.DEVNULL if input is None else subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                          text=True, start_new_session=True)
     RUNNING.add(p.pid)
+    watch(p.pid)
     with _LOCK:
         KILLED.discard(p.pid)  # a reused pid must not inherit a stale entry
     late = False
@@ -64,6 +65,7 @@ def run(cmd, cwd=None, env=None, timeout=None, input=None):
         return subprocess.CompletedProcess(cmd, p.returncode, out, err)
     finally:
         RUNNING.discard(p.pid)
+        settle(p.pid)
         if tid is not None:
             with _LOCK:
                 KILLED.discard(p.pid)
@@ -80,24 +82,69 @@ def run_limited(cmd, cwd=None, env=None, timeout=None):
         return subprocess.CompletedProcess(cmd, 124, e.stdout or "", err)
 
 
-def children_outside(pid):
-    """Pids of the processes that descend from `pid` and sit in a group other than its own: a server a test runner starts in
-    a group of its own (Playwright's webServer), which a kill of the group does not reach. [] when `ps` is not there."""
+def _table():
+    """{pid: (ppid, pgid, start)} of every process now, from `ps`; {} when `ps` is not there. The start time (lstart) tells a
+    pid reused since apart from the process seen before."""
     try:
-        rows = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,pgid="], capture_output=True, text=True, timeout=10).stdout.splitlines()
+        rows = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,pgid=,lstart="], capture_output=True, text=True, timeout=10).stdout.splitlines()
     except (OSError, subprocess.SubprocessError):
-        return []
+        return {}
+    return {int(x[0]): (int(x[1]), int(x[2]), x[3].strip()) for x in (row.split(None, 3) for row in rows) if len(x) == 4 and all(y.isdigit() for y in x[:3])}
+
+
+def outside(table, pid, known=None, leader=True):
+    """The processes in `table` ({pid: (ppid, pgid, start)}) that descend from `pid` (only while it still leads its group,
+    `leader`) or are, or descend from, one in `known` ({pid: start}) still there with the same start, and sit in a group other
+    than `pid`: {pid: start}. A server that left the group and whose parent died since hangs under pid 1, so only `known` finds it."""
     kids = {}
-    for row in rows:
-        if len(parts := row.split()) == 3 and all(x.isdigit() for x in parts):
-            kids.setdefault(int(parts[1]), []).append((int(parts[0]), int(parts[2])))
-    found, todo = [], [pid]
+    for child, (parent, _, _) in table.items():
+        kids.setdefault(parent, []).append(child)
+    found = {k: s for k, s in (known or {}).items() if k in table and table[k][2] == s and table[k][1] != pid}
+    todo, seen = ([pid] if leader else []) + list(found), set()
     while todo:
-        for child, group in kids.get(todo.pop(), []):
-            todo.append(child)
-            if group != pid:
-                found.append(child)
+        for child in kids.get(todo.pop(), []):
+            if child not in seen and child not in (0, 1):
+                seen.add(child); todo.append(child)
+                if table[child][1] != pid:
+                    found[child] = table[child][2]
     return found
+
+
+WATCH_EVERY = 1.0  # seconds between two looks at what the commands `run` and `timed` wait on have started
+WATCHED = {}  # leader pid -> {pid: start} of what the command started in groups of their own, as last seen
+_WATCH = {"thread": None, "lock": threading.Lock()}
+
+
+def watch(pid):
+    """Track what the command leading group `pid` starts outside its group until `settle(pid)`: a test runner's server
+    (Playwright's webServer is detached) outlives the runner, and once its parent is gone no process tree leads to it."""
+    with _WATCH["lock"]:
+        WATCHED[pid] = {}
+        if _WATCH["thread"] is None:
+            _WATCH["thread"] = threading.Thread(target=_watching, name="fc_proc.watch", daemon=True)
+            _WATCH["thread"].start()
+
+
+def _watching():
+    while True:
+        with _WATCH["lock"]:
+            if not WATCHED:
+                _WATCH["thread"] = None
+                return
+        table = _table()
+        with _WATCH["lock"]:
+            for pid, known in WATCHED.items():
+                known.update(outside(table, pid, known))
+        time.sleep(WATCH_EVERY)
+
+
+def children_outside(pid):
+    """Pids of the processes that descend from `pid`, or that its watch saw it start, and sit in a group other than its own:
+    a server a test runner starts in a group of its own (Playwright's webServer), which a kill of the group does not reach.
+    [] when `ps` is not there."""
+    with _WATCH["lock"]:
+        known = dict(WATCHED.get(pid, {}))
+    return list(outside(_table(), pid, known))
 
 
 def _signal(pid, sig, group=False):
@@ -113,19 +160,34 @@ def kill_group(pid, proc=None):
     """SIGTERM to the process group `pid` and to what it started in groups of their own, SIGKILL after 5 s to whatever is still
     alive; a group already gone is not an error. `proc` is the Popen of the leader when the caller is its parent: it is reaped
     while this waits, as a zombie leader keeps its group alive on Linux."""
-    outside = children_outside(pid)  # before the signal: once the leader is gone they are reparented and cannot be found
+    _end(pid, children_outside(pid), proc)  # found before the signal: once the leader is gone they are reparented and cannot be found
+
+
+def settle(pid):
+    """After the command that led group `pid` ended and was reaped, however it ended: end what it left behind, the rest of its
+    group and what its watch saw it start in groups of their own, as kill_group does. A command `run` or `timed` waits on starts
+    nothing that outlives it, so a test runner's server does not run on at full CPU for hours. Stops the watch."""
+    with _WATCH["lock"]:
+        known = WATCHED.pop(pid, {})
+    group = _signal(pid, 0, group=True)  # a pid is not reused while its group lives
+    if known or group:
+        _end(pid, list(outside(_table(), pid, known, leader=group)) if known else [])
+
+
+def _end(pid, others, proc=None):
+    """SIGTERM to group `pid` and to the processes `others`, SIGKILL after 5 s to whatever is still alive."""
     term = _signal(pid, signal.SIGTERM, group=True)
-    term = any([_signal(child, signal.SIGTERM) for child in outside]) or term
+    term = any([_signal(child, signal.SIGTERM) for child in others]) or term
     if not term:
         return
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
         if proc:
             proc.poll()
-        if not any([_signal(pid, 0, group=True)] + [_signal(child, 0) for child in outside]):  # gone, or only zombies
+        if not any([_signal(pid, 0, group=True)] + [_signal(child, 0) for child in others]):  # gone, or only zombies
             return
         time.sleep(0.1)
-    for child in outside:
+    for child in others:
         _signal(child, signal.SIGKILL)
     _signal(pid, signal.SIGKILL, group=True)
 
