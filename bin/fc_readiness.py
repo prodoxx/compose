@@ -14,8 +14,8 @@ class NotAStory(Exception):
 
 READINESS_TREE = """query($id: String!) { issue(id: $id) { id identifier title description state { name } labels { nodes { name } }
   children { nodes { identifier title state { name type } description
-    inverseRelations(first: 50) { nodes { type issue { identifier state { name } labels { nodes { name } } parent { identifier } } } } } }
-  inverseRelations(first: 250) { nodes { type issue { identifier state { name } labels { nodes { name } } } } }
+    inverseRelations(first: 50) { nodes { type issue { identifier state { name } labels { nodes { name } } parent { identifier parent { identifier } } } } } } }
+  inverseRelations(first: 250) { nodes { type issue { identifier state { name } labels { nodes { name } } parent { identifier } } } }
   project { documents(first: 250) { nodes { title content url } } }
   parent { id identifier title description labels { nodes { name } }
     parent { id identifier title description labels { nodes { name } } } } } }"""
@@ -231,12 +231,13 @@ def story_readiness(repo, story, refresh=False, write=True):
     out = _result(node, has_tasks=bool(chain["tasks"]))
     if (node["state"]["name"] or "").lower() not in ("todo", "backlog"):
         return out
+    feature = (chain["feature"] or {}).get("identifier")
     holds = [r["issue"]["identifier"] for r in node["inverseRelations"]["nodes"]
-             if r["type"] == "blocks" and not fc_tasks.blocker_finished(r["issue"]["state"]["name"], [l["name"] for l in r["issue"]["labels"]["nodes"]])]
-    holds += [h for h in fc_linear.task_holds(node) if h not in holds]  # its tasks waiting on another story's hold it too
+             if r["type"] == "blocks" and not fc_linear.freed(r["issue"], (r["issue"].get("parent") or {}).get("identifier"), feature)]
+    holds += [h for h in fc_linear.task_holds(node, feature) if h not in holds]  # its tasks waiting on another story's hold it too
     if fc_linear.NEEDS_SHAPING in _labels(node):  # its design waits on the product owner in 0b: no judge spent and nothing written
         return {**out, "specced": False, "unblocked": not holds, "blocked_by": holds, "needs_shaping": True}
-    out.update(unblocked=bool(fc_linear.ready_ids([node])), blocked_by=holds)
+    out.update(unblocked=bool(fc_linear.ready_ids([node], feature)), blocked_by=holds)
     gaps = gates(chain)
     deep = any(DEEP_DIVE in _labels(i) for i in (node, chain["feature"], chain["epic"]))
     missing = gaps

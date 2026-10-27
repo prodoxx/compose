@@ -28,6 +28,17 @@ def section_span(lines, heading):
         return None
     return start, next((i for i, n in marks if i > start and n <= heading_level(heading)), len(lines))
 
+LINEAR_BULLET, LINEAR_LINK = re.compile(r"^([ \t]*)[-+*](?=[ \t])", re.M), re.compile(r"\]\(<([^<>\s]*)>\)")
+
+def linear_markdown(text):
+    """The text as Linear stores it: a bullet as `*`, a link target bare where Linear wraps it in `<>`, no trailing spaces."""
+    text = LINEAR_LINK.sub(r"](\1)", LINEAR_BULLET.sub(r"\1*", text or ""))
+    return "\n".join(line.rstrip() for line in text.strip().split("\n"))
+
+def same_markdown(a, b):
+    """Whether Linear stores the two texts alike, so writing one over the other changes nothing and Linear keeps serving the old."""
+    return linear_markdown(a) == linear_markdown(b)
+
 def section_hash(body, heading):
     """A short hash of the section as it stands, subsections included; None when it is not there. A writer passes the hash it
     read to `--expect`, and the write refuses when the section changed since."""

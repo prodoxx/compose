@@ -216,6 +216,15 @@ class Reconcile(Fake):
         fc.fc_delivery.reconcile(self.repo)
         self.assertEqual((self.mutations()[before:], self.blocked_by.call_count, self.comments), ([], 0, []))
 
+    def test_a_document_linear_only_reformatted_is_not_written_again(self):
+        fc.fc_delivery.reconcile(self.repo)
+        self.apply_writes()
+        self.assertIn("\n- ", self.content)
+        self.content = self.content.replace("\n- ", "\n* ")  # how Linear stores the bullets it was sent
+        writes = len(self.doc_writes)
+        fc.fc_delivery.reconcile(self.repo)
+        self.assertEqual(len(self.doc_writes), writes)
+
     def test_no_reconcile_yet_reads_as_none(self):
         self.assertIsNone(fc.fc_delivery.last_reconcile(self.repo))
 

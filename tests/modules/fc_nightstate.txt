@@ -9,6 +9,7 @@ add_note
 notes_tail
 spawn_once
 unmerged_depth
+unmerged_stories
 one_level
 fc_factoryturn
 RESUME_BUFFER

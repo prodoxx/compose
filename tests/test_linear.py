@@ -409,6 +409,25 @@ class ReadyRule(unittest.TestCase):
                                     self.node("NEB-5", "Todo", design("In Progress", "Design")),
                                     self.node("NEB-6", "Todo", design("In Review"), labels=("Design",))), ["NEB-2", "NEB-3"])
 
+    def test_a_sibling_in_review_under_the_same_parent_frees_it(self):
+        # NEB-2184: story 1 was verified (In Review, waiting for the merge) and story 2, blocked by it in the same feature, never went Ready
+        sib = lambda state, parent="NEB-1": {"type": "blocks", "issue": {"identifier": "NEB-2", "state": {"name": state}, "labels": {"nodes": []},
+                                                                           "parent": {"identifier": parent} if parent else None}}
+        node = lambda *rels: {**self.node("NEB-3", "Todo"), "inverseRelations": {"nodes": list(rels)}}
+        self.assertEqual(fc.fc_linear.ready_ids([node(sib("In Review"))], "NEB-1"), ["NEB-3"])
+        self.assertEqual(fc.fc_linear.ready_ids([node(sib("In Review"))]), [])  # no parent given: only finished blockers free it
+        for held in (sib("In Progress"), sib("Todo"), sib("In Review", "NEB-9"), sib("In Review", None)):
+            self.assertEqual(fc.fc_linear.ready_ids([node(held)], "NEB-1"), [], held)
+
+    def test_a_task_held_by_a_sibling_storys_task_in_review_is_freed(self):
+        held = lambda state, feature: {**self.node("NEB-3", "Todo"), "children": {"nodes": [
+            {"identifier": "NEB-31", "state": {"name": "Todo"}, "inverseRelations": {"nodes": [{"type": "blocks", "issue": {
+                "identifier": "NEB-21", "state": {"name": state}, "labels": {"nodes": []}, "parent": {"identifier": "NEB-2", "parent": {"identifier": feature}}}}]}}]}}
+        self.assertEqual(fc.fc_linear.task_holds(held("In Review", "NEB-1"), "NEB-1"), [])
+        self.assertEqual(fc.fc_linear.task_holds(held("In Review", "NEB-9"), "NEB-1"), ["NEB-2"])
+        self.assertEqual(fc.fc_linear.task_holds(held("In Progress", "NEB-1"), "NEB-1"), ["NEB-2"])
+        self.assertEqual(fc.fc_linear.task_holds(held("In Review", "NEB-1")), ["NEB-2"])
+
     def test_a_non_open_issue_is_never_ready_even_with_finished_blockers(self):
         done = ("blocks", "NEB-1", "Done", ())
         self.assertEqual(self.ready(*(self.node("NEB-2", s, done) for s in ("In Progress", "In Review", "Done", "Canceled"))), [])
@@ -431,7 +450,7 @@ class MarkReady(unittest.TestCase):
     def gql(self, query, variables):
         if query == fc.fc_linear.LINEAR_READY_TREE:
             self.reads.append(variables)
-            return {"issue": {"team": {"labels": {"nodes": self.team}}, "children": {"nodes": self.children}, "parent": self.parent,
+            return {"issue": {"identifier": getattr(self, "ident", None), "team": {"labels": {"nodes": self.team}}, "children": {"nodes": self.children}, "parent": self.parent,
                               "inverseRelations": {"nodes": self.feature_rels}}}
         self.assertEqual(query, self.UPDATE)
         self.updates.append(variables)
@@ -472,6 +491,14 @@ class MarkReady(unittest.TestCase):
         self.children = [held, inside, done]
         self.mark("ENG-3", "ENG-4")
         self.assertEqual(fc.fc_linear.task_holds(held), ["ENG-3"])
+
+    def test_a_story_blocked_by_a_verified_sibling_goes_ready(self):
+        self.ident = "ENG-1"
+        sibling = {"type": "blocks", "issue": {"identifier": "ENG-2", "state": {"name": "In Review"}, "labels": {"nodes": []}, "parent": {"identifier": "ENG-1"}}}
+        later = self.node("ENG-3", "Todo")
+        later["inverseRelations"]["nodes"] = [sibling]
+        self.children = [self.node("ENG-2", "In Review"), later]
+        self.mark("ENG-3")
 
     def test_a_child_labeled_needs_shaping_loses_ready_and_keeps_the_label(self):
         self.team.append({"id": "l-needs-shaping", "name": "needs-shaping"})
@@ -799,8 +826,8 @@ class FeatureAfterLink(unittest.TestCase):
 
 class ReadyTreeQuery(unittest.TestCase):
     FRAGMENT = """fragment ReadyNode on Issue { id identifier title description state { name } labels { nodes { id name } }
-  children { nodes { identifier state { name } inverseRelations(first: 50) { nodes { type issue { identifier state { name } labels { nodes { name } } parent { identifier } } } } } }
-  inverseRelations(first: 250) { nodes { type issue { identifier state { name } labels { nodes { name } } } } } }"""
+  children { nodes { identifier state { name } inverseRelations(first: 50) { nodes { type issue { identifier state { name } labels { nodes { name } } parent { identifier parent { identifier } } } } } } }
+  inverseRelations(first: 250) { nodes { type issue { identifier state { name } labels { nodes { name } } parent { identifier } } } } }"""
 
     @staticmethod
     def norm(text):
@@ -826,14 +853,14 @@ class ReadyTreeQuery(unittest.TestCase):
             self.assertGreaterEqual(depth, 0, f"closes more than it opens at {i}")
         self.assertEqual(depth, 0)
 
-    def test_team_holds_only_labels_and_children_and_parent_sit_in_issue(self):
+    def test_identifier_team_children_and_parent_sit_in_issue(self):
         op = (self.fields(fc.fc_linear.LINEAR_READY_TREE) or [""])[0]
         self.assertTrue(op.startswith("query($id: String!) {"), op)
         issue, *extra = self.fields(self.inner(op))
         self.assertEqual(extra, [])  # the operation holds only issue
         self.assertTrue(issue.startswith("issue(id: $id) {"), issue)
-        self.assertEqual(self.fields(self.inner(issue)), ["team { labels { nodes { id name } } }", "children { nodes { ...ReadyNode } }",
-                                                          "parent { children { nodes { ...ReadyNode } } }",
+        self.assertEqual(self.fields(self.inner(issue)), ["identifier team { labels { nodes { id name } } }", "children { nodes { ...ReadyNode } }",
+                                                          "parent { identifier children { nodes { ...ReadyNode } } }",
                                                           "inverseRelations(first: 50) { nodes { type issue { identifier state { name } labels { nodes { name } } } } }"])
 
     def test_the_fragment_is_unchanged_and_follows_the_operation(self):

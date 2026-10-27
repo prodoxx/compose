@@ -1,6 +1,10 @@
 heading_level
 headings
 section_span
+LINEAR_BULLET
+LINEAR_LINK
+linear_markdown
+same_markdown
 section_hash
 section_hashes
 replace_section

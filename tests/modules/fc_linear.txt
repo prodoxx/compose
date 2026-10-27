@@ -30,6 +30,7 @@ linear_event
 linear_merged
 linear_reconcile
 NEEDS_SHAPING
+freed
 task_holds
 ready_ids
 open_questions
