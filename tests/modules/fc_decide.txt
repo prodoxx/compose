@@ -6,6 +6,7 @@ ANSWER
 TAG
 APPROVAL
 KEEP
+ASK_STYLE
 NEW_FORM
 map_issue
 read_map

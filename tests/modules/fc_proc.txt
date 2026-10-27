@@ -10,6 +10,8 @@ _LOCK
 Paused
 run
 run_limited
+children_outside
+_signal
 kill_group
 stop
 on_termination

@@ -96,6 +96,7 @@ class Decide(unittest.TestCase):
         (self.proj / "results" / "asked.json").write_text(json.dumps({"manager@/NEB-1/Q1": {"at": "2026-10-24 09:00:00"}}))
         out = self.decisions()
         self.assertIn("shop: 2 open question(s) on NEB-1, 1 decision(s) to confirm", out)
+        self.assertIn("ask the product owner one question per message, brainstorming style (sections/0b.md)", out.splitlines()[1])
         self.assertIn("Q1: Which auth?  (asked 2026-10-24 09:00:00)\n   Recommendation: Clerk\n   Why: every screen signs in", out)
         self.assertIn("Q2: Which database?  (not asked yet)", out)
         self.assertIn("Decisions to confirm (1):\n- Q3: dark theme (yolo recommendation, unconfirmed, 2026-10-21)", out)
@@ -120,6 +121,7 @@ class Decide(unittest.TestCase):
     def test_an_empty_page_says_nothing_is_open(self):
         self.linear.body = "## Not yet specified\n\n## Out of scope\n"
         self.assertIn("no open questions: Not yet specified is empty", self.decisions())
+        self.assertNotIn("brainstorming style", self.decisions())
 
     def test_a_decision_is_recorded_only_with_the_product_owners_words(self):
         with self.assertRaises(SystemExit) as e:

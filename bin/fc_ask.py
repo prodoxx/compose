@@ -75,6 +75,7 @@ def decided_ids(bodies, ids):
 # ---------- an open question: one line under Not yet specified, asked open, with the recommendation an away answer takes ----------
 QUESTION_FORMAT = "`- Q1: <question> - Recommendation: <recommendation> - <why it matters>`"
 CARD_HEAD = re.compile(rf"^\s*(?:[-*]\s+|\d+[.)]\s+)?[*_`]*({CARD_ID})[*_`]*[.:)][*_`]*\s*(.*)")  # `- Q3: question`, old `Q1. question`, `- **Q1**: question`
+MENU = re.compile(r"(?:^|[\s(:;,])\(?A[).]\s+\S.*[\s;,]\(?B[).]\s+\S")  # `A) x; B) y` in a question: a menu, where an open question belongs
 INLINE_RECOMMENDATION = re.compile(r"\s+-\s+[*_`]*recommend(?:ation|ed)?[*_`]*\s*:[*_`]*\s*", re.I)
 REPLACES = re.compile(rf"\((?:replaces|supersedes)\s+({CARD_ID})\)", re.I)  # a change-of-course question names the decision it would replace
 # an old card block's lines: `A. <option> - affects: <what>`, `Why: ...`, `Recommendation: <letter>`, `Supersedes: ...`
@@ -133,7 +134,8 @@ def questions_in(section):
     return out
 
 def format_problems(bodies, ids):
-    """Why the asked questions cannot go out as written on the maps: one missing from every Not yet specified, or one with no recommendation.
+    """Why the asked questions cannot go out as written on the maps: one missing from every Not yet specified, one with no recommendation,
+    or one whose question lists lettered options (the product owner is asked open, brainstorming style; options sit in the recommendation).
     Nothing when no map was read (Linear down): the format is checked where it can be."""
     if not bodies:
         return []
@@ -141,8 +143,10 @@ def format_problems(bodies, ids):
     for desc in bodies.values():
         for cid, q in questions_in(fc_change.map_section(desc, "Not yet specified")).items():
             found.setdefault(cid, q)
-    return [f"{i} is not written under Not yet specified on {', '.join(bodies)}" if i not in found else f"{i} has no recommendation"
-            for i in ids if i not in found or not found[i]["recommendation"]]
+    return [f"{i} is not written under Not yet specified on {', '.join(bodies)}" if i not in found else
+            f"{i} has no recommendation" if not found[i]["recommendation"] else
+            f"{i} lists lettered options: ask it open and put the options in its recommendation"
+            for i in ids if i not in found or not found[i]["recommendation"] or MENU.search(found[i]["question"])]
 
 class Refused(Exception):
     """A report that must not go out, but is no error of the reporter's command: it is told why, and the attempt is recorded."""
@@ -177,7 +181,7 @@ def ask_gate(proj, message, hop=""):
     if not open_ids:
         raise Refused(f"not reported: {', '.join(ids)} already in the map's Decisions so far. Build on the decisions; nothing is open.")
     if problems := format_problems(bodies, open_ids):
-        raise Refused(f"not reported: the questions are not open on the map with a recommendation: {'; '.join(problems)}. Write each one "
+        raise Refused(f"not reported: the questions are not open questions on the map with a recommendation: {'; '.join(problems)}. Write each one "
                       f"under Not yet specified as {QUESTION_FORMAT}, then report again; the engineering manager reads them with `compose decisions`.")
     path = proj / "results" / "asked.json"
     asked = json.loads(path.read_text()) if path.exists() else {}
