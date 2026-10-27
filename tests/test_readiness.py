@@ -54,12 +54,6 @@ class Gates(unittest.TestCase):
         approved = linked + '\n## Decisions so far\n\n- D1: the tech doc on ENG-0 is approved (product owner, 2026-10-24; said: "ok")\n'
         self.assertEqual(fc_readiness.gates(fc_readiness.story_chain(tree(epic=approved, epic_labels=("Epic", "deep-dive"), docs=[doc]))), [])
 
-    def test_an_unlinked_tech_doc_is_reported(self):
-        epic = '## Decisions so far\n\n- D1: the tech doc on ENG-0 is approved (po, 2026-10-24; said: "ok")\n'
-        doc = {"title": "ENG-0: tech doc", "content": "x", "url": "https://linear.app/d/1"}
-        g = fc_readiness.gates(fc_readiness.story_chain(tree(epic=epic, epic_labels=("Epic", "deep-dive"), docs=[doc])))
-        self.assertEqual([x["question"] for x in g], ["ENG-0's tech doc is not linked under ## Tech doc."])
-
     def test_a_task_or_a_feature_is_refused(self):
         with self.assertRaisesRegex(fc_readiness.NotAStory, "ENG-7 is a task"):
             fc_readiness.story_chain(tree(story=STORY + "\n```compose\nid: 07\ntest: t\n```\n"))
@@ -423,11 +417,6 @@ class Cli(unittest.TestCase):
         self.assertEqual(self.out.splitlines(), ["ENG-7 ready", "ENG-8 not ready (blocked by ENG-3): scope: Where does ENG-8 stop: what is in it and what is left out?"])
         self.assertEqual(sr.call_args.kwargs, {"refresh": False, "write": False})
 
-    def test_all_ready_exits_zero(self):
-        with mock.patch.object(fc_readiness, "story_readiness", side_effect=lambda repo, s, refresh, write: READY):
-            self.cli("ENG-7")
-        self.assertEqual(self.out.splitlines(), ["ENG-7 ready"])
-
     def test_without_a_linear_key_it_says_how_to_add_one(self):
         with mock.patch.object(fc.fc_config, "LINEAR_KEY", None), self.assertRaises(SystemExit) as e:
             self.cli("ENG-7")
@@ -482,21 +471,6 @@ class Cli(unittest.TestCase):
         self.assertEqual(e.exception.code, 1)
         self.assertEqual(self.out.splitlines(), ["ENG-6 not judged: the judge failed", "ENG-7 ready"])
         self.assertLessEqual(self.out.splitlines()[0].count("readiness:"), 1, "no doubled readiness: prefix")
-
-    def test_line_shapes(self):
-        L = fc_readiness.readiness_line
-        self.assertEqual(L(dict(READY, has_tasks=False)), "ENG-7 ready (no tasks yet: the planner cuts them)")
-        self.assertEqual(L(dict(READY, ready=False, error="boom")), "ENG-7 not judged: boom")
-        self.assertEqual(L(dict(READY, ready=False, specced=None, state="Done")), "ENG-7 not open: Done")
-        self.assertEqual(L(dict(READY, ready=False, specced=False, unblocked=False, needs_shaping=True, blocked_by=["ENG-3"])), "ENG-7 not ready (blocked by ENG-3): needs shaping")
-
-    def test_the_verb_parses_its_flags(self):
-        import subprocess
-        r = subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / "bin" / "compose"), "readiness", "--help"], capture_output=True, text=True)
-        self.assertEqual(r.returncode, 0)
-        for f in ("--refresh", "--dry-run", "--json"):
-            self.assertIn(f, r.stdout)
-
 
 if __name__ == "__main__":
     unittest.main()

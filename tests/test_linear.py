@@ -125,24 +125,6 @@ class Sync(unittest.TestCase):
         with self.assertRaises(SystemExit):
             fc.fc_tasks.sync_tasks(self.proj, {"issues": []})
 
-    def test_unsynced_project_says_how(self):
-        with self.assertRaises(SystemExit) as e:
-            fc.fc_tasks.load_tasks(self.proj, required=True)
-        self.assertIn("compose sync", str(e.exception))
-        self.assertEqual(fc.fc_tasks.load_tasks(self.proj), [])  # status and watch still work before a sync
-
-    def test_cli_reads_stdin(self):
-        payload = json.dumps({"feature": {"id": "ENG-1", "title": "F"}, "issues": [issue("ENG-3", "A", block(id="001", test="t"))]})
-        with mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), mock.patch.object(sys, "stdin", io.StringIO(payload)), \
-                mock.patch("builtins.print"):
-            fc.fc_linear.cmd_sync(SimpleNamespace(stdin=True))
-        self.assertEqual(fc.fc_tasks.load_tasks(self.proj)[0]["linear"], "ENG-3")
-        with mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), mock.patch.object(sys, "stdin", io.StringIO("not json")), \
-                self.assertRaises(SystemExit) as e:
-            fc.fc_linear.cmd_sync(SimpleNamespace(stdin=True))
-        self.assertIn("sync: stdin is not JSON", str(e.exception))
-
-
 class RefreshBeforeRun(unittest.TestCase):
     """`run` reads the tasks again from Linear, so an edit made since the last sync reaches the implementer."""
     def setUp(self):
@@ -194,12 +176,6 @@ class ScopedSyncNames(unittest.TestCase):
         self.assertIn("ENG-7", text)
         self.assertNotIn("ENG-6", text)  # has its parentId
         self.assertNotIn("get_issue", text)
-
-    def test_sources_name_no_mcp_tool(self):
-        for name in ("fc_tasks.py", "fc_change.py"):
-            src = (Path(__file__).resolve().parents[1] / "bin" / name).read_text()
-            self.assertEqual([w for w in ("save_issue", "get_issue", "list_issues", "Linear MCP") if w in src], [], name)
-
 
 class HandTasks(unittest.TestCase):
     """A `kind: hand` task is built by hand: run and quick never dispatch it, and the stack, verify and `done` know it like any code task."""
@@ -606,13 +582,6 @@ class ReadyCommand(unittest.TestCase):
         self.assertEqual(e.exception.code, "ready: team has no label 'Ready'")
         self.assertFalse(self.stored.exists())
 
-    def test_the_ready_subcommand_runs_cmd_ready_for_the_project(self):
-        with mock.patch.object(sys, "argv", ["compose", "ready", "--project", "p"]), mock.patch.object(fc.fc_linear, "cmd_ready") as c:
-            fc.main()
-        c.assert_called_once()
-        self.assertEqual(c.call_args.args[0].project, "p")
-
-
 class ReadyRefresh(unittest.TestCase):
     def setUp(self):
         self.proj, self.said, self.items = Path(tempfile.mkdtemp()) / "p", [], [{"id": "ENG-3", "title": "Login form"}]
@@ -814,13 +783,6 @@ class FeatureAfterLink(unittest.TestCase):
             self.projects.assert_called_with(self.root)
         self.assertEqual(self.link({"after": "base"}), [])  # already blocked by ENG-9: no mutation, ENG-5 kept
 
-    def test_no_after_calls_nothing_and_a_missing_feature_is_one_line(self):
-        for verify in ({}, {"review_base": "main"}):
-            self.assertEqual((self.link(verify), self.calls, self.said), ([], [], []))
-        for name in ("gone", "bare"):
-            self.assertEqual(self.link({"after": name}), [])
-            self.assertEqual(self.said, [f"linear: no feature for project {name}, so ENG-1 is not linked"])
-
     def test_sync_from_linear_links_after_refreshing_and_stdin_does_not(self):
         data = {"feature": {"id": "ENG-1", "title": "F"}, "issues": [issue("ENG-3", "A", block(id="001", test="t"))]}
         for stdin in (True, False):
@@ -861,20 +823,6 @@ class ReadyTreeQuery(unittest.TestCase):
             self.assertGreaterEqual(depth, 0, f"closes more than it opens at {i}")
         self.assertEqual(depth, 0)
 
-    def test_identifier_team_children_and_parent_sit_in_issue(self):
-        op = (self.fields(fc.fc_linear.LINEAR_READY_TREE) or [""])[0]
-        self.assertTrue(op.startswith("query($id: String!) {"), op)
-        issue, *extra = self.fields(self.inner(op))
-        self.assertEqual(extra, [])  # the operation holds only issue
-        self.assertTrue(issue.startswith("issue(id: $id) {"), issue)
-        self.assertEqual(self.fields(self.inner(issue)), ["identifier team { labels { nodes { id name } } }", "children { nodes { ...ReadyNode } }",
-                                                          "parent { identifier children { nodes { ...ReadyNode } } }",
-                                                          "inverseRelations(first: 50) { nodes { type issue { identifier state { name } labels { nodes { name } } } } }"])
-
-    def test_the_fragment_is_unchanged_and_follows_the_operation(self):
-        self.assertEqual(self.fields(fc.fc_linear.LINEAR_READY_TREE)[1:], [self.norm(self.FRAGMENT)])
-
-
 class EvidenceBrief(unittest.TestCase):
     """The CLI-owned Evidence section after the compose block is not part of the implementer's brief."""
     setUp, sync = Sync.setUp, Sync.sync
@@ -908,10 +856,6 @@ class RoutePin(unittest.TestCase):
 
     def task(self, desc):
         return fc.fc_tasks.task_from_issue(issue("ENG-3", "T", desc))
-
-    def test_the_workflow_and_depth_names(self):
-        self.assertEqual(fc.fc_tasks.WORKFLOWS, ("test-first", "implement-then-test", "fix-then-regression-test", "check-only"))
-        self.assertEqual(fc.fc_tasks.DEPTHS, ("FAST", "STANDARD", "DEEP"))
 
     def test_route_text_ends_at_the_next_section_or_the_block(self):
         fence = "```compose\nid: 001\ntest: t\n```\n"

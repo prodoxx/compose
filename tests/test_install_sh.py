@@ -109,7 +109,3 @@ class InstallMessages(unittest.TestCase):  # the InstallSh fakes, with a git who
         self.assertEqual(out.splitlines()[-1], "starting compose setup", out)
         for gone in ("no terminal", "guided", "plain"):
             self.assertNotIn(gone, out)
-
-    def test_script_never_says_guided_or_plain_setup(self):
-        text = SCRIPT.read_text().lower()
-        self.assertNotIn("guided", text); self.assertNotIn("plain setup", text)

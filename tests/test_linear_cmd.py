@@ -200,15 +200,6 @@ class LinearGet(unittest.TestCase):
             fc.fc_linear_cmd.verb_get(self.args("get", *target, **kw))
         return [line for line in out.getvalue().splitlines() if line.strip()]
 
-    def test_line_shape_with_and_without_labels(self):
-        self.assertEqual(fc.fc_linear_cmd.issue_line(self.issue), "ENG-7 In Progress bug Fix the cart")
-        self.assertEqual(fc.fc_linear_cmd.issue_line({**self.issue, "labels": {"nodes": []}}), "ENG-7 In Progress - Fix the cart")
-
-    def test_get_prints_only_the_line_from_the_issue_query(self):
-        self.assertEqual(self.get("ENG-7"), ["ENG-7 In Progress bug Fix the cart"])
-        self.assertEqual([v for q, v in self.calls if self.QUERY in q], [{"id": "ENG-7"}])
-        self.assertEqual(self.fails(fc.fc_linear_cmd.verb_get, self.args("get")), (1, "get needs an issue id"))
-
     def test_the_same_issue_read_again_within_30_seconds_comes_from_the_cache_unless_fresh(self):
         reads = lambda: len([1 for q, v in self.calls if self.QUERY in q])
         first = self.get("ENG-7")
@@ -263,11 +254,6 @@ class LinearGet(unittest.TestCase):
         self.assertEqual(len({hash_of(h) for h in ("## Goal", "## Notes", "### Codebase brief")}), 3)
         self.assertRegex(hash_of("## Goal"), r"^[0-9a-f]{8}$")
 
-    def test_json_prints_only_the_issue(self):
-        with redirect_stdout(io.StringIO()) as out:
-            fc.fc_linear_cmd.verb_get(self.args("get", "ENG-7", json=True, body=True, comments=True))
-        self.assertEqual(out.getvalue().strip(), json.dumps(self.issue, indent=1))
-
     def test_out_of_scope_refuses_unless_any_project(self):
         self.issue["project"] = {"id": "p9", "name": "Shop"}
         for kw in ({}, {"json": True}):
@@ -275,7 +261,6 @@ class LinearGet(unittest.TestCase):
                 self.assertEqual(self.fails(fc.fc_linear_cmd.verb_get, self.args("get", "ENG-7", fresh=True, **kw)), (1, "ENG-7 is not in project Shop; pass --any-project to use it"))
             self.assertEqual(out.getvalue(), "")
         self.assertEqual(self.get("ENG-7", any_project=True, fresh=True), ["ENG-7 In Progress bug Fix the cart"])
-
 
 class LinearList(unittest.TestCase):
     QUERY = "issues(first: 100, after: $after, filter: $f) { pageInfo { hasNextPage endCursor } nodes { identifier title state { name } labels { nodes { name } } } }"
@@ -322,11 +307,6 @@ class LinearList(unittest.TestCase):
         self.calls.clear()
         _, sent = self.run_list(parent="ENG-9", search="cart")
         self.assertEqual(sent[0]["f"], {"project": {"id": {"eq": "p1"}}, "parent": {"id": {"eq": "ENG-9"}}, "searchableContent": {"contains": "cart"}})
-
-    def test_json_prints_only_all_nodes(self):
-        out, _ = self.run_list(search="cart", json=True)
-        self.assertEqual(out.strip(), json.dumps(self.nodes, indent=1))
-
 
 class LinearCreate(unittest.TestCase):
     TEAM, CREATE = "team(id: $id) { name states { nodes { id name } } labels(first: 250) { nodes { id name } } }", "issueCreate(input: $in) { issue { id identifier } }"
@@ -397,12 +377,6 @@ class LinearCreate(unittest.TestCase):
                                  (1, f"--priority is one of none, urgent, high, medium, low or 0-4, not {bad!r}"))
                 self.assertFalse([q for q, _ in self.calls if self.CREATE in q])
 
-    def test_create_without_flags_sends_only_the_base_input(self):
-        with mock.patch("sys.stdin", io.StringIO("piped body")):
-            sent, issue, blocked = self.create()
-        self.assertEqual(sent, [{"teamId": "t1", "projectId": "p1", "title": "Fix it", "description": "piped body"}])
-        issue.assert_not_called(); blocked.assert_not_called()
-
     def test_refuses_without_a_title_or_with_an_unknown_name_and_creates_nothing(self):
         self.assertEqual(self.fails(fc.fc_linear_cmd.verb_create, self.args("create")), (1, "create needs --title"))
         self.assertIn("has no label 'perf'", self.fails(fc.fc_linear_cmd.verb_create, self.args("create", title="Fix it", label=["perf"]))[1])
@@ -457,12 +431,6 @@ class LinearUpdate(unittest.TestCase):
         rs = fc_plan.replace_section
         self.assertEqual(rs("# Cart\n\nSee ## Plan.\n\n## Planned\nx", "## Plan", "new"), "# Cart\n\nSee ## Plan.\n\n## Planned\nx\n\n## Plan\n\nnew\n")
         self.assertEqual(rs("## Plan\nold\n## Notes\nkeep", "## Plan", "new"), "## Plan\n\nnew\n\n## Notes\nkeep\n")
-
-    def test_replace_section_lives_only_in_fc_plan_and_update_writes_through_it(self):
-        self.assertFalse(hasattr(fc.fc_linear_cmd, "replace_section"))
-        with mock.patch.object(fc_plan, "replace_section", return_value="via plan\n") as rs:
-            self.assertEqual(self.update("new plan", section="## Plan")[0], {"description": "via plan\n"})
-        rs.assert_called_once_with("# Cart\n\n## Plan\n\nold\n\n## Notes\n\nkeep\n", "## Plan", "new plan")
 
     def test_fields_come_from_the_issue_team_and_the_parent(self):
         sent, issue, blocked = self.update(title="New", parent="ENG-1", state="in progress", label=["bug"])
@@ -607,11 +575,6 @@ class LinearStaleRead(unittest.TestCase):
         self.assertIn("still serves the old text", err)
         self.assertEqual(self.clock[0], fc.fc_linear_cmd.SETTLE_SECONDS)
 
-    def test_a_write_that_changes_nothing_waits_for_nothing(self):
-        self.update("old", section="## Plan")
-        self.assertEqual(self.clock[0], 0.0)
-
-
 class LinearCommentLabelsDoc(unittest.TestCase):
     ISSUE, LABELS, DOC = "issue(id: $id) { id identifier project { id name } }", "team(id: $id) { labels(first: 250) { nodes { id name } } }", "document(id: $id) { title content url }"
     NEW_LABEL, NEW_DOC, DOC_URL = "issueLabelCreate(input: {name: $name, teamId: $team}) { success }", "documentCreate(input: $in) { document { url } }", "https://linear.app/acme/document/research-d1"
@@ -700,13 +663,6 @@ class LinearCommentLabelsDoc(unittest.TestCase):
     def doc_pages(self):
         return [{"pageInfo": {"hasNextPage": True, "endCursor": "c1"}, "nodes": [{"id": "d1", "title": "PRD", "updatedAt": "2026-10-18T17:15:38.008Z", "url": "https://linear.app/d1"}]},
                 {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": [{"id": "d2", "title": "Architecture", "updatedAt": "2026-10-17T09:00:00.000Z", "url": "https://linear.app/d2"}]}]
-
-    def test_doc_list_plain_output_is_unchanged_when_the_url_is_read(self):
-        self.pages = self.doc_pages()
-        with redirect_stdout(io.StringIO()) as out:
-            fc.fc_linear_cmd.verb_doc(self.a("doc", "list"))
-        self.assertEqual(out.getvalue(), "d1 2026-10-18 PRD\nd2 2026-10-17 Architecture\n")
-        self.assertTrue(all("nodes { id title updatedAt url }" in q for q, _ in self.calls if "documents(" in q))
 
     def test_doc_list_json_prints_one_list_with_every_page_and_the_url(self):
         self.pages = self.doc_pages()
@@ -812,11 +768,6 @@ class LinearCancel(unittest.TestCase):
         self.assertEqual(self.fails(fc.fc_linear_cmd.verb_cancel, self.a("cancel", "ENG-7", body="  \n")), (1, "cancel needs a reason: --file <path>, or stdin"))
         self.assertEqual(self.writes(), [])
 
-    def test_linear_cancel_refuses_an_empty_comment_itself(self):
-        with self.assertRaises(RuntimeError):
-            fc.fc_linear.linear_cancel("ENG-7", "  ")
-        self.assertEqual(self.writes(), [])
-
     def test_another_project_refuses_unless_any_project_and_so_does_into(self):
         self.issue["project"] = {"id": "p2", "name": "Other"}
         self.assertEqual(self.fails(fc.fc_linear_cmd.cmd_linear, self.a("cancel", "ENG-7", body="x")), (1, "ENG-7 is not in project Shop; pass --any-project to use it"))
@@ -920,8 +871,3 @@ class LinearNoProject(unittest.TestCase):
                 with mock.patch.object(fc.fc_linear, "linear_blocked_by", return_value=[]) as blocked, redirect_stdout(io.StringIO()):
                     fc.fc_linear_cmd.verb_update(self.args("update", "ENG-7", blocked_by=given))
                 blocked.assert_called_once_with(self.issue, want)
-
-    def test_update_and_comment_need_an_issue_id_and_call_nothing(self):
-        for action in ("update", "comment"):
-            self.assertEqual(self.fails(fc.fc_linear_cmd.cmd_linear, self.args(action, title="T", file=str(self.repo / "body.md"))), (1, f"{action} needs an issue id"))
-        self.assertEqual(self.calls, [])

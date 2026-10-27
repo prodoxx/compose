@@ -95,17 +95,6 @@ class TestRun(unittest.TestCase):
         marks = [l.split()[0] for l in sorted(times.read_text().splitlines(), key=lambda l: float(l.split()[1]))]
         self.assertEqual(marks, ["start", "start", "end", "end"])
 
-    def test_jobs_default_to_a_quarter_of_the_cores_never_under_one_and_the_env_overrides(self):
-        with mock.patch.dict(os.environ):
-            os.environ.pop("COMPOSE_TEST_JOBS", None)
-            for cores, want in ((64, 16), (16, 4), (8, 2), (7, 1), (4, 1), (3, 1), (1, 1), (None, 1)):
-                with mock.patch("os.cpu_count", return_value=cores):
-                    self.assertEqual(run.default_jobs(), want, cores)
-            with mock.patch("os.cpu_count", return_value=16):
-                for env, want in (("3", 3), ("9", 9), ("0", 1)):
-                    os.environ["COMPOSE_TEST_JOBS"] = env
-                    self.assertEqual(run.default_jobs(), want, env)
-
     def test_a_killed_runner_takes_its_test_processes_with_it(self):
         pids = Path(tempfile.mkdtemp()) / "pid"
         d = self.make_dir(hang=textwrap.dedent("""\

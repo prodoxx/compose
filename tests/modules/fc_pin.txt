@@ -1,6 +1,0 @@
-pins_dir
-cli_commit
-pin_file
-pin
-pinned
-skill_name

@@ -55,29 +55,13 @@ class LayerScope(Gate):
         self.assertTrue(any("layers ok" in l and "every check on the top" in l for l in out))
         self.assertTrue(any("stack submit --auto" in c for c in self.log()))
 
-    def test_a_task_whose_test_commit_sits_in_a_higher_layer_is_tested_there_not_where_its_code_is(self):
-        """All three tasks protect one test file. 003's test went in first and 001's was appended right after it, so 001's test
-        cannot apply below 003's layer: placement puts it there, and the gate runs 001's `test` on that layer, the lowest one
-        that holds both 001's code and 001's test."""
-        tasks = [{"id": t, "protected": [f"t{t}.test", "shared.test"], "files": [f"{t}.src"], "after": "", "test": f"test -f {t}.src", "title": f"Build {t}", "linear": f"ENG-{t}", "body": f"## Goal\nBuild {t}.\n"}
-                 for t in ("001", "002", "003")]
-        tasks[0]["test"] = f"grep -q case001 shared.test && echo t001 >> {self.counter}"
-        (self.proj / "results" / "tasks.json").write_text(json.dumps({"feature": {}, "tasks": tasks}))
-        self.write("t003.test", "u\n" * 5); self.write("shared.test", "case003\n"); self.commit("tests for 003")
-        self.write("shared.test", "case003\ncase001\n"); self.commit("tests for 001")
-        self.config(checks=["true # unittest"])
-        out, code = self.submit()
-        self.assertEqual(self.git("ls-tree", "--name-only", "compose/p-layer-01", "shared.test"), "")
-        self.assertEqual(code, 0, out)
-        self.assertEqual(self.ran(), ["t001"])
-        scope = [l for l in out if l.startswith("layers scope")]
-        self.assertNotIn("grep -q case001", scope[0] + scope[1])
-        self.assertIn("grep -q case001", scope[2])
-
-    def test_a_layer_checked_once_is_not_checked_again_until_its_commands_change(self):
+    def test_every_layer_runs_the_checks_once_an_unchanged_layer_is_not_run_again_and_only_a_changed_command_reruns(self):
         self.config(checks=[f"echo cheap >> {self.counter}", f": unittest; echo suite >> {self.counter}"])
-        self.submit()
+        out, code = self.submit()
+        self.assertEqual(code, 0, out)
         self.assertEqual(len(self.ran()), 4)  # three cheap, one suite
+        self.assertTrue(any("stack submit --auto" in c for c in self.log()))
+        self.assertTrue(self.origin_has("refs/heads/compose/p-layer-03"))
         out, code = self.submit()
         self.assertEqual(len(self.ran()), 4)
         self.assertEqual(len([l for l in out if "unchanged since its checks passed" in l]), 3)
@@ -86,6 +70,8 @@ class LayerScope(Gate):
         self.assertEqual(self.ran()[4:], ["suite2"])  # the top layer reruns only the changed command: `cheap` is green on its tree, so it is taken
         self.assertEqual(len([l for l in out if "not rerun" in l and "cheap" in l]), 1)
         self.assertEqual(len([l for l in out if "unchanged since its checks passed" in l]), 2)  # the lower layers are unchanged
+        self.run_cmd(fc.fc_ship.cmd_stack, submit=True, fresh=True)
+        self.assertEqual(len(self.ran()), 9)  # --fresh runs every check on every layer again
 
 
 class Based(Gate):
@@ -106,13 +92,21 @@ class BaseFailures(Based):
         self.config(checks=[f"echo run >> {self.counter}; echo '{OLD}' >&2; exit 1"])
         out, code = self.submit()
         self.assertEqual(code, 0, out)
-        base = self.git("merge-base", "main", "compose/p-layer-03")[:9]
+        base_full = self.git("merge-base", "main", "compose/p-layer-03")
+        base = base_full[:9]
         said = [l for l in out if l.startswith("layers base")]
         self.assertEqual(len(said), 3)
         self.assertTrue(all("gone_test (legacy.Old.gone_test)" in l and f"fails on the base {base} too" in l and "accepted" in l for l in said), said)
         self.assertEqual(len(self.ran()), 4)  # three layers and the base, which runs the command once
         self.assertTrue(any("3 failing test(s) already red on the base accepted" in l for l in out))
         self.assertTrue(any("stack submit --auto" in c for c in self.log()))
+        top = self.git("rev-parse", "compose/p-layer-03")  # a layer that leaned on the base is remembered with the base and the top
+        kept = self.memo()
+        self.assertEqual(len(kept), 3)
+        self.assertTrue(all(v.endswith(f":{base_full}:{top}") for v in kept.values()), kept)
+        out, code = self.submit()
+        self.assertEqual(len(self.ran()), 4)
+        self.assertEqual(len([l for l in out if "unchanged since its checks passed" in l]), 3)
 
     def test_a_new_failure_beside_an_old_one_is_refused_and_the_old_ones_are_counted(self):
         self.config(checks=[f"echo '{OLD}' >&2; " + fail(NEW, when="test -f 002.src") + "; exit 1"])
@@ -130,18 +124,6 @@ class BaseFailures(Based):
             out, code = self.submit()
         self.assertEqual(code, 1)
         self.assertIn("layer 1 of 3 (compose/p-layer-01) fails `exec sleep 5` on its own tree:\ntimed out after 1s", self.stop(out))
-
-    def test_a_layer_that_leaned_on_the_base_is_remembered_with_the_base_and_the_top(self):
-        self.config(checks=[f"echo run >> {self.counter}; echo '{OLD}' >&2; exit 1"])
-        self.submit()
-        base, top = self.git("merge-base", "main", "compose/p-layer-03"), self.git("rev-parse", "compose/p-layer-03")
-        kept = self.memo()
-        self.assertEqual(len(kept), 3)
-        self.assertTrue(all(v.endswith(f":{base}:{top}") for v in kept.values()), kept)
-        runs = len(self.ran())
-        out, code = self.submit()
-        self.assertEqual(len(self.ran()), runs)
-        self.assertEqual(len([l for l in out if "unchanged since its checks passed" in l]), 3)
 
 
 class BaseTouched(Based):

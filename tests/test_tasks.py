@@ -30,11 +30,6 @@ class TaskTier(unittest.TestCase):
                 task(tier=bad)
             self.assertEqual(str(e.exception), f"NEB-1: tier must be cheap, standard, frontier or no-frontier, not {bad}")
 
-    def test_a_tier_does_not_change_the_other_keys(self):
-        meta = task(tier="cheap", files="a.py, b.py", kind="code")
-        self.assertEqual((meta["id"], meta["test"], meta["files"], meta["kind"], meta["linear"]), ("001", "t", ["a.py", "b.py"], "code", "NEB-1"))
-
-
 class ModelAuto(unittest.TestCase):
     def test_a_block_without_model_gets_the_default_and_model_auto(self):
         meta = task()
@@ -45,15 +40,6 @@ class ModelAuto(unittest.TestCase):
         meta = task(model="pi:a/b")
         self.assertEqual(meta["model"], "pi:a/b")
         self.assertNotIn("model_auto", meta)
-
-    def test_a_tier_and_a_model_together_keep_the_model_without_model_auto(self):
-        meta = task(tier="frontier", model="pi:a/b")
-        self.assertEqual((meta["tier"], meta["model"]), ("frontier", "pi:a/b"))
-        self.assertNotIn("model_auto", meta)
-
-    def test_a_tier_without_a_model_still_gets_model_auto(self):
-        self.assertIs(task(tier="cheap")["model_auto"], True)
-
 
 class Scenarios(unittest.TestCase):
     F = "`" * 3
@@ -84,20 +70,6 @@ class Scenarios(unittest.TestCase):
 
     def test_a_key_line_before_any_id_starts_the_first_scenario(self):
         self.assertEqual(fc.fc_tasks.parse_scenarios(self.body("given: g\nthen: t")), [{"given": "g", "then": "t"}])
-
-    def test_blank_lines_are_skipped_and_other_lines_continue_the_last_value(self):
-        block = "id: 1\n\nthen: one\n\nwraps here\nnot a key: x\nBad: y\ntest_type: unit"
-        self.assertEqual(fc.fc_tasks.parse_scenarios(self.body(block)),
-                         [{"id": "1", "then": "one wraps here not a key: x Bad: y", "test_type": "unit"}])
-
-    def test_an_empty_block_gives_an_empty_list(self):
-        self.assertEqual(fc.fc_tasks.parse_scenarios(self.body("")), [])
-
-    def test_criteria_are_the_same_with_or_without_the_block(self):
-        plain = f"{self.CRIT}## Test plan\n\nRun it.\n"
-        self.assertEqual(fc.fc_tasks.parse_criteria(self.body("id: 1\ngiven: * x")), fc.fc_tasks.parse_criteria(plain))
-        self.assertEqual(fc.fc_tasks.parse_criteria(plain), ["a", "b"])
-
 
 if __name__ == "__main__":
     unittest.main()

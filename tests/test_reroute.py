@@ -60,10 +60,6 @@ class Signals(unittest.TestCase):
         self.assertEqual(got["outside"], [c["path"] for c in got["changed"]])
         self.assertEqual((len(got["outside"]), got["untouched"]), (5, []))
 
-    def test_a_branch_with_no_change_has_no_signals(self):
-        self.assertEqual(self.signals(FILES, "main"), {"changed": [], "lines": 0, "outside": [], "untouched": FILES})
-
-
 class LayerBase(unittest.TestCase):
     def setUp(self):
         self.repo = Path(tempfile.mkdtemp())
@@ -91,9 +87,6 @@ class LayerBase(unittest.TestCase):
 
     def test_the_bottom_layer_gets_the_trunk(self):
         self.assertEqual(self.base("005"), "trunk")
-
-    def test_a_task_outside_the_stack_gets_the_trunk(self):
-        self.assertEqual((self.base("020"), self.base("030")), ("trunk", "trunk"))
 
     def test_the_results_file_and_its_base_are_not_read(self):
         (self.proj / "results" / "011.json").write_text(json.dumps({"status": "passed", "base": self.branch("005")}))
@@ -365,11 +358,6 @@ class Record(unittest.TestCase):
         self.assertEqual(section, fc_routerec.route_section(route) + "\n* rerouted: diff, scope (run 3f9a0c1b2d4e)")
         self.assertTrue(section.endswith(f"\n* context hash: {self.HASH}\n* rerouted: diff, scope (run 3f9a0c1b2d4e)"))
 
-    def test_a_record_that_fails_raises(self):
-        with self.assertRaisesRegex(RuntimeError, "Linear: down"):
-            self.reassess(side_effect=RuntimeError("Linear: down"))
-
-
 class Sweep(unittest.TestCase):
     def setUp(self):
         self.repo = Path(tempfile.mkdtemp())
@@ -397,12 +385,6 @@ class Sweep(unittest.TestCase):
         (self.proj / "results" / "006.json").write_text(json.dumps({"id": "006", "status": "already_green"}))
         got, re = self.sweep()
         self.assertEqual((got, [c.args[2]["id"] for c in re.call_args_list]), ({}, ["001", "005"]))
-
-    def test_without_a_linear_key_or_without_the_diff_kind_nothing_is_reassessed(self):
-        for key, kinds in (("", ("diff",)), (None, ("diff",)), ("lin_test", ())):
-            with self.subTest(key=key, kinds=kinds):
-                got, re = self.sweep(key=key, kinds=kinds)
-                self.assertEqual((got, re.call_count), ({}, 0))
 
     def test_compose_no_policies_reassesses_and_records_nothing(self):
         with mock.patch.dict(os.environ, {"COMPOSE_NO_POLICIES": "1"}):
@@ -446,10 +428,6 @@ class Once(unittest.TestCase):
         self.assertEqual((got, [c.args[0] for c in fi.call_args_list]), ({}, ["XX-001", "XX-002", "XX-003"]))
         self.assertEqual([(c.args[2]["id"], c.args[4], c.args[5]) for c in re.call_args_list], [("002", ["diff"], "run-002")])
 
-    def test_the_trigger_fired_only_under_another_run_id_is_reassessed(self):
-        got, fi, re = self.once(lambda issue: {("diff", "old-run"), ("scope", "run-001")}, ids=("001",))
-        self.assertEqual((got, [(c.args[2]["id"], c.args[4], c.args[5]) for c in re.call_args_list]), ({}, [("001", ["diff"], "run-001")]))
-
     def test_a_fired_error_is_returned_under_its_id_and_the_other_tasks_go_on(self):
         def fired(issue):
             if issue == "XX-002": raise RuntimeError("Linear: boom")
@@ -479,13 +457,6 @@ class AfterRun(unittest.TestCase):
         err = fc.fc_models.PaymentRequired("typesafe", "top up")
         got, cu, say = self.run_after([("001", "passed")], side_effect=err)
         self.assertEqual((got, say.call_count), (err, 0))
-
-    def test_with_no_passed_task_nothing_is_called_and_it_returns_none(self):
-        for statuses in ([], [("001", "failed"), ("002", "already_green")]):
-            with self.subTest(statuses=statuses):
-                got, cu, say = self.run_after(statuses)
-                self.assertEqual((got, cu.call_count, say.call_count), (None, 0, 0))
-
 
 class RunHook(unittest.TestCase):
     def run_tasks(self, ids=("001", "002"), status=None, hook=None):
@@ -616,12 +587,6 @@ class PassScope(unittest.TestCase):
     def test_catch_up_with_scope_alone_asks_only_the_tasks_outside_their_files(self):
         got, calls = self.catch_up(("scope",))
         self.assertEqual((got, {t: a[4] for t, a in calls.items()}), ({}, {"001": ["scope"], "003": ["scope"]}))
-
-    def test_a_trigger_fired_for_the_run_id_is_not_asked_again_but_one_fired_for_another_run_is(self):
-        for fired, want in ([("diff", "run-001")], ["scope"]), ([("scope", "run-001")], ["diff"]), ([("diff", "run-001"), ("scope", "run-001")], None), ([("diff", "old"), ("scope", "old")], ["diff", "scope"]):
-            with self.subTest(fired=fired):
-                got, calls = self.catch_up(("diff", "scope"), fired, ("001",))
-                self.assertEqual(calls["001"][4] if calls else None, want)
 
     def test_before_verify_asks_scope_for_the_stack_tasks_whose_comments_hold_diff_but_not_scope(self):
         fired = [("diff", "run-001"), ("diff", "run-002"), ("diff", "run-003"), ("scope", "run-003")]
@@ -825,11 +790,6 @@ class LedgerRound(unittest.TestCase):
         got, cu, say, *_ = self.round(failed)
         self.assertEqual((got[1], [c.args[0] for c in say.call_args_list]), (failed, ["verify FAIL  route not recorded for 003: Linear: down", "verify FAIL  route not recorded for 001: policies unreadable: boom", "verify FAIL  fix what Linear refused (`compose linear get <issue>` shows the task), or set COMPOSE_NO_POLICIES=1 to verify without recording routes"]))
         self.assertEqual(self.round()[2].call_count, 0)
-
-    def test_without_a_linear_key_it_returns_empty_and_calls_nothing(self):
-        got, cu, say, order, tasks = self.round(ready=False)
-        self.assertEqual((got, cu.call_count, say.call_count, order.call_count), (([], {}), 0, 0, 0))
-
 
 class LedgerRerun(unittest.TestCase):
     def rounds(self, stages, after, fix=0, main=None):

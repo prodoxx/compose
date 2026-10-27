@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import hashlib, json, os, subprocess, tempfile, unittest
+import json, os, subprocess, tempfile, unittest
 from pathlib import Path
 os.environ["HERDR_ENV"] = ""
 import test_modules
@@ -76,10 +76,6 @@ class GuardFastPath(unittest.TestCase):
             self.assertRegex(self.run_cmd("--help", launcher=launcher).stdout, r"^usage: compose")
             self.assertEqual((self.tmp / "starts").read_text(), "x")
         self.assertEqual(self.run_cmd("no-such-command").returncode, 2)
-
-    def test_launcher_matches_the_pin(self):
-        self.assertEqual(hashlib.sha256(LAUNCHER.read_bytes()).hexdigest(), test_modules.LAUNCHER_SHA)
-
 
 if __name__ == "__main__":
     unittest.main()

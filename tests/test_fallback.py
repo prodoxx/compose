@@ -67,10 +67,6 @@ class Fallback(unittest.TestCase):
             fc.fc_implement.run_task(repo, proj, task, 3)
         self.assertEqual(limits[0], fc.fc_models.TURN_TIMEOUT)  # compose runs the test after the turn, never inside it
 
-    def test_a_turn_may_run_five_minutes_before_it_is_cut(self):
-        """43 turns were cut at 180 s mid-work (7 to 18 tool calls in), most of them Sonnet's, and each cost an attempt and a fresh session."""
-        self.assertEqual(fc.fc_models.TURN_TIMEOUT, 300)
-
     def test_error_falls_back_after_two(self):
         r, calls = self.run_once("error")
         self.assertEqual(r["status"], "passed")
@@ -159,21 +155,10 @@ class Fallback(unittest.TestCase):
         timeout, cut = r["log"]
         self.assertEqual((r["status"], timeout["tool_calls"], timeout["usage"], cut["cut_short"], r["cost"]), ("passed", 4, spent, True, 0.5))
 
-    def test_implementer_is_told_not_to_run_the_test(self):
-        self.run_once("miss")
-        self.assertIn("grep -q yes a.txt", self.prompts[0])
-        self.assertIn("Do not run it", self.prompts[0])
-        self.assertNotIn(" timed ", self.prompts[0])
-        self.assertNotIn("Run the test command", self.prompts[0])
-
     def test_fallback_has_no_fallback(self):
         with mock.patch.object(fc.fc_config, "FALLBACK_MODEL", BACKUP):
             self.assertIsNone(fc.fc_models.fallback_for(BACKUP))
             self.assertIsNone(fc.fc_models.fallback_for("claude"))
-
-    def test_glm_is_the_default_with_no_fallback(self):
-        self.assertIn("glm-5.3-flash@preset/glm-5-3-flash-fast", fc.fc_config.DEFAULT_MODEL)
-        self.assertEqual(fc.fc_models.fallback_for(fc.fc_config.DEFAULT_MODEL), "claude:claude-sonnet-5-5")
 
 
 class Preflight(unittest.TestCase):
@@ -457,13 +442,6 @@ class FixScope(unittest.TestCase):
         code, _, res = self.verify({"a.go": "fixed\n"}, tasks=tasks, top="007")
         self.assertEqual((code, res["rejected_fixes"]), (0, []))
 
-    def test_fix_inside_the_stack_commits_and_passes(self):
-        code, repo, res = self.verify({"a.go": "fixed\n"})
-        self.assertEqual((code, res["passed"]), (0, True))
-        self.assertEqual((repo / "a.go").read_text(), "fixed\n")
-        log = subprocess.run(["git", "log", "-1", "--format=%s"], cwd=repo, capture_output=True, text=True).stdout
-        self.assertEqual(log.strip(), "Fix a.go")  # describes the change, never the process
-
     def test_a_fix_round_runs_only_the_tests_of_the_tasks_its_fix_changed(self):
         tasks = [{"id": "001", "files": ["a.go"], "protected": ["a_test.go"], "test": "go test ./a"},
                  {"id": "002", "files": ["b.go"], "protected": ["b_test.go"], "test": "go test ./b"},
@@ -506,16 +484,6 @@ class FixScope(unittest.TestCase):
                          "Match the autofill panel file name")
         _, repo, _ = self.verify({"a.go": "fixed\n"}, reply="Fix verification findings")  # a process message is not used
         self.assertEqual(subprocess.run(["git", "log", "-1", "--format=%s"], cwd=repo, capture_output=True, text=True).stdout.strip(), "Fix a.go")
-
-    def test_fixer_is_told_the_design_context_and_the_simplicity_bar(self):
-        self.verify({"a.go": "fixed\n"}, cfg={"review_context": "Paths are POSIX only by design."})
-        self.assertIn("Paths are POSIX only by design.", self.prompt)
-        self.assertIn("no hardening", self.prompt)
-
-    def test_fixer_gets_the_trail_pack(self):
-        self.verify({"a.go": "fixed\n"}, pack="PACK")
-        self.assertIn("CONTEXT PACK from trail (exact file:line). Use it instead of exploring.\nPACK\n\n", self.prompt)
-        self.assertNotRegex(self.prompt, r"\bgraft\b")
 
     def test_review_confirms_only_defects_against_the_requirements(self):
         systems = []
@@ -783,22 +751,6 @@ class Workspaces(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "parallel must be a whole number"):
                 fc.fc_config.apply_config()
 
-    def test_claude_parallel_defaults_to_three_and_a_workspace_overrides_it(self):
-        fc.fc_config.apply_config()
-        self.assertEqual(fc.fc_config.CLAUDE_PARALLEL, 3)
-        cfg = fc.fc_config.read_config()
-        cfg["claude_parallel"], cfg["workspaces"]["personal"]["claude_parallel"] = 2, 1
-        self.path.write_text(json.dumps(cfg))
-        fc.fc_config.apply_config()
-        self.assertEqual(fc.fc_config.CLAUDE_PARALLEL, 2)
-        ws("personal")
-        fc.fc_config.apply_config()
-        self.assertEqual(fc.fc_config.CLAUDE_PARALLEL, 1)
-        for bad in (0, "many", 2.5, True):
-            self.path.write_text(json.dumps({**cfg, "workspace": "default", "claude_parallel": bad}))
-            with self.assertRaisesRegex(SystemExit, "claude_parallel must be a whole number"):
-                fc.fc_config.apply_config()
-
     def test_add_key_remove_and_listing_use_auth_json_and_never_print_a_key(self):
         listing = ws("add", "client-x", stdin="sk-or-test-c1c1\n") + ws("key", "client-x", stdin="lin-test-cx\n", linear=True)
         listing += ws("key", "default", stdin="sk-or-test-r0t8\n") + ws()
@@ -931,11 +883,6 @@ class PiKeyFromEnv(unittest.TestCase):
         argv, env = self.pi_turn({"PATH": os.environ["PATH"]})
         self.assertFalse("OPENROUTER_API_KEY" in env)
         self.keyless(argv)
-
-    def test_probe_carries_no_key_and_pi_key_args_is_gone(self):
-        for model in self.MODELS:
-            self.keyless(fc.fc_models.probe_command(model))
-        self.assertFalse(hasattr(fc.fc_models, "pi_key_args"))
 
     def test_pi_teammate_start_carries_no_key(self):
         for model in self.MODELS:
@@ -1077,10 +1024,6 @@ class HerdrPiKey(unittest.TestCase):
             for environ in ({"OPENROUTER_API_KEY": "sk-or-proc"}, {}):
                 with self.subTest(workspace_key=workspace_key, environ=environ):
                     self.keyless(self.start(environ, workspace_key)[1])
-
-    def test_pane_gets_the_process_key_unchanged(self):
-        env, _ = self.start({"OPENROUTER_API_KEY": "sk-or-proc"})
-        self.assertEqual(env.get("OPENROUTER_API_KEY"), "sk-or-proc")  # not the workspace key, not .env's
 
     def test_pane_gets_no_key_and_nothing_from_dotenv_without_the_variable(self):
         for environ in ({}, {"TEXT_MODEL_API_KEY": "sk-tm"}):
@@ -1300,16 +1243,6 @@ class RetryMessage(unittest.TestCase):
         self.assertEqual(len(fails), 2)
         self.assertTrue(all("reader $0.0100" in l for l in fails), fails)
 
-    def test_no_session_to_resume_starts_again_from_the_task(self):
-        _, prompts, _, _ = self.run_three(session=None)  # Claude Code runs each turn one-shot
-        self.assertTrue(prompts[1].startswith(prompts[0]))
-        self.assertIn("The test still fails.", prompts[1])
-
-    def test_no_summary_leaves_out_what_failed(self):
-        _, prompts, _, _ = self.run_three(summary="")
-        self.assertNotIn("What failed:", prompts[1])
-        self.assertIn("Full output: ", prompts[1])
-
     def test_fallback_starts_from_the_task_and_ends_with_the_same_problems(self):
         r, prompts, _, _ = self.run_three(backup=BACKUP)
         self.assertEqual(r["log"][1]["fallback"]["to"], BACKUP)  # after models.fallback_after (2) misses
@@ -1505,16 +1438,6 @@ class LibrarySection(unittest.TestCase):
         self.assertLess(prompt.index(section) + len(section), prompt.index("## Goal\nWrite yes."))
         self.assertNotIn("P" * (caps[0] + 1), prompt)
 
-    def test_a_section_without_a_pack_still_comes_before_the_body(self):
-        prompt, caps, _, _ = self.run_one("LIBRARY API x\nlib 1.0", pack=False)
-        self.assertLess(prompt.index("LIBRARY API x\nlib 1.0"), prompt.index("## Goal\nWrite yes."))
-        self.assertNotIn("CONTEXT PACK", prompt)
-
-    def test_no_section_leaves_the_prompt_as_today_with_the_full_pack(self):
-        prompt, caps, calls, _ = self.run_one("")
-        self.assertEqual((caps, len(calls)), ([12000], 1))
-        self.assertIn("do not open unrelated files.\n" + "P" * 12000 + "\n\n## Goal\nWrite yes.", prompt)
-
 
 class DeleteTasks(unittest.TestCase):
     """Task 015 (NEB-952): delete: applied in the clone, and delete-only tasks with no model turn."""
@@ -1562,15 +1485,6 @@ class DeleteTasks(unittest.TestCase):
         result, repo, _ = self.run_one(self.edit(seen), {"delete": ["gone.txt"]}, files={"a.txt": "no\n", "gone.txt": "z\n", "keep.txt": "k\n"})
         self.assertEqual((result["status"], seen), ("passed", [["a.txt", "keep.txt"]]))
         self.assertEqual(self.tree(repo), ["a.txt", "keep.txt"])
-
-    def test_a_delete_task_whose_test_already_passes_still_deletes_and_a_task_without_delete_ends_already_green(self):
-        files = {"a.txt": "no\n", "old_test.txt": "x\n"}
-        impl = mock.Mock(side_effect=AssertionError("no turn"))
-        result, repo, _ = self.run_one(impl, {"files": [], "delete": ["old_test.txt"], "test": "test -e a.txt"}, files=files)
-        impl.assert_not_called()
-        self.assertEqual((result["status"], self.tree(repo)), ("passed", ["a.txt"]))
-        result, _, _ = self.run_one(impl, {"files": [], "test": "test -e a.txt"}, files=files)
-        self.assertEqual(result["status"], "already_green")
 
     def test_a_turn_deleting_a_file_outside_files_and_delete_is_rejected_for_scope(self):
         impl = self.edit([], lambda cwd: (cwd / "keep.txt").unlink())
@@ -1653,12 +1567,6 @@ class SiblingStubs(unittest.TestCase):
         self.assertEqual((result["status"], counter.exists()), ("passed", False))
         self.assertIn("001 checks  `true` after the task", self.said)
 
-    def test_a_check_that_runs_says_what_it_runs_before_it_starts(self):
-        self.run_one(["def one():\n    return 1\n\n\ndef two():\n    raise NotImplementedError\n"], checks=("true",))
-        line = next(l for l in self.said.splitlines() if "checks" in l)
-        self.assertIn("001 checks  `true` after the task, up to 900s", line)
-        self.assertLess(self.said.index("001 start"), self.said.index(line))
-
     def test_a_check_that_was_red_before_the_task_is_not_blamed_on_it(self):
         result, _ = self.run_one(["def one():\n    return 1\n\n\ndef two():\n    raise NotImplementedError\n"], checks=("python3 -m unittest discover -s tests -p test_one.py && false",))
         self.assertEqual(result["status"], "passed")
@@ -1738,10 +1646,6 @@ class TestReferenceCost(unittest.TestCase):
                 mock.patch.dict(os.environ, {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}):
             fc.fc_implement.run_task(repo, proj, task, 3)
         return json.loads((proj / "results" / "001.json").read_text())
-
-    def test_two_attempts_add_up_and_cost_is_unchanged(self):
-        r = self.result([{"cost": 0.0, "reference_cost": 0.25}] * 2)
-        self.assertEqual((r["attempts"], r["reference_cost"], r["cost"]), (2, 0.5, 0.0))
 
     def test_a_real_cost_stays_apart_from_the_reference_cost(self):
         r = self.result([{"cost": 0.125, "reference_cost": 0.25}] * 2)

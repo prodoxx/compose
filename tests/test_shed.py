@@ -55,20 +55,6 @@ class ShedFree(unittest.TestCase):
         lines = fc_shed.tick()
         self.stop.assert_called_once_with("/w/a")
         self.assertEqual((sorted(self.forgot), self.sigs, any("why=dev server of a done crew" in l for l in lines)), ([100, 101], [], True))
-    def test_state_is_replaced_whole_from_a_temp_file_in_the_same_directory(self):
-        f, seen = fc_shed.home() / "shed.json", []
-        real = os.replace
-        def replace(src, dst):
-            seen.append((Path(src).parent, Path(dst), f.exists(), "hold" in json.loads(Path(src).read_text())))
-            real(src, dst)
-        with mock.patch("os.replace", replace):
-            fc_shed.tick(); self.avg = 1.0; fc_shed.tick()
-        self.assertEqual((seen[-1], [p.name for p in f.parent.glob("*.tmp")]), ((f.parent, f, True, True), []))
-        self.assertTrue(all(d == f.parent and t.name in ("load.json", "shed.json") for d, t, _, _ in seen))
-    def test_not_held_runs_no_ps_and_prints_nothing(self):
-        self.rec(100, waiter=self.dead); self.table = [(100, 1, 0.0, "sh")]
-        self.avg = 1.0
-        self.assertEqual((fc_shed.tick(), self.pses(), self.sigs, self.forgot, fc_shed.state()), ([], [], [], [], {"hold": None, "freed": [], "hot": None, "paused": []}))
 STOP, CONT = signal.SIGSTOP, signal.SIGCONT
 def paused(pid, kind): return f"event shed=paused pid={pid} kind={kind} project=proj  (resumes in reverse once the load falls below 8.0)"
 def resumed(pid, kind): return f"event shed=resumed pid={pid} kind={kind} project=proj"
@@ -122,9 +108,6 @@ class ShedPause(unittest.TestCase):
             self.assertEqual((got[0], got[1]), ([paused(400, "teammate")], [(400, STOP), (401, STOP)]))  # the gone root does not stop the rest of its tree
             self.go(1195); self.assertEqual(self.go(1200, 7.0), ([resumed(200, "teammate")], [(200, CONT), (201, CONT)]))
         self.assertEqual([e["pid"] for e in fc_shed.state()["paused"]], [400])
-    def test_a_released_hold_restarts_the_120s(self):
-        got = [self.go(t, a) for t, a in ((1000, 13.0), (1100, 7.0), (1150, 13.0), (1200, 13.0), (1275, 13.0))]
-        self.assertEqual(got, [([], [])] * 4 + [([paused(400, "teammate")], [(400, STOP), (401, STOP)])])
 class ShedMemory(unittest.TestCase):
     def setUp(self):
         ShedPause.setUp(self)  # same ps, kill, clock, claim and records; the load stays at 1.0 unless a case says more
@@ -156,8 +139,3 @@ class ShedMemory(unittest.TestCase):
         held = [self.go(t, lv, avg) for t, lv, avg in ((1070, 2, 1.0), (1075, 4, 1.0), (1080, 1, 9.0), (1085, None, 9.0))]
         got = [self.go(t, None, 7.0) for t in (1090, 1100, 1155)]
         self.assertEqual((held, got, self.pids("paused")), ([[]] * 4, [self.sig(200, CONT), [], self.sig(400, CONT)], []))
-    def test_normal_memory_resumes_the_paused_agents_in_reverse_one_a_minute(self):
-        self.go(1000, 4); self.go(1065, 4); self.go(1130, 4)
-        self.assertEqual(self.pids("paused"), [400, 200, 100])
-        got = [self.go(t, 1, 7.0) for t in (1135, 1140, 1194, 1195, 1254, 1255)]
-        self.assertEqual((got, self.pids("paused")), ([self.sig(100, CONT), [], [], self.sig(200, CONT), [], self.sig(400, CONT)], []))

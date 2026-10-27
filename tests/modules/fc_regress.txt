@@ -1,5 +1,0 @@
-pinned
-pin_test
-fast_fix
-end_writer
-regress

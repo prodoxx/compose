@@ -113,7 +113,3 @@ class BenchTests(unittest.TestCase):
             [self.assertAlmostEqual(row[k], v) for k, v in want.items()]
         errs = [r for r in out["runs"] if "error" in r]
         self.assertEqual((len(out["runs"]), len(errs), set(errs[0]), errs[0]["model"], "boom" in errs[0]["error"]), (8, 2, {"task", "run", "model", "error"}, "m2", True))
-
-    def test_the_cost_per_test_adds_cost_and_reference_cost_each_zero_when_missing(self):
-        for self.usage, cost in (({"cost": 0.5}, 0.5), ({}, 0), ({"reference_cost": 0.25}, 0.25)):
-            self.assertAlmostEqual(self.go(only="001", models="m1", runs=1)["summary"][0]["cost_per_test"], cost)

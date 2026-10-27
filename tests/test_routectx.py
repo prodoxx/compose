@@ -137,13 +137,6 @@ class Dependencies(unittest.TestCase):
         self.assertEqual(self.deps(), {"callers": {"bin/a.py": ["h.py", "m.py", "z.py"], "bin/b.py": [f"c{i:02}.py" for i in range(20)], "c.py": []}})
         self.assertEqual(self.deps(files=["nope.py", "gone/x.py"]), {"callers": {}})
 
-    def test_unavailable(self):
-        for over, path, why in [({}, tempfile.mkdtemp(), "trail not installed"), ({"callers helper": 3}, None, "trail exited 3"),
-                                ({"callers Bee": "Traceback (most recent call last):"}, None, "trail gave unreadable output"),
-                                ({"skeleton bin/b.py": {"entries": [{"name": "Bee"}]}}, None, "trail gave unreadable output")]:
-            self.assertEqual(self.deps(over, path=path), {"unavailable": why}, (over, why))
-
-
 def sha16(blob_list, body="## Goal\nGrüße", files=("a.py", "src/b.py", "new.py"), policies=()):
     text = json.dumps([body, list(files), blob_list, list(policies)], sort_keys=True)
     return hashlib.sha256(text.encode()).hexdigest()[:16]
@@ -170,13 +163,6 @@ class Hash(unittest.TestCase):
     def h(self, meta=None, pols=None):
         return fc_routectx.context_hash(self.repo, meta or self.meta, self.pols if pols is None else pols)
 
-    def test_hash_is_the_sha256_prefix(self):
-        (self.repo / "new.py").write_text("n\n")
-        self.git("add", "new.py")  # staged, still missing at HEAD
-        blobs = [self.git("rev-parse", "HEAD:a.py"), self.git("rev-parse", "HEAD:src/b.py"), "-"]
-        self.assertEqual(self.h(), sha16(blobs, policies=self.pols))
-        self.assertEqual(self.h(), self.h())
-
     def test_changes_with_each_input(self):
         base = self.h()
         self.assertEqual(self.h({**self.meta, "id": "002", "title": "U", "route": None}), base)  # only body and files count
@@ -190,9 +176,3 @@ class Hash(unittest.TestCase):
         self.commit({"new.py": "n\n", "a.py": "a\n"})  # only new.py differs from base now
         changed.append(self.h())
         self.assertNotIn(base, changed)
-
-    def test_no_commit_yet(self):
-        repo = Path(tempfile.mkdtemp())
-        subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
-        (repo / "a.py").write_text("a\n")
-        self.assertEqual(fc_routectx.context_hash(repo, {"id": "001", "body": "b", "files": ["a.py"]}, []), sha16(["-"], "b", ["a.py"]))

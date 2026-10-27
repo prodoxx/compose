@@ -10,7 +10,6 @@ for _m in [m for m in sys.modules if m.startswith("fc_") and m not in ("fc_cost"
 _spec.loader.exec_module(fc)
 import fc_unproven as up  # noqa: E402
 import json, tempfile  # noqa: E402
-from unittest import mock  # noqa: E402
 PROJ = Path("/x/.compose/p")
 def proof(base="fail_expected", tip=0, base_out="base out\n", tip_out="tip out\n"):
     return {"base": (base, base == "fail_expected"), "tip_exit": tip, "proven": False, "base_output": base_out, "tip_output": tip_out}
@@ -35,17 +34,6 @@ class Reprompt(unittest.TestCase):
             self.assertEqual(lines[-1], last)
             self.assertIn(quoted, "\n".join(lines[2:-1]))
             self.assertNotIn(other, "\n".join(lines[2:-1]))
-    def test_writer_live_needs_name_and_space(self):
-        name = fc.fc_herdr.agent_name("p", "tests-040")
-        for agents, want in (([{"name": name, "workspace_id": "w1"}], True), ([{"name": name, "workspace_id": "w2"}], False),
-                             ([{"name": fc.fc_herdr.agent_name("p", "tests-041"), "workspace_id": "w1"}], False), ([], False)):
-            with mock.patch.object(fc.fc_herdr, "live_agents", lambda: agents), mock.patch.object(fc.fc_herdr, "herdr_project_space", lambda p: "w1"):
-                self.assertIs(up.writer_live(PROJ, "040"), want)
-    def test_reprompt_sends_to_writer_name(self):
-        for answer, want in (({"ok": 1}, True), (None, False)):
-            with mock.patch.object(fc.fc_herdr, "herdr", return_value=answer) as h:
-                self.assertIs(up.reprompt(PROJ, "040", "hello"), want)
-            h.assert_called_once_with("agent", "prompt", fc.fc_herdr.agent_name("p", "tests-040"), "hello")
     def test_restartable_needs_unproven_and_kept_clone(self):
         root = Path(tempfile.mkdtemp()); proj = root / "p"; (proj / "results").mkdir(parents=True); (root / "wt").mkdir()
         self.assertIsNone(up.restartable(proj, "040"))

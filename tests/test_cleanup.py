@@ -46,10 +46,6 @@ class TestCrewWorktrees(unittest.TestCase):
         self.assertTrue((self.repo / "a_test.go").exists())
         self.assertEqual(self.writer_branches(), [])
 
-    def test_a_recorded_task_prefix_names_the_writer_branch(self):
-        (self.proj / "verify.json").write_text(json.dumps({"branch": "compose/p", "task_prefix": "team/p-"}))
-        self.assertEqual(fc.fc_briefs.test_branch(self.proj, "007"), "team/p-tests-007")
-
     def add_task(self, tid, protected, after="", test="true"):
         f = self.proj / "results" / "tasks.json"
         task = {"id": tid, "title": tid, "files": [], "protected": protected.split(), "test": test, "body": tid, "after": after}
@@ -233,20 +229,6 @@ class TestCrewWorktrees(unittest.TestCase):
         self.assertEqual(self.writer_branches(), [])
         self.assertFalse((self.proj / "worktrees" / "tests-001").exists())
 
-    def test_run_collects_finished_test_crews_and_waits_for_busy_ones(self):
-        from types import SimpleNamespace
-        self.crew_commits("001", "a_test.go", "a\n")
-        self.crew_commits("002", "b_test.go", "b\n")
-        a = SimpleNamespace(repo=str(self.repo), project="p", only=None, redo=False, no_stack=False)
-        with mock.patch.object(fc.fc_run, "run_tasks") as rt, mock.patch.object(fc.fc_crew, "crew_reports", return_value=[{"state": "working"}]):
-            with self.assertRaises(SystemExit) as e:
-                fc.fc_run.cmd_run(a)
-            self.assertIn("tests-001", str(e.exception)); rt.assert_not_called()
-        with mock.patch.object(fc.fc_run, "run_tasks") as rt, mock.patch.object(fc.fc_crew, "crew_reports", return_value=[{"state": "done"}]):
-            fc.fc_run.cmd_run(a)
-            rt.assert_called_once()
-        self.assertTrue((self.repo / "a_test.go").exists())  # collected before the run
-
     def test_run_refuses_a_task_whose_protected_test_is_not_on_the_project_branch(self):
         self.main_commits("a_test.go", "a\n", "Test a")
         with mock.patch.object(fc.fc_run, "run_tasks") as rt, self.assertRaises(SystemExit) as e:
@@ -293,11 +275,6 @@ class TestCrewWorktrees(unittest.TestCase):
         self.assertEqual(self.run("status", "--porcelain").stdout.strip(), "")
         self.assertEqual(self.writer_branches(), [])
 
-    def test_brief_states_the_line_budget(self):
-        tasks = fc.fc_tasks.load_tasks(self.proj)
-        self.assertIn("at most 60 lines", fc.fc_briefs.test_brief(tasks[0], "c"))
-        self.assertIn("at most 25 lines", fc.fc_briefs.test_brief(tasks[1], "c"))  # the task's test_lines wins
-        self.assertIn("at most 40 lines", fc.fc_briefs.test_brief(tasks[0], "c", 40))
 
 
 def server(cwd, port):
@@ -321,13 +298,6 @@ class Leftovers(unittest.TestCase):
         self.assertIsNotNone(mine.wait(timeout=5))
         self.assertIsNone(other.poll())
         self.assertTrue(fc.fc_crew.scratch_dir(proj).exists())
-
-    def test_preamble_points_scratch_inside_the_project(self):
-        proj = Path(tempfile.mkdtemp()) / ".compose" / "shop"
-        with mock.patch.object(fc.fc_herdr, "project_worktree", return_value=proj.parent.parent):
-            pre = fc.fc_crew.crew_preamble(proj, "shop-groundwork", "groundwork")
-        self.assertIn(str(proj / "scratch" / "shop-groundwork"), pre)
-        self.assertIn("never /tmp", pre)
 
     def test_a_stage_ends_only_its_own_new_daemons(self):
         def spawn(name):
@@ -384,29 +354,19 @@ class CleanSafety(unittest.TestCase):
         (d / f"{n}-b1.json").write_text(json.dumps({"name": f"{n}-b1", "title": "b1"}))
         (d / f"{n}-b1.status").write_text(json.dumps({"state": state, "message": "m"}) + "\n")
 
-    def test_repo_wide_clean_removes_the_merged_project_and_keeps_the_empty_one(self):
-        out = self.clean().stdout
-        self.assertFalse(self.wt["work"].exists())
-        self.assertTrue(self.wt["empty"].exists())
-        self.assertIn("no commits of its own", out)
-
-    def test_naming_the_empty_project_removes_it(self):
-        self.clean("--project", "empty")
-        self.assertFalse(self.wt["empty"].exists())
-
-    def test_live_crew_keeps_a_merged_project_until_forced_by_name(self):
+    def test_repo_wide_clean_removes_the_merged_project_unless_crew_is_live_and_keeps_the_empty_one(self):
         self.crew("work", "working")
         self.assertIn("live crew", self.clean().stdout)
         self.assertTrue(self.wt["work"].exists())
         self.clean("--force")  # --force alone never overrides a repo-wide clean
         self.assertTrue(self.wt["work"].exists())
-        self.clean("--project", "work", "--force")
+        self.crew("work", "done")  # a done teammate is not live crew
+        out = self.clean().stdout
         self.assertFalse(self.wt["work"].exists())
-
-    def test_a_done_teammate_is_not_live_crew(self):
-        self.crew("work", "done")
-        self.clean()
-        self.assertFalse(self.wt["work"].exists())
+        self.assertTrue(self.wt["empty"].exists())
+        self.assertIn("no commits of its own", out)
+        self.clean("--project", "empty")
+        self.assertFalse(self.wt["empty"].exists())
 
 
 class AbandonUnmerged(unittest.TestCase):
@@ -431,41 +391,22 @@ class AbandonUnmerged(unittest.TestCase):
     def branches(self):
         return self.run("branch", "--format=%(refname:short)").stdout.split()
 
-    def test_without_the_flag_an_unmerged_project_is_kept_as_before(self):
-        for args in (("--project", "p"), ("--project", "p", "--dry-run"), ()):
+    def test_abandon_is_explicit_refuses_when_unsafe_and_otherwise_removes_only_local_state(self):
+        for args in (("--project", "p"), ("--project", "p", "--dry-run"), ()):  # without the flag an unmerged project is kept
             self.cli(*args)
             self.assertTrue(self.wt.exists(), args); self.assertIn("compose/p", self.branches())
-
-    def test_abandon_names_one_project_and_refuses_anything_else(self):
         for args, why in (("--abandon",), "names one project"), (("--abandon", "--project", "nope"), "known"), \
                 (("--abandon", "--project", "p", "--delete-unmerged"), "names one project"):
             p = self.cli(*args)
             self.assertEqual(p.returncode, 1, args); self.assertIn(why, p.stdout + p.stderr); self.assertTrue(self.wt.exists())
-
-    def test_dry_run_lists_what_goes_and_what_stays_and_removes_nothing(self):
         p = self.cli("--abandon", "--project", "p", "--dry-run")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        out = p.stdout
-        self.assertLess(out.index("abandon  p: removes"), out.index("abandon  keeps"))
-        removes, keeps = out.split("abandon  keeps")
-        for part in (f"worktree {self.wt}", "1 uncommitted path(s)", "compose/p-001", "compose/p", "herdr tabs"):
+        removes, keeps = p.stdout.split("abandon  keeps")
+        for part in (f"worktree {self.wt}", "1 uncommitted path(s)", "local branches compose/p", "herdr tabs"):
             self.assertIn(part, removes)
         for part in ("Linear issues, untouched", "origin/compose/p", "GitHub PRs"):
             self.assertIn(part, keeps)
-        self.assertIn("--dry-run, nothing removed", out)
-        self.assertTrue((self.wt / "wip.txt").exists()); self.assertEqual(sorted(self.branches()), ["compose/p", "compose/p-001", "main"])
-
-    def test_abandon_removes_the_worktree_and_local_branches_and_keeps_the_pushed_copy_and_the_main_checkout(self):
-        p = self.cli("--abandon", "--project", "p")
-        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assertIn(f"abandon  p: removed worktree {self.wt} and 2 local branch(es)", p.stdout)
-        self.assertFalse(self.wt.exists()); self.assertEqual(self.branches(), ["main"])
-        self.assertIn("compose/p", subprocess.run(["git", "-C", str(self.remote), "branch", "--list"], capture_output=True, text=True).stdout)
-        self.assertEqual(self.run("worktree", "list", "--porcelain").stdout.count("worktree "), 1)
-        self.assertEqual(self.run("status", "--porcelain").stdout, "")
-        self.assertEqual(self.run("log", "--format=%s").stdout.split("\n")[0], "init")
-
-    def test_a_live_run_or_standing_inside_the_worktree_stops_it_with_nothing_removed(self):
+        self.assertTrue((self.wt / "wip.txt").exists()); self.assertEqual(sorted(self.branches()), ["compose/p", "main"])
         sleeper = subprocess.Popen(["sleep", "60"]); self.addCleanup(sleeper.wait); self.addCleanup(sleeper.kill)
         (self.proj / "results").mkdir(exist_ok=True)
         (self.proj / "results" / "run.json").write_text(json.dumps({"pid": sleeper.pid}))
@@ -475,22 +416,19 @@ class AbandonUnmerged(unittest.TestCase):
         (self.proj / "results" / "run.json").unlink()
         p = self.cli("--abandon", "--project", "p", cwd=self.wt)
         self.assertEqual(p.returncode, 1); self.assertIn("this command runs inside it", p.stdout + p.stderr); self.assertTrue(self.wt.exists())
-
-    def test_live_crew_stops_it_until_forced(self):
         d = self.proj / "results" / "crew"; d.mkdir(parents=True, exist_ok=True)
         (d / "p-b1.json").write_text(json.dumps({"name": "p-b1", "title": "b1"}))
         (d / "p-b1.status").write_text(json.dumps({"state": "working", "message": "m"}) + "\n")
         p = self.cli("--abandon", "--project", "p")
-        self.assertEqual(p.returncode, 1); self.assertIn("live crew", p.stdout + p.stderr); self.assertIn("--force overrides", p.stdout + p.stderr)
-        self.assertTrue(self.wt.exists())
+        self.assertEqual(p.returncode, 1); self.assertIn("live crew", p.stdout + p.stderr); self.assertTrue(self.wt.exists())
         p = self.cli("--abandon", "--project", "p", "--force")
-        self.assertEqual(p.returncode, 0, p.stdout + p.stderr); self.assertFalse(self.wt.exists()); self.assertEqual(self.branches(), ["main"])
-
-    def test_a_project_in_the_main_checkout_has_no_worktree_to_abandon(self):
-        main_proj = self.r / ".compose" / "m"; main_proj.mkdir(parents=True)
-        (main_proj / "verify.json").write_text(json.dumps({"branch": "main"}))
-        p = self.cli("--abandon", "--project", "m")
-        self.assertEqual(p.returncode, 1); self.assertTrue(self.r.exists()); self.assertIn("main", self.branches())
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn(f"abandon  p: removed worktree {self.wt} and 1 local branch(es)", p.stdout)
+        self.assertFalse(self.wt.exists()); self.assertEqual(self.branches(), ["main"])
+        self.assertIn("compose/p", subprocess.run(["git", "-C", str(self.remote), "branch", "--list"], capture_output=True, text=True).stdout)
+        self.assertEqual(self.run("worktree", "list", "--porcelain").stdout.count("worktree "), 1)
+        self.assertEqual(self.run("status", "--porcelain").stdout, "")
+        self.assertEqual(self.run("log", "--format=%s").stdout.split("\n")[0], "init")
 
 
 class SharedSpaceClean(unittest.TestCase):

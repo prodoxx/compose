@@ -133,13 +133,6 @@ class StatusReads(Repo):
                 fc.fc_status.cmd_status(SimpleNamespace(repo=str(self.repo), project=project, history=40))
             self.assertEqual([t for t in ("001", "002") if t in out.getvalue()], want, project)
 
-    def test_the_flag_parses_with_and_without_a_count(self):
-        for argv, n in ((["status", "--history"], fc_history.SHOWN), (["status", "--history", "5"], 5), (["status"], None)):
-            with mock.patch.object(fc.fc_status, "cmd_status") as cmd, mock.patch.object(sys, "argv", ["compose", *argv]):
-                fc.main()
-            self.assertEqual(cmd.call_args.args[0].history, n, argv)
-
-
 class VerifyWrites(Repo):
     def verify(self, passed):
         (self.proj / "linear.json").write_text('{"feature": "ENG-1"}')

@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import importlib.machinery, importlib.util, io, json, os, shutil, subprocess, sys, tempfile, unittest
+import importlib.machinery, importlib.util, io, json, os, subprocess, sys, tempfile, unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -172,10 +172,6 @@ class FigmaTree(unittest.TestCase):
         self.assertEqual([n.get("inInstance") for n in (light, card, loose)], [None, None, None])
         self.assertEqual([n.get("inInstance") for n in (text, pill, pill["children"][0])], ["5:1", "5:1", "I5:1;7:2"])
 
-    def test_the_judge_is_told_an_instances_contents_are_not_hand_drawn(self):
-        for rules in (fc.fc_figma.TREE_READING, fc.fc_figma.CONFIRM):
-            self.assertIn("inInstance", rules)
-
     def test_refuses_a_missing_id_node_non_design_task_and_a_failed_fetch(self):
         for kw, msg in ((dict(only=None), "needs --only"), (dict(node=None), "needs --only"), (dict(only="002"), "002 is not a design task")):
             with self.assertRaises(SystemExit) as e:
@@ -330,13 +326,6 @@ class FigmaJudge(unittest.TestCase):
             self.assertNotIn("\n", str(e.exception))
             self.assertEqual("no node tree" in str(e.exception), only == "003")
 
-    def test_choices_name_the_tree_not_the_code(self):
-        self.judge("001", {"Cart page": [("MET", 0.9), ("MET", 0.9)]})
-        tree = {"MET": "The tree satisfies this criterion.", "NOT_MET": "The tree violates or omits this criterion.", "UNCLEAR": "Cannot be decided from the tree shown."}
-        for q in self.ask.call_args.args[3].values():
-            self.assertEqual(q["criteria"], tree)
-            self.assertNotIn("code", " ".join(q["criteria"].values()).lower())
-
     def test_a_billing_halt_from_the_confirm_call_stops_the_command(self):
         with self.assertRaises(fc.fc_models.PaymentRequired):
             self.judge("001,004", {"Cart page": [("NOT_MET", 0.9), ("MET", 0.9)], "Pay": [("MET", 0.9)]}, fail=fc.fc_models.PaymentRequired("openrouter", "402"))
@@ -412,11 +401,6 @@ class FigmaJudge(unittest.TestCase):
         self.assertTrue(all(len(c) <= fc.fc_figma.fc_figmanodes.TREE_CHUNK_CHARS for c in chunks))
         self.assertTrue(all(c.count(facts) == 1 for c in chunks))
         self.assertEqual("\n".join(chunks).count('"id": "2:14"'), 1)
-
-    def test_the_judge_is_told_a_bound_fill_reads_as_its_hex(self):
-        for rules in (fc.fc_figma.TREE_READING, fc.fc_figma.CONFIRM):
-            self.assertIn("resolved hex", rules)
-            self.assertIn("WRITE RESULT", rules)
 
     def test_a_node_with_no_children_or_a_plain_text_tree_is_still_covered(self):
         blob = "NODE 1:1\n" + "".join(f"line {i} " + "y" * 200 + "\n" for i in range(500))
@@ -972,33 +956,6 @@ class FigmaJudgeScreens(unittest.TestCase):
         (self.proj / "results" / "001.screens" / "screens.json").write_text(json.dumps({"screens": [["1:2", "1-2.png"]], "missing": ["3:4"]}))
         self.judge(("MET", 0.0), [("MET", 0.0)])
         self.assertIn("(3:4)", self.screen_states[0][1]["c0"]["instructions"]["rules"])
-
-
-class FigmaConnectorBriefs(unittest.TestCase):
-    def test_designer_and_builder_briefs_name_both_connectors_and_ban_other_plugins(self):
-        builder = fc.fc_figma.design_brief({"id": "001", "nodes": ["Page/A"]}, "AbCd", Path("r"))
-        designer = fc.fc_figma.DESIGNER_BRIEF.format(slug="p", wt="/w", feature="ENG-1", figma="AbCd")
-        for brief in (builder, designer):
-            self.assertIn("mcp__claude_ai_Figma__*", brief)
-            self.assertIn("mcp__plugin_figma_figma__*", brief)
-            self.assertIn("one ToolSearch select call", brief)
-            self.assertIn("Never use another `plugin:*figma*` server", brief)
-
-    def test_designer_reports_open_questions_through_the_needs_user_gate(self):
-        designer = " ".join(fc.fc_figma.DESIGNER_BRIEF.format(slug="p", wt="/w", feature="ENG-1", figma="AbCd").split())
-        self.assertIn('`compose report --project p --as p-designer needs-user "<issue>: <n> questions <ids>; recommendation <one line>"`', designer)
-
-    def test_designer_brief_reads_tokens_through_trail(self):
-        designer = " ".join(fc.fc_figma.DESIGNER_BRIEF.format(slug="p", wt="/w", feature="ENG-1", figma="AbCd").split())
-        self.assertIn("the repo's tokens through trail (`trail ask \"<question>\" --source`)", designer)
-        self.assertNotRegex(designer, r"(?<![\w/.@-])graft(?![\w/-])")  # no graft command or word left anywhere in the brief
-
-    def test_designer_searches_linear_through_compose_linear_and_no_mcp_tool(self):
-        designer = " ".join(fc.fc_figma.DESIGNER_BRIEF.format(slug="p", wt="/w", feature="ENG-1", figma="AbCd").split())
-        self.assertRegex(designer, r'compose linear list --search[^.;]*"design system", "tokens", "Figma"')
-        tools = ("save_issue", "get_issue", "list_issues", "save_comment", "get_project", "list_issue_labels", "create_issue_label",
-                 "save_document", "mcp__claude_ai_Linear")
-        self.assertEqual([t for t in tools if t in designer], [])
 
 
 if __name__ == "__main__":

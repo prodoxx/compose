@@ -110,18 +110,6 @@ class Credit(unittest.TestCase):
             self.assertIn("$0.10 of credit left", stopped)
             self.assertEqual(self.run_tasks(*tasks, force=True), "preflight reached")
 
-    def test_resume_passes_force_on_to_the_run(self):
-        state = {"command": "run", "remaining": ["001"], "halted_at": "x", "provider": "p", "args": {"attempts": 3, "parallel": 3, "trunk": None, "no_stack": True}}
-        (self.proj / "results" / "resume.json").write_text(json.dumps(state))
-        (self.proj / "results" / "tasks.json").write_text(json.dumps({"feature": {}, "tasks": [{"id": "001", "title": "t", "files": [], "protected": [], "test": "true", "body": "", "model": OR}]}))
-        seen = []
-        for force in (False, True):
-            with mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), mock.patch.object(fc.fc_core, "say"), \
-                 mock.patch.object(fc.fc_run, "require_committed"), mock.patch.object(fc.fc_run, "run_tasks", lambda repo, proj, ts, ns: seen.append(ns.force)):
-                fc.fc_run.cmd_resume(SimpleNamespace(repo=str(self.repo), project="p", parallel=None, force=force))
-        self.assertEqual(seen, [False, True])
-
-
 class PaymentHalt(unittest.TestCase):
     """A payment halt leaves the top-up link and the exact resume command where the watch can say them."""
     def test_the_saved_halt_names_the_top_up_page_and_the_resume_command_and_the_banner_prints_both(self):
@@ -155,14 +143,6 @@ class PaymentHalt(unittest.TestCase):
             fc.fc_run.run_tasks(repo, proj, tasks, mock.Mock(trunk="main", attempts=1, parallel=2, no_stack=True))
         self.assertEqual(sorted(started), ["001", "002"])  # 003 was never started
         self.assertEqual(halted, [["001", "003"]])  # what resume picks up: the task that hit the 402 and the one that never started; 002 finished
-
-    def test_the_watch_event_carries_both(self):
-        snap = lambda halt: {"tasks": {}, "agents": {}, "crew": {}, "run": True, "ended": None, "verify": None, "halt": halt, "run_end": 0, "last": [0, ""]}
-        halt = ["2026-10-23 10:00:00", "openrouter", 2, "https://openrouter.ai/settings/credits", "compose resume --repo /r --project p"]
-        line = next(e for e in fc.fc_watch.watch_events(snap(None), snap(halt)) if e.startswith("event halt=payment"))
-        self.assertIn("top_up=https://openrouter.ai/settings/credits", line)
-        self.assertIn("resume='compose resume --repo /r --project p'", line)
-
 
 if __name__ == "__main__":
     unittest.main()

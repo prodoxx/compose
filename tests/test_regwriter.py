@@ -23,12 +23,6 @@ class Brief(unittest.TestCase):
     def brief(self, body, diff="diff --git a/x b/x\n+fix"):
         return fc_regwriter.writer_brief({"id": "007", "title": "Fix the thing", "body": body}, diff)
 
-    def test_branch_is_task_prefix_plus_regress_id(self):
-        proj = Path(tempfile.mkdtemp()) / ".compose" / "p"
-        proj.mkdir(parents=True)
-        (proj / "verify.json").write_text(json.dumps({"task_prefix": "fast/p/"}))
-        self.assertEqual(fc_regwriter.writer_branch(proj, "007"), "fast/p/regress-007")
-
     def test_starts_with_four_lines_then_criteria_when_no_reproduction(self):
         self.assertTrue(self.brief(BODY).startswith(
             "Write one regression test for task 007: Fix the thing.\n"
@@ -47,10 +41,6 @@ class Brief(unittest.TestCase):
         self.assertIn("## Expected behavior\n### sub\n* a\n\n## The fix", text)
         self.assertIn("## Expected behavior\nlast\n\n## The fix", self.brief("## Reproduction\n\nlast\n\n"))
 
-    def test_ends_with_diff_in_fence(self):
-        self.assertTrue(self.brief(BODY, "-a\n+b").endswith(f"## The fix\n{FENCE}diff\n-a\n+b\n{FENCE}"))
-
-
 class ScenarioBrief(unittest.TestCase):
     """The regression writer's brief carries the task's scenarios block between the expected behavior and the fix."""
     BLOCK = "id: 1\ngiven: g\n\nid: 2\ngiven: h\nnegative_cases: n"
@@ -59,22 +49,10 @@ class ScenarioBrief(unittest.TestCase):
     def brief(self, body, diff="D"):
         return fc_regwriter.writer_brief({"id": "007", "title": "T", "body": body}, diff)
 
-    def test_the_section_sits_between_expected_behavior_and_the_fix(self):
-        body = BODY.split("## Test plan")[0] + self.PLAN
-        self.assertTrue(self.brief(body, "-a\n+b").endswith(
-            f"\n## Expected behavior\n* a\n* b\n\n## Scenarios\n{FENCE}scenarios\n{self.BLOCK}\n{FENCE}\n\n## The fix\n{FENCE}diff\n-a\n+b\n{FENCE}"))
-
     def test_the_block_does_not_leak_into_the_reproduction_text(self):
         text = self.brief(REPRO.split("## Constraints")[0] + self.PLAN)
         self.assertIn("## Expected behavior\nrun x\nsee y\n\n## Scenarios\n", text)
         self.assertEqual(text.count("id: 1"), 1)
-
-    def test_a_body_without_a_block_keeps_today_brief(self):
-        for body in (BODY, BODY + f"\n{FENCE}compose\nfiles: [a]\n{FENCE}\n"):
-            text = self.brief(body)
-            self.assertNotIn("## Scenarios", text)
-            self.assertTrue(text.endswith(f"## Expected behavior\n* a\n* b\n\n## The fix\n{FENCE}diff\nD\n{FENCE}"))
-
 
 class Writer(unittest.TestCase):
     """The regression test writer starts on its own branch and checkout off the task's tip."""

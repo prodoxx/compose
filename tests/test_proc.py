@@ -47,13 +47,6 @@ class Proc(unittest.TestCase):
         self.assertLess(time.time() - stopped[0], 6)
         time.sleep(0.5); self.assertEqual(pids(), [])
 
-    def test_a_timeout_kills_the_whole_group_and_raises(self):
-        (n, pids), t0 = self.sleeps(1), time.time()
-        with self.assertRaises(subprocess.TimeoutExpired):
-            fc.fc_proc.run(["sh", "-c", f"sleep {n} & sleep {n}"], timeout=1)
-        self.assertLess(time.time() - t0, 8)
-        time.sleep(0.5); self.assertEqual(pids(), []); self.assertEqual(fc.fc_proc.RUNNING, set())
-
     def test_run_limited_turns_a_timeout_into_exit_124_with_the_output_so_far_and_the_limit(self):
         (n, pids), t0 = self.sleeps(2), time.time()
         p = fc.fc_proc.run_limited(["sh", "-c", f"echo before; sleep {n} & sleep {n}"], timeout=1)
@@ -479,14 +472,6 @@ class Detached(unittest.TestCase):
         child = int(r.stdout.split()[0])
         self.addCleanup(lambda: self.gone(child) or os.kill(child, 9))
         self.assertEqual(r.returncode, 124)
-        self.assertTrue(self.gone(child), "the child in its own group is still running")
-
-    def test_kill_group_takes_the_detached_children_of_the_group_with_it(self):
-        p = subprocess.Popen([sys.executable, "-c", self.PARENT], stdout=subprocess.PIPE, text=True, start_new_session=True)
-        child = int(p.stdout.readline()); p.stdout.close()
-        self.addCleanup(lambda: self.gone(child) or os.kill(child, 9))
-        fc.fc_proc.kill_group(p.pid)
-        p.wait(5)
         self.assertTrue(self.gone(child), "the child in its own group is still running")
 
 

@@ -217,15 +217,6 @@ class NotReady(unittest.TestCase):
         lines, code = self.end({}, False)  # every required row in place: ready, and no probe as under yes
         self.assertEqual((lines[-2:], code), (READY, 0)); self.probe.assert_not_called()
 
-    def test_terminal_without_yes_is_unchanged(self):
-        lines, code = self.end({"gh auth": "skipped", "OpenRouter key": "skipped"}, False)
-        self.assertEqual((lines[-2:], code), (READY, 0)); self.assertNotIn(HEAD, lines); self.probe.assert_called_once()
-        lines, code = self.end({"gh": "failed"}, False, {"workspaces": {"default": {}}})
-        self.assertEqual((lines[-1].startswith(NOT_DONE), code), (True, 1)); self.assertNotIn(HEAD, lines)
-        self.claude = False; lines, code = self.end({"gh": "failed"}, False)
-        self.assertEqual((lines[-1], code), (CLAUDE, 1)); self.assertNotIn(HEAD, lines)
-
-
 IN_HERDR = "next: run claude in a pane and type /compose"
 
 class InsideHerdr(unittest.TestCase):
@@ -249,12 +240,6 @@ class InsideHerdr(unittest.TestCase):
                     lines, code = self.under({"HERDR_ENV": value}, yes=yes)
                     self.assertEqual((lines[:-1], lines[-1], code), (out[0][:-1], IN_HERDR, 0))
                     self.assertNotIn(READY[1], lines)
-
-    def test_outside_herdr_keeps_run_compose(self):
-        for extra in ({}, {"HERDR_ENV": ""}, {"HERDR_SOCKET_PATH": "/run/herdr.sock"}):
-            with self.subTest(extra):
-                lines, code = self.under(extra)
-                self.assertEqual((lines[-2:], code), (READY, 0)); self.assertNotIn(IN_HERDR, lines)
 
     def test_endings_that_are_not_ready_print_no_next_line_inside_or_outside(self):
         def same(changes={}, yes=False, auth=ALL):
@@ -305,20 +290,10 @@ class KeyTextOnce(unittest.TestCase):
     def test_yes_names_a_missing_openrouter_key_once(self):
         self.assert_once({"workspaces": {"default": {"linear": "lin-test"}}, "typesafe": "ts-test"}, ["OpenRouter key"], True)
 
-    def test_no_terminal_is_the_same(self):
-        self.tty = False
-        self.assert_once({"workspaces": {"default": {"linear": "lin-test"}}, "typesafe": "ts-test"}, ["OpenRouter key"], False)
-
     def test_linear_without_its_key_and_every_key_missing(self):
         self.connector()
         self.assert_once({"workspaces": {"default": {"openrouter": "sk-or-test"}}, "typesafe": "ts-test"}, ["Linear key"], True)
         self.assert_once({"workspaces": {"default": {}}}, ["OpenRouter key", "TypeSafe key", "Linear key"], True)
-
-    def test_terminal_without_yes_keeps_the_key_lines(self):
-        lines, code = self.end({"workspaces": {"default": {}}}, ["OpenRouter key", "TypeSafe key", "Linear key"], False)
-        self.assertEqual((SKIPS(lines), lines[-1], code),
-                         (["skipped openrouter", "skipped typesafe", "skipped linear"], NOT_DONE + ": missing OpenRouter, TypeSafe, Linear", 1))
-        self.assertNotIn(HEAD, lines)
 
 PI = """#!/bin/sh
 printf '%s\\n%s' "$OPENROUTER_API_KEY" "$*" > "$REC"

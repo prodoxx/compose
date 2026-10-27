@@ -1,7 +1,0 @@
-DEFAULT_TASK_COST
-RECENT
-via_openrouter
-recent_costs
-task_cost
-remaining
-check

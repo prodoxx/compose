@@ -17,7 +17,7 @@ class PartialSubmit(Ship):
         refs = {r.removeprefix("refs/heads/"): s for s, r in zip(*[iter(self.origin_git("for-each-ref", "--format=%(objectname) %(refname)", "refs/heads/compose"))] * 2)}
         return refs, {f for r in refs for f in self.origin_git("ls-tree", "-r", "--name-only", r)}
 
-    def test_a_failed_task_holds_it_and_the_ones_after_back_and_a_later_submit_adds_them(self):
+    def test_a_failed_task_holds_it_and_the_ones_after_back_and_a_later_submit_adds_them_once_it_is_done_on_linear(self):
         self.result("002", "failed")
         out, code = self.submit()
         self.assertEqual(code, 0, out)
@@ -26,23 +26,15 @@ class PartialSubmit(Ship):
         self.assertTrue({"setup.txt", "001.src", "t001.test"} <= files)
         self.assertFalse(files & {"002.src", "003.src", "t002.test", "t003.test"})
         self.assertEqual(set(json.loads((self.proj / "results" / "prs.json").read_text())), set(before))
-        self.result("002", "passed")
+        tasks = json.loads((self.proj / "results" / "tasks.json").read_text())  # done on Linear: not held, whatever its result
+        tasks["tasks"][1]["linear_state"] = "Done"
+        (self.proj / "results" / "tasks.json").write_text(json.dumps(tasks))
         out, code = self.submit()
         self.assertEqual(code, 0, out)
         after, files = self.pushed()
         self.assertTrue({"002.src", "003.src", "t002.test", "t003.test"} <= files)
         self.assertEqual({b: after[b] for b in before}, before)
         self.assertEqual(json.loads((self.proj / "results" / "prs.json").read_text()), {p["branch"]: int(n) for n, p in self.prs().items()})
-
-    def test_a_task_done_on_linear_is_not_held_whatever_its_result(self):
-        self.result("002", "failed")
-        tasks = json.loads((self.proj / "results" / "tasks.json").read_text())
-        tasks["tasks"][1]["linear_state"] = "Done"
-        (self.proj / "results" / "tasks.json").write_text(json.dumps(tasks))
-        out, code = self.submit()
-        self.assertEqual(code, 0, out)
-        self.assertTrue({"002.src", "003.src"} <= self.pushed()[1])
-        self.assertTrue((self.proj / "results" / "prs.json").exists())
 
     def test_a_task_after_a_higher_id_is_not_held_behind_the_tasks_between_them(self):
         """001 waits for 003, so it sits right above 003 and below 002: 002 failing holds 002 alone."""
@@ -76,21 +68,14 @@ class LandedLayers(Ship):
     def assert_built_on_main(self, branch, file, below="main"):
         self.assertIn(file, self.tree(branch))
         self.assertTrue(self.git("rev-list", f"{below}..{branch}"), f"{branch} adds nothing over {below}")
-        self.assertEqual(subprocess.run(["git", "merge-base", "--is-ancestor", "main", branch], cwd=self.repo).returncode, 0)
+        self.assertEqual(subprocess.run(["git", "merge-base", "--is-ancestor", "refs/remotes/origin/main", branch], cwd=self.repo).returncode, 0)
 
-    def test_the_layers_above_a_merged_bottom_build_on_the_new_base(self):
+    def test_a_missing_base_on_origin_stops_the_stack_and_the_layers_build_on_the_new_base_while_the_primary_checkout_is_on_it(self):
         self.submit(); self.merge(1)
+        self.git("remote", "set-url", "origin", str(self.origin) + "-gone")
         out, code = self.run_cmd(fc.fc_ship.cmd_stack, submit=False)
-        self.assertEqual(code, 0, out)
-        self.assertIn("stack  landed compose/p-layer-01; building on origin/main", out)
-        self.assertFalse(any("STOP" in l for l in out), out)
-        self.assertIn("stack  ok    (main) <- compose/p-layer-02 <- compose/p-layer-03", out)
-        self.assertEqual(self.git("rev-parse", "main"), self.git("--git-dir", str(self.origin), "rev-parse", "main"))
-        self.assert_built_on_main("compose/p-layer-02", "002.src")
-        self.assert_built_on_main("compose/p-layer-03", "003.src", "compose/p-layer-02")
-
-    def test_the_layers_build_on_the_new_base_while_the_primary_checkout_is_on_it(self):
-        self.submit(); self.merge(1)
+        self.assertTrue(any("STOP" in l and "landed but main cannot be fetched from origin" in l for l in out), out)
+        self.git("remote", "set-url", "origin", str(self.origin))
         self.git("checkout", "-q", "main")  # a branch checked out in a worktree cannot be fetched into
         self.write("mine.txt", "not committed\n")
         before = self.git("rev-parse", "main")
@@ -104,14 +89,8 @@ class LandedLayers(Ship):
         origin_main = self.git("--git-dir", str(self.origin), "rev-parse", "main")
         self.assertNotEqual(origin_main, before)
         self.assertEqual(self.git("merge-base", "compose/p-layer-02", origin_main), origin_main)  # cut on origin's base, not the stale local one
-        self.assertIn("002.src", self.tree("compose/p-layer-02"))
-        self.assertEqual(self.git("merge-base", "compose/p-layer-03", "compose/p-layer-02"), self.git("rev-parse", "compose/p-layer-02"))
-
-    def test_a_missing_base_on_origin_stops_the_stack_and_names_it(self):
-        self.submit(); self.merge(1)
-        self.git("remote", "set-url", "origin", str(self.origin) + "-gone")
-        out, code = self.run_cmd(fc.fc_ship.cmd_stack, submit=False)
-        self.assertTrue(any("STOP" in l and "landed but main cannot be fetched from origin" in l for l in out), out)
+        self.assert_built_on_main("compose/p-layer-02", "002.src", origin_main)
+        self.assert_built_on_main("compose/p-layer-03", "003.src", "compose/p-layer-02")
 
     def test_open_pull_requests_or_no_layers_file_fetch_nothing(self):
         self.submit()

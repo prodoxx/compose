@@ -94,6 +94,12 @@ class Board(unittest.TestCase):
         self.assertEqual(self.states(b)["003"], "running")
         self.assertEqual(b["rows"][2]["attempts"], 1)
 
+    def test_a_held_task_changes_the_board(self):
+        fc.fc_status.board(self.repo, self.proj)
+        time.sleep(0.01)
+        (self.proj / "results" / "hold.json").write_text(json.dumps({"003": {"reason": "plan changes", "at": "x"}}))
+        self.assertEqual(self.states(fc.fc_status.board(self.repo, self.proj))["003"], "held")
+
     def test_a_run_that_died_shows_without_any_file_changing(self):
         self.result("003", "running")
         marker = self.proj / "results" / "run.json"
@@ -101,20 +107,6 @@ class Board(unittest.TestCase):
         self.assertEqual(self.states(fc.fc_status.board(self.repo, self.proj))["003"], "running")
         with mock.patch.object(fc.fc_tasks, "pid_alive", return_value=False):
             self.assertEqual(self.states(fc.fc_status.board(self.repo, self.proj))["003"], "interrupted")
-
-    def test_a_held_task_changes_the_board(self):
-        fc.fc_status.board(self.repo, self.proj)
-        time.sleep(0.01)
-        (self.proj / "results" / "hold.json").write_text(json.dumps({"003": {"reason": "plan changes", "at": "x"}}))
-        self.assertEqual(self.states(fc.fc_status.board(self.repo, self.proj))["003"], "held")
-
-    def test_task_branches_runs_one_listing_and_looks_up_the_common_dir_once(self):
-        with self.counting() as sh:
-            self.assertEqual(fc.fc_worktree.task_branches(self.repo, self.proj), {"compose/p-002": None})
-            self.assertEqual([c.args[0][1] for c in sh.call_args_list], ["rev-parse", "for-each-ref"], [c.args[0] for c in sh.call_args_list])  # the prefix cache's refs stamp needs the common dir
-            sh.reset_mock()
-            fc.fc_worktree.task_branches(self.repo, self.proj)
-            self.assertEqual([c.args[0][1] for c in sh.call_args_list], ["for-each-ref"])
 
     def test_watch_snapshot_costs_no_process_while_nothing_changed(self):
         with mock.patch.object(fc.fc_herdr, "herdr", return_value=None), self.counting() as sh:
@@ -187,11 +179,6 @@ class ReadyList(unittest.TestCase):
             self.ready(items)
             self.assertEqual(self.projects(), before + "  " + fc.fc_linear.ready_line(items))
             self.assertEqual(fc.fc_status.project_summary(self.repo, self.proj)["ready"], items)
-
-    def test_a_halted_projects_line_still_ends_with_the_ready_line(self):
-        (self.proj / "results" / "resume.json").write_text(json.dumps({"halted_at": "2026-10-19 01:00:00", "provider": "x", "remaining": []}))
-        self.ready(self.ITEMS)
-        self.assertTrue(self.projects().endswith("HALTED (payment) -> compose resume  READY NEB-1 A, NEB-2 B"), self.projects())
 
     def test_without_ready_json_neither_prints_a_ready_line(self):
         (lines, i), line = self.status(), self.projects()
@@ -282,23 +269,6 @@ class RouteSummary(unittest.TestCase):
             ("workflow fix-then-regression-test", ["1", "1", "0", "1", "$0.5000"]), ("workflow -", ["1", "2", "1", "0", "$0.2500"]),
             ("depth STANDARD", ["1", "2", "1", "0", "$0.2500"]), ("depth DEEP", ["2", "5", "2", "4", "$0.6250"]), ("depth -", ["1", "3", "0", "0", "$1.0000"])])
 
-    def test_status_prints_the_block_right_after_the_task_rows_and_digest_is_unchanged(self):
-        route = lambda body: {"description": "## Route\n\n" + body}
-        (self.proj / "results" / "tasks.json").write_text(json.dumps({"feature": {}, "tasks": [{"id": "001", "title": "a", "linear": "XX-1"}, {"id": "002", "title": "b"}],
-                                                                       "issues": {"XX-1": route("* workflow: test-first\n* depth: FAST\n")}}))
-        (self.proj / "results" / "001.json").write_text(json.dumps({"status": "passed", "attempts": 3, "cost": 0.42}))
-        lines = fc.fc_status.render_status(self.repo, [self.proj]).split("\n")
-        self.assertEqual(lines[-6:], [
-            "  route cost                         tasks  att  esc  fix      cost",
-            "  workflow test-first                    1    3    0    0   $0.4200",
-            "  workflow -                             1    0    0    0   $0.0000",
-            "  depth FAST                             1    3    0    0   $0.4200",
-            "  depth -                                1    0    0    0   $0.0000", ""])
-        self.assertTrue(lines[-7].startswith("  002 "), lines)
-        out = io.StringIO()
-        with redirect_stdout(out):
-            fc.fc_status.cmd_status(SimpleNamespace(repo=str(self.repo), project=None, digest=True, watch=False, json=False))
-        self.assertEqual(out.getvalue(), fc.fc_status.digest(self.repo, self.proj) + "\n")
 
 
 class RouteRow(unittest.TestCase):
@@ -330,8 +300,6 @@ class RouteRow(unittest.TestCase):
         self.assertEqual(self.row({"id": "001"}), none)
         self.assertEqual(self.row({"id": "001", "linear": "XX-2"}), none)
 
-    def test_a_task_with_no_result_no_verify_json_and_no_sync_cache_gets_zeros(self):
-        self.assertEqual(self.row({"id": "001", "linear": "XX-1"}), {"workflow": "-", "depth": "-", "escalations": 0, "fix_rounds": 0})
 
 
 class BoardOneListing(unittest.TestCase):

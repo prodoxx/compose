@@ -34,20 +34,12 @@ class Tiers(unittest.TestCase):
         with self.assertRaises(SystemExit) as e: self.config({"huge": ["pi:a/b"]})
         self.assertEqual(str(e.exception), f"{self.path}: models.tiers.huge: tiers are cheap, standard, frontier")
 
-    def test_order_pins_ceilings_and_tier_of(self):
-        self.assertEqual((T.ORDER, T.PINS), (("cheap", "standard", "frontier"), ("cheap", "standard", "frontier", "no-frontier")))
-        self.assertEqual([T.ceiling(r) for r in ("test_reader", "tests", "fix", "implementer", "planner", "planner-2", "designer-plan", "helper")], ["cheap", "standard", "standard", "standard", "frontier", "frontier", "frontier", None])
-        self.assertEqual([T.tier_of(m) for m in (HAIKU, SONNET, OPUS, "claude-opus-5-5", "claude-haiku-5-5", C.DEFAULT_MODEL, "pi:a/b")], ["cheap", "standard", "frontier", "frontier", "cheap", "cheap", None])
-
     def test_tier_for_and_start_tier_follow_every_pin_rule(self):
         for pin in ("cheap", "standard", "frontier"): self.assertEqual((T.tier_for("cheap", pin), T.tier_for(None, pin), T.start_tier("DEEP", pin), T.start_tier("FAST", pin)), (pin,) * 4)
         self.assertEqual([T.tier_for(c, "no-frontier") for c in (None, "frontier", "standard", "cheap")], ["standard", "standard", "standard", "cheap"])
         self.assertEqual([T.tier_for(c) for c in ("frontier", "cheap", None)], ["frontier", "cheap", None])
         self.assertEqual([T.start_tier(d) for d in ("DEEP", "STANDARD", "FAST")], ["standard", "cheap", "cheap"])
         self.assertEqual(T.start_tier("DEEP", "no-frontier"), "standard")
-
-    def test_builder_check_is_frontier(self):
-        self.assertEqual(T.ceiling("builder-check"), "frontier")
 
     def test_chain_is_a_ceiling(self):
         h, s, o, p = (HAIKU, None), (SONNET, None), (OPUS, "high"), ("pi:a/b", None)

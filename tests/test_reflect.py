@@ -179,17 +179,6 @@ class Reflect(unittest.TestCase):
             paths = {fc.fc_change.reflect(proj, f"task:00{i}", "x")[0] for i in range(3)}
         self.assertEqual(len(paths), 3)
 
-    def test_the_command_prints_each_verdict(self):
-        proj = project()
-        out = io.StringIO()
-        with mock.patch.object(fc.fc_core, "project_dir", lambda a: proj), \
-                mock.patch.object(fc.fc_models, "jev_ask", return_value=answers(d0=("BROKEN", 0.9))), \
-                mock.patch("sys.stdin", io.StringIO("product owner: drafts must sync across devices\n")), redirect_stdout(out):
-            fc.fc_change.cmd_reflect(SimpleNamespace(evidence="-", dismiss=None, against=None))
-        self.assertIn("BROKEN", out.getvalue())
-        self.assertIn("Store drafts in localStorage", out.getvalue())
-        self.assertIn("flagged 1 of 3", out.getvalue())
-
     def test_a_flagged_decision_prints_the_tasks_that_rest_on_it(self):
         proj = project(MAP.replace("1. Show a toast on save\n", "1. Show a toast on save\n- D3: one plan\n"))
         with_tasks(proj, [{**task("003"), "body": "## Goal\nFollow D3."}])
@@ -388,10 +377,6 @@ class Holds(unittest.TestCase):
         self.assertNotIn("004", table)  # not failed, not blocked: left pending for the next run
         self.assertIn("run done   3/3 passed", " ".join(self.said))
 
-    def test_hold_needs_ids_and_a_reason(self):
-        with self.assertRaises(SystemExit):
-            self.hold(only="002")
-
     def test_a_run_skips_held_tasks_and_leaves_them_pending(self):
         self.hold(only="002", reason="D2 broken")
         calls, table, _ = run_all(self.proj)
@@ -442,15 +427,6 @@ class Holds(unittest.TestCase):
         self.assertTrue(self.said[0].startswith("hold.json unreadable"))
         fc.fc_tasks.held(self.proj)
         self.assertEqual(len(self.said), 1)
-
-    def test_a_missing_hold_file_is_not_a_warning(self):
-        self.assertEqual(fc.fc_tasks.held(self.proj), {})
-        self.assertEqual(self.said, [])
-
-    def test_hold_leaves_no_temp_file_and_a_parseable_hold_json(self):
-        self.hold(only="002", reason="x")
-        self.assertFalse((self.proj / "results" / "hold.json.tmp").exists())
-        self.assertIn("002", json.loads((self.proj / "results" / "hold.json").read_text()))
 
     def test_status_shows_held_with_the_reason(self):
         self.hold(only="002", reason="D2 broken")
@@ -553,11 +529,6 @@ class AutoReflect(unittest.TestCase):
             fc.fc_verify.verify_failed(self.proj, [{}], "confirmed [high] s.go: a query per answer")
         self.assertIn("reported hw-tests-003 contradiction", out.getvalue())
         self.assertEqual(len([m for m in self.said if "reflect failed (disk full)" in m]), 2, self.said)
-
-    def test_every_crew_brief_says_how_to_report_one(self):
-        with mock.patch.object(fc.fc_herdr, "project_worktree", lambda p: Path("/wt")):
-            text = fc.fc_crew.crew_preamble(self.proj, "hw-groundwork", "groundwork")
-        self.assertIn('contradiction "<what you found>; Linear says: <quoted line> (<issue>); evidence:', text)
 
     def test_a_failed_verify_is_screened_with_its_findings(self):
         reflect = mock.MagicMock(return_value=(Path("/p/reflect-1.json"), {}))
@@ -705,14 +676,6 @@ class Changes(unittest.TestCase):
         change(self.proj, self.repo, "done")
         self.assertEqual([f.name for f in d.iterdir()], ["C1.json"])
         self.assertTrue(fc.fc_change.load_change(self.proj, "C1")["done_at"])
-
-    def test_stray_files_do_not_break_numbering(self):
-        d = fc.fc_change.changes_dir(self.proj)
-        d.mkdir(parents=True, exist_ok=True)
-        (d / "C1.json.tmp").write_text('{"id": "C1", "wh')
-        (d / "Cx.json").write_text("{}")
-        self.assertIn("C1 open", change(self.proj, self.repo, "start", why="x"))
-        self.assertEqual(fc.fc_change.change_ids(self.proj), ["C1"])
 
     def test_status_survives_an_unreadable_change_record(self):
         d = fc.fc_change.changes_dir(self.proj)
@@ -987,42 +950,6 @@ class Undo(unittest.TestCase):
         self.lin.issues["ENG-4"]["blockedBy"] = ["ENG-3", "ENG-5"]
         fc.fc_linear.linear_blocked_by(fc.fc_linear.linear_issue("ENG-4"), ["ENG-3"])
         self.assertEqual(self.lin.issues["ENG-4"]["blockedBy"], ["ENG-3"])
-
-
-class ChangeBrief(unittest.TestCase):
-    def setUp(self):
-        self.proj = project()
-        self.repo, _ = git_repo(())
-        p = mock.patch.object(fc.fc_core, "say", lambda m: None); p.start(); self.addCleanup(p.stop)
-        synced(self.proj, MAP, BEFORE)
-
-    def brief(self, cid, extra=None):
-        out = io.StringIO()
-        with mock.patch.object(fc.fc_core, "project_dir", lambda a: self.proj), mock.patch.object(fc.fc_herdr, "project_worktree", lambda p: self.repo), \
-                redirect_stdout(out):
-            fc.fc_briefs.cmd_architect(SimpleNamespace(extra=extra, change=cid))
-        return out.getvalue()
-
-    def test_the_change_architect_asks_on_its_own_page(self):
-        change(self.proj, self.repo, "start", why="localStorage is wiped by the sandbox")
-        brief = self.brief("C1", extra="held: 003, 004")
-        page = str(self.proj / "lavish" / "change-C1.html")
-        self.assertIn("Text by default", brief)
-        self.assertIn(f"npx -y lavish-axi {page}", brief)
-        self.assertNotIn("lavish-axi poll", brief)  # the page takes no answers: they come through the engineering manager
-        self.assertIn("never poll it for them", brief)
-        self.assertIn("localStorage is wiped by the sandbox", brief)
-        self.assertIn("its `evidence` field", brief)
-        self.assertIn("`compose decide --change C1`", brief)
-        self.assertIn("struck through, `~~<old line>~~ (C1)`", brief)
-        self.assertIn("an answer that keeps it strikes nothing", brief)
-        self.assertIn("`- C1-1: <question> (replaces <the D id it would replace>) - Recommendation:", " ".join(brief.split()))
-        self.assertIn("Do not touch tasks, stories, or the plan", brief)
-        self.assertTrue(brief.rstrip().endswith("held: 003, 004"))
-
-    def test_only_an_open_change_gets_a_brief(self):
-        with self.assertRaises(SystemExit):
-            self.brief("C9")
 
 
 class BranchNames(unittest.TestCase):

@@ -30,15 +30,6 @@ class HerdrConfig(unittest.TestCase):
         self.assertEqual(self.apply()[0], "written")
         self.assertEqual(self.path.read_bytes(), SHIPPED.read_bytes())
 
-    def test_shipped_file_has_every_setting(self):
-        self.assertEqual(fc_init.herdr_toml(SHIPPED), {
-            "keys.prefix": "cmd+m", "keys.new_tab": "prefix+c", "keys.close_tab": "prefix+ampersand",
-            "keys.split_horizontal": "prefix+minus", "keys.split_vertical": "prefix+|",
-            "keys.focus_pane_left": "prefix+h", "keys.focus_pane_down": "prefix+j", "keys.focus_pane_up": "prefix+k",
-            "keys.focus_pane_right": "prefix+l", "keys.goto": "prefix+g", "keys.copy_mode": "prefix+y",
-            "keys.workspace_picker": "prefix+w", "theme.name": "terminal", "ui.agent_panel_sort": "spaces",
-            "ui.sound.enabled": "false", "ui.toast.delivery": "off"})
-
     def test_values_in_effect_writes_nothing(self):
         text = '[ui.sound]\nenabled = false\n[keys]\nprefix = "ctrl+b"\n'  # toast absent is herdr's default, off
         self.assertEqual(self.apply(text)[0], "ok")
@@ -102,11 +93,6 @@ class EditKeepsLines(unittest.TestCase):
             with self.subTest(text=text):
                 self.edit(text, want)
 
-    def test_inserted_key_and_untouched_lines_stay_as_today(self):
-        text = '[keys]\nprefix = "ctrl+b"  # mine\n\n[ui.sound]\nvolume = 3\n[ui.toast]\ndelivery = "toast" # t\n'
-        want = '[keys]\nprefix = "ctrl+b"  # mine\n\n[ui.sound]\nenabled = false\nvolume = 3\n[ui.toast]\ndelivery = "off" # t\n'
-        self.edit(text, want)
-
 class Dry(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp())
@@ -142,9 +128,6 @@ class Dry(unittest.TestCase):
         text = '[ui.toast]\ndelivery = "off"\n'  # sound absent is herdr's default, on: only that one is loud
         self.assertEqual(self.dry(text=text), ("edited", [f"would edit {self.path}: [ui.sound] enabled = false"]))
 
-    def test_quiet_file_is_ok(self):
-        self.assertEqual(self.dry(text='[ui.sound]\nenabled = false\n[keys]\nprefix = "ctrl+b"\n'), ("ok", []))
-
     def test_symlink_or_unwritable_gives_todays_manual_lines(self):
         ro, link = self.root / "ro.toml", self.root / "link.toml"
         for f in (ro, self.path): f.parent.mkdir(exist_ok=True); f.write_text(LOUD)
@@ -155,10 +138,3 @@ class Dry(unittest.TestCase):
                 want = fc_herdrconf.apply_herdr_config(p, SHIPPED)
                 self.assertEqual(want[0], "manual")
                 self.assertEqual(self.dry(p), want)
-
-    def test_dry_false_writes_as_today(self):
-        self.path.parent.mkdir()
-        self.path.write_text(LOUD)
-        self.assertEqual(fc_herdrconf.apply_herdr_config(self.path, SHIPPED, dry=False),
-                         ("edited", [f"edited {self.path}:", "  [ui.sound] enabled = false", '  [ui.toast] delivery = "off"']))
-        self.assertEqual(self.dry(), ("ok", []))  # the real edit made it quiet

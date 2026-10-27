@@ -1,5 +1,0 @@
-_dir
-record
-_alive
-entries
-forget

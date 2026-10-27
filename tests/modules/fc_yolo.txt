@@ -1,5 +1,0 @@
-YOLO_NEVER
-YOLO_TAG
-digest_sections
-yolo_digest
-cmd_yolo

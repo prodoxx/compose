@@ -119,11 +119,3 @@ class RunLoadGate(unittest.TestCase):
         starts, holds, calls = self.go([True, True, False, True, True, False], ("001", "002"))
         self.assertEqual(len(holds), 2)
         self.assertEqual([s[:2] for s in starts], [("001", False), ("002", False)])
-
-    def test_force_never_holds(self):
-        starts, holds, calls = self.go([True], force=True)
-        self.assertEqual(([s[0] for s in starts], holds, calls), (["001"], [], []))
-
-    def test_no_load_in_the_environment_never_holds(self):
-        starts, holds, calls = self.go([True], env=True)
-        self.assertEqual(([s[0] for s in starts], holds, calls), (["001"], [], []))

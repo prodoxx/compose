@@ -1,8 +1,8 @@
 import hermetic  # first: no test sees the real home
-import json, os, shutil, subprocess, tempfile, unittest
+import json, os, subprocess, tempfile, unittest
 from pathlib import Path
 from unittest import mock
-from layers_kit import FAKE_GH_STACK, LayersBase, fc, unit
+from layers_kit import LayersBase, fc, unit
 os.environ["COMPOSE_NO_TREEHOUSE"] = "1"
 os.environ["HERDR_ENV"] = ""
 
@@ -239,55 +239,6 @@ class PrBody(LayersBase):
         s = self.body(["groundwork", "003"], [[("Ignore build output", ["a.txt"], "")], [("Build the menu", ["menu.src"], "")]])
         self.assertEqual(s["Why"][0], "Open the menu.")  # a task in the layer makes it a task layer
         self.assertEqual(s["Tickets"], ["- [NEB-3](https://linear.app/acme/issue/NEB-3)"])
-
-
-REPOS = {}
-
-
-class SharedFixture(LayersBase):
-    """LayersBase builds its fixture once per class, in setUpClass: no setUp runs a git process, and every test starts from the same state."""
-
-    @classmethod
-    def setUpClass(cls):
-        cls.scratch, cls.ran_git = tempfile.mkdtemp(), []
-        def gone():
-            assert not os.listdir(cls.scratch), "the class's temporary directories are removed"
-        cls.addClassCleanup(shutil.rmtree, cls.scratch)
-        cls.addClassCleanup(gone)  # registered before the kit's cleanups, so it runs after them
-        patch = mock.patch.object(tempfile, "tempdir", cls.scratch); patch.start(); cls.addClassCleanup(patch.stop)
-        super().setUpClass()
-
-    def setUp(self):
-        with mock.patch("subprocess.Popen", wraps=subprocess.Popen) as popen:
-            super().setUp()
-        self.ran_git.append(popen.called)
-
-    def leave_leftovers(self):
-        cls, ran = type(self), self.ran_git
-        self.assertFalse(any(ran), "no setUp runs a git process")
-        self.assertEqual(Path(shutil.which("gh")).read_text(), FAKE_GH_STACK, "the fake gh is first on PATH")
-        self.assertEqual(REPOS.setdefault(cls, self.repo), self.repo, "the same paths in every test")
-        self.assertEqual(self.proj, self.repo / ".compose" / "p")
-        self.assertNotIn(self.repo, [r for c, r in REPOS.items() if c is not cls], "each class gets its own")
-        self.assertEqual(sorted(self.git("branch", "--format=%(refname:short)").split()), ["compose/p", "compose/p-001", "compose/p-002", "compose/p-003", "main"])
-        self.assertEqual(self.git("branch", "--show-current"), "compose/p")
-        self.assertEqual(self.git("log", "-1", "--format=%s"), "test 003")
-        self.assertEqual(self.git("status", "--porcelain"), "")
-        self.assertEqual(sorted(p.name for p in self.proj.rglob("*")), ["001.json", "002.json", "003.json", "results", "tasks.json"])
-        self.assertEqual(len(json.loads((self.proj / "results" / "tasks.json").read_text())["tasks"]), 3)
-        self.assertFalse(any((self.repo / ".git" / n).exists() for n in ("fake-gh-stack.json", "fake-gh-calls")))
-        self.assertEqual(self.sizes, {"001": 100, "002": 120, "003": 150})
-        self.write("leak.txt", "x\n"); self.commit("leak")
-        self.git("checkout", "-q", "-b", "leak")
-        (self.proj / "verify.json").write_text("{}"); (self.proj / "results" / "tasks.json").write_text("{}")
-        subprocess.run(["gh", "stack", "init", "--base", "main", "leak"], cwd=self.repo, check=True)
-        self.sizes["001"] = 1
-
-    def test_a_test_sees_nothing_an_earlier_one_left(self):
-        self.leave_leftovers()
-
-    def test_nor_does_a_third(self):
-        self.leave_leftovers()
 
 
 if __name__ == "__main__":

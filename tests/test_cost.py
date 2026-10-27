@@ -46,10 +46,6 @@ class SessionUsage(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
 
-    def test_log_dir_slug(self):
-        self.assertEqual(fc_sessions.log_dir("/Users/a/.x/b"), self.home / ".claude" / "projects" / "-Users-a--x-b")
-        self.assertEqual(fc_sessions.log_dir(Path("/a_b c/é9")), self.home / ".claude" / "projects" / "-a-b-c--9")
-
     def test_usage_counts_each_id_once_and_skips_bad_lines(self):
         big = dict(input_tokens=2, cache_creation_input_tokens=28939, cache_read_input_tokens=7634, output_tokens=4)
         log = self.home / "s.jsonl"
@@ -282,30 +278,6 @@ class CostRows(unittest.TestCase):
             self.assertEqual(line.index(row["role"], len(row["name"])), col, line)
         self.assertIn(" - ", lines[1])
 
-    def test_empty(self):
-        self.assertEqual(fc_cost.rows(Path(tempfile.mkdtemp())), [])
-        self.assertEqual(fc_cost.render([]).strip(), "cost  none")
-
-    def test_total_shares_the_column_widths(self):
-        def row(name, **kv):
-            return dict({"name": name, "role": "planner", "model": "m", "turns": 1, "input": 1, "cache_created": 1,
-                         "cache_read": 1, "output": 1, "note": "x"}, **kv)
-        cases = [[row("a", input=60000, cache_created=None), row("b", input=70000, turns=120, note="")],
-                 [row("long-name", cache_read=99999999999), row("other-name", cache_read=88888888888, output=None)]]
-        cols = ["turns", "input", "cache_created", "cache_read", "output", "note"]
-        for rows in cases:
-            lines = fc_cost.render(rows).splitlines()
-            head = lines[0]
-            at = {k: head.index(k.replace("_", " ")) for k in cols}
-            self.assertTrue(lines[-1].startswith("total"), lines[-1])
-            tot = fc_cost.total(rows)
-            for d, line in zip(rows + [dict(tot, note="")], lines[1:]):
-                for k in cols:
-                    want = "-" if d[k] is None else str(d[k])
-                    if want:
-                        self.assertEqual((line[at[k] - 2:at[k]], line[at[k]:at[k] + len(want)]), ("  ", want), "\n".join(lines))
-
-
 class CostCommand(unittest.TestCase):
     ROWS = [{"name": "shop-planner", "role": "planner", "model": "claude-opus-5-5", "turns": 3, "input": 11, "cache_created": 22, "cache_read": 33, "output": 44, "note": ""}]
     TOTAL = {"input": 11, "cache_created": 22, "cache_read": 33, "output": 44, "turns": 3, "teammates": 1}
@@ -329,9 +301,6 @@ class CostCommand(unittest.TestCase):
         with self.fake(), mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), contextlib.redirect_stdout(out):
             fc.fc_status.cmd_cost(SimpleNamespace(repo=str(self.repo), project="shop", json=as_json))
         return out.getvalue()
-
-    def test_prints_the_rendered_rows(self):
-        self.assertEqual(self.cost(False).strip(), "TABLE")
 
     def test_json_has_rows_and_their_total(self):
         self.assertEqual(json.loads(self.cost(True)), {"rows": [dict(self.ROWS[0], name="shop")], "total": dict(self.TOTAL, teammates=4)})

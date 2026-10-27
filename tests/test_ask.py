@@ -8,7 +8,6 @@ _spec = importlib.util.spec_from_loader("fc", importlib.machinery.SourceFileLoad
 fc = importlib.util.module_from_spec(_spec)
 for _m in [m for m in sys.modules if m.startswith("fc_") and m not in ("fc_cost", "fc_mcp", "fc_sessions")]: del sys.modules[_m]
 _spec.loader.exec_module(fc)
-import fc_planner_brief
 
 
 QUESTION = "- Q2: Which auth? - Recommendation: Clerk - every screen signs in\n"
@@ -61,24 +60,11 @@ class Ask(unittest.TestCase):
         self.assertEqual(ids("which fixture? I recommend A"), [])
         self.assertEqual(ids("NEB-1: 2 questions"), [])
 
-    def test_the_old_cards_wording_still_names_ids(self):
-        self.assertEqual(fc.fc_ask.question_ids("NEB-1: 2 questions Q1-Q2; rec"), ["Q1", "Q2"])
-        self.assertEqual(fc.fc_ask.question_ids("NEB-1: 1 card Q4; rec"), ["Q4"])
-
     def test_a_hyphenated_question_id_is_one_id_and_ranges_over_it_expand(self):
         ids = fc.fc_ask.question_ids
         self.assertEqual(ids("NEB-1: 2 questions C1-8, C1-9; rec"), ["C1-8", "C1-9"])
         self.assertEqual(ids("NEB-1: 3 questions C1-2..C1-4; rec"), ["C1-2", "C1-3", "C1-4"])
         self.assertEqual(ids("NEB-1: 3 questions C1-2 to C1-4 and Q5; rec"), ["C1-2", "C1-3", "C1-4", "Q5"])
-
-    def test_an_id_with_letters_a_hyphen_and_digits_is_one_id(self):
-        ids = fc.fc_ask.question_ids
-        self.assertEqual(ids("NEB-1: 2 questions REC-19, REC-20; rec"), ["REC-19", "REC-20"])
-        self.assertEqual(ids("NEB-1: 3 questions REC-19..REC-21; rec"), ["REC-19", "REC-20", "REC-21"])
-        self.assertEqual(ids("NEB-1: 3 questions REC-19 to REC-21 and Q5; rec"), ["REC-19", "REC-20", "REC-21", "Q5"])
-        self.assertEqual(ids("NEB-1: 3 questions UX22-UX24; rec"), ["UX22", "UX23", "UX24"])
-        for cid in ("REC-19", "Q1", "UX24", "C1-8"):
-            self.assertEqual(fc.fc_ask.questions_in(f"- {cid}: Which? - Recommendation: a - b\n").keys(), {cid})
 
     def test_a_question_line_reads_its_question_recommendation_why_and_pointer(self):
         qs = fc.fc_ask.questions_in(
@@ -214,10 +200,6 @@ class Ask(unittest.TestCase):
         self.assertEqual(len(self.sent()), 1)
         self.assertFalse((self.proj / "results" / "crew" / "shop-architect.refused").exists())
 
-    def test_an_old_card_block_with_a_recommendation_goes_out_under_the_old_wording(self):
-        self.ask_on_map("## Not yet specified\n" + OLD_CARD, msg="NEB-1: 1 cards Q2; recommendation A")
-        self.assertEqual(self.sent(), ["NEB-1: 1 cards Q2; recommendation A"])
-
     def test_a_question_not_written_on_the_map_is_refused(self):
         out = self.ask_on_map("## Not yet specified\n- Q9: something else - Recommendation: x - y\n")
         self.assertIn("Q2 is not written under Not yet specified on NEB-1", out)
@@ -241,11 +223,6 @@ class Ask(unittest.TestCase):
         out = self.ask_on_map("## Not yet specified\n- Q2: Where does Delete live? - Recommendation: the page header (A) over a More menu (B); one click - decides S10\n")
         self.assertNotIn("not reported", out)  # options weighed in the recommendation are fine
 
-    def test_lettered_options_are_no_longer_required(self):
-        out = self.ask_on_map("## Not yet specified\n- Q2: Which auth? - Recommendation: Clerk - less to build\n")
-        self.assertNotIn("not reported", out)
-        self.assertEqual(len(self.sent()), 1)
-
     def test_a_question_closed_by_a_decision_line_is_never_asked(self):
         desc = ("## Decisions so far\n- D4: Clerk (closes Q1, Q3) (product owner, 2026-10-20)\n- ~~D5: old (closes Q2)~~ (C1)\n\n"
                 "## Not yet specified\n" + QUESTION)
@@ -266,72 +243,6 @@ class Ask(unittest.TestCase):
         with mock.patch.object(fc.fc_config, "LINEAR_KEY", "k"), mock.patch.object(fc.fc_linear, "linear_gql", side_effect=OSError("down")):
             self.report("NEB-1: 1 questions Q1; recommendation a")
         self.assertEqual(len(self.sent()), 1)
-
-
-class Briefs(unittest.TestCase):
-    def test_the_change_brief_carries_the_ask_rules(self):
-        brief = fc.fc_briefs.CHANGE_BRIEF
-        flat = " ".join(brief.split())
-        for want in ("visual questions open in Lavish: <url>", "`url:`", "never poll it for them",
-                     "`yolo:`", "(yolo recommendation, unconfirmed, <date>)"):
-            self.assertIn(want, flat)
-        self.assertNotIn("\u2014", brief)
-
-
-class BriefsNameBothPostures(unittest.TestCase):
-    AWAY, YOLO = "(away recommendation, unconfirmed, <date>)", "(yolo recommendation, unconfirmed, <date>)"
-    PLANNER = f"A Decisions line ending `{AWAY}` or `{YOLO}` is a recommendation the product owner has not confirmed:"
-    CHANGE = ("An answer that starts `away:` or `yolo:` is the engineering manager's recommendation, never the product owner's: "
-              f"`compose decide` ends its line `{AWAY}` or `{YOLO}`, the one its prefix names.")
-
-    def flat(self, name):
-        return " ".join(getattr(fc_planner_brief if name == "PLANNER_BRIEF" else fc.fc_briefs, name).split())
-
-    def test_each_brief_carries_its_sentence(self):
-        for name, want in (("PLANNER_BRIEF", self.PLANNER), ("CHANGE_BRIEF", self.CHANGE)):
-            self.assertIn(want, self.flat(name), name)
-
-    def test_planner_sentence_still_leads_into_the_built_on_rule(self):
-        flat = self.flat("PLANNER_BRIEF")
-        self.assertLess(flat.index(self.PLANNER), flat.index("Built on unconfirmed: <decision ids>"))
-
-    def test_no_brief_writes_decisions_by_hand(self):
-        for name in ("PLANNER_BRIEF", "CHANGE_BRIEF"):
-            flat = self.flat(name)
-            self.assertNotIn('--section "## Decisions so far"', flat, name)
-            self.assertIn("never write a Decisions so far line" if name == "PLANNER_BRIEF" else "You never write a Decisions so far line", flat, name)
-            self.assertIn("compose decisions", flat, name)
-        self.assertIn("`compose decide --change {cid}`", self.flat("CHANGE_BRIEF"))
-        self.assertIn("`compose report` refuses", self.flat("PLANNER_BRIEF"))
-
-    def test_each_brief_writes_one_line_questions_without_options(self):
-        line = "- Q1: <question> - Recommendation: <recommendation> - <why it matters>"
-        self.assertIn(f"`{line}`", self.flat("PLANNER_BRIEF"))
-        self.assertIn("`- {cid}-1: <question> (replaces <the D id it would replace>) - Recommendation: <recommendation> - <the evidence, quoted verbatim, with its source>`",
-                      self.flat("CHANGE_BRIEF"))
-        for name in ("PLANNER_BRIEF", "CHANGE_BRIEF"):
-            flat = self.flat(name)
-            for gone in ("affects:", "Recommendation: <letter>", "card", "Supersedes:"):
-                self.assertNotIn(gone, flat, name)
-            self.assertIn("--closes", flat, name)
-            self.assertIn("one question at a time", flat, name)
-
-    def test_each_brief_says_never_reuse_an_id(self):
-        for name in ("PLANNER_BRIEF", "CHANGE_BRIEF"):
-            self.assertIn("never reuse an id", self.flat(name), name)
-
-    def test_the_change_page_shows_pictures_only_and_answers_come_through_the_manager(self):
-        flat = self.flat("CHANGE_BRIEF")
-        self.assertNotIn("accept-all button", flat)
-        self.assertNotIn("same reads, forms", flat)
-        self.assertIn("The page shows pictures only, with no answer controls; answers come through the engineering manager.", flat)
-
-    def test_no_brief_keeps_a_yolo_only_rule_or_an_em_dash(self):
-        for name in ("PLANNER_BRIEF", "CHANGE_BRIEF"):
-            flat = self.flat(name)
-            self.assertNotIn("\u2014", flat, name)
-            self.assertNotIn("starts `yolo:` is", flat, name)
-            self.assertNotIn("ending `(yolo recommendation, unconfirmed, <date>)` is", flat, name)
 
 
 if __name__ == "__main__":

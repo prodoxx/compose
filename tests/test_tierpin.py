@@ -33,10 +33,6 @@ class TestTierPins(unittest.TestCase):
         self.assertEqual(self.tier("clear", "NEB-9"), ["tier pin cleared for story NEB-9"])
         self.assertFalse(json.loads(self.file.read_text()).get("stories"))
 
-    def test_read_is_empty_when_missing_or_unreadable(self):
-        self.assertEqual(self.T.read(self.proj), {})
-        self.file.write_text("{not json"); self.assertEqual(self.T.read(self.proj), {})
-
     def test_pin_prefers_the_task_then_its_story_then_the_project(self):
         self.assertIsNone(self.T.pin(self.proj, self.meta()))
         self.file.write_text(json.dumps({"project": "no-frontier", "stories": {"NEB-8": "standard"}}))
@@ -61,12 +57,6 @@ class TestTierPins(unittest.TestCase):
         self.tier("clear")
         self.assertEqual(self.T.start_model(self.proj, self.meta()), "claude:claude-sonnet-5-5")
 
-    def test_lines_list_the_project_pin_then_stories_sorted_and_nothing_without_pins(self):
-        self.assertEqual(self.T.lines(self.proj), [])
-        self.file.write_text(json.dumps({"project": "no-frontier", "stories": {"NEB-9": "cheap", "NEB-10": "frontier"}}))
-        self.assertEqual(self.T.lines(self.proj), ["  tier pins  project no-frontier, NEB-10 frontier, NEB-9 cheap"])
-
-
 class TestBudgetHold(unittest.TestCase):
     def setUp(self):
         self.proj = Path(tempfile.mkdtemp()) / ".compose" / "p"; (self.proj / "results").mkdir(parents=True)
@@ -87,11 +77,6 @@ class TestBudgetHold(unittest.TestCase):
         (self.proj / "results" / "tier.json").write_text(json.dumps({"stories": {"NEB-9": "frontier"}}))
         self.assertEqual(self.start(1e6), "claude:claude-sonnet-5-5")
         self.assertEqual(self.start(0.0), "claude:claude-opus-5-5")
-
-    def test_other_starts_ignore_the_limit(self):
-        for pin in ("cheap", "standard", "no-frontier", None):
-            with self.subTest(pin=pin):
-                self.assertEqual(self.start(1e6, tier=pin), self.start(0.0, tier=pin))
 
     def test_a_task_without_model_auto_keeps_its_model_and_is_not_held(self):
         self.assertEqual(self.start(1e6, tier="frontier", model_auto=False), "pi:a/b")

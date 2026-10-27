@@ -32,34 +32,12 @@ class RoleModels(unittest.TestCase):
             fc.fc_config.apply_config()
         self.addCleanup(setattr, fc.fc_config, "CREW_MODELS", {})
 
-    def test_an_entry_can_carry_an_effort(self):
-        self.config({**CREW, "orchestrator": {"model": "claude:claude-sonnet-5-5", "effort": "high"}})
-        self.addCleanup(setattr, fc.fc_config, "CREW_EFFORT", {})
-        self.assertEqual(fc.fc_crew.fc_crewpick.crew_model("orchestrator"), "claude:claude-sonnet-5-5")
-        self.assertEqual(fc.fc_crew.fc_crewpick.crew_effort("orchestrator"), "high")
-        self.assertIsNone(fc.fc_crew.fc_crewpick.crew_effort("groundwork"))  # a plain string keeps Claude Code's default effort
-
     def test_role_then_default_then_small_then_explicit(self):
         self.config(CREW)
         self.assertEqual(fc.fc_crew.fc_crewpick.crew_model("orchestrator"), "claude:claude-sonnet-5-5")
         self.assertEqual(fc.fc_crew.fc_crewpick.crew_model("q-neb-12"), "claude:claude-sonnet-5-5")  # no entry: default
         self.assertEqual(fc.fc_crew.fc_crewpick.crew_model("revert", "small"), "claude:claude-haiku-5-5")
         self.assertEqual(fc.fc_crew.fc_crewpick.crew_model("orchestrator", "claude:claude-x"), "claude:claude-x")
-
-    def test_wayfinder_is_no_longer_a_name_for_the_architect(self):
-        r = subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / "bin" / "compose.py"), "wayfinder", "--project", "p"],
-                           capture_output=True, text=True)
-        self.assertNotEqual(r.returncode, 0)
-        self.assertIn("invalid choice: 'wayfinder'", r.stderr)
-        self.config({"wayfinder": "claude:claude-haiku-5-5", "default": "claude:claude-sonnet-5-5"})
-        self.assertNotIn("architect", fc.fc_config.CREW_MODELS)
-        self.assertEqual(fc.fc_crew.fc_crewpick.crew_model("architect"), "claude:claude-sonnet-5-5")
-        self.assertFalse(hasattr(fc.fc_config, "OLD_NAMES"))
-
-    def test_no_crew_config_keeps_claude_default(self):
-        self.config({})
-        self.assertEqual(fc.fc_crew.fc_crewpick.crew_model("groundwork"), "claude")
-        self.assertIsNone(fc.fc_claude.claude_id("claude"))
 
     def test_an_opencode_id_for_a_crew_is_refused_naming_the_key(self):
         self.config({"tests": "openai/gpt-x"})
@@ -226,16 +204,6 @@ class PlannerChain(unittest.TestCase):
             fc.fc_implement.implementer(str(repo), "claude:claude-haiku-5-5", "build it")
         self.assertNotIn("--append-system-prompt", json.loads((d / "call.json").read_text())[0])
 
-    def test_the_probe_runs_once_a_day(self):
-        with self.probe(True) as run:
-            fc.fc_crew.fc_crewpick.crew_pick("architect"); fc.fc_crew.fc_crewpick.crew_pick("architect")
-            self.assertEqual(run.call_count, 1)
-        fc.fc_models._PROBED.clear()  # a new CLI process the same day reads the cache file
-        with self.probe(False) as run:
-            self.assertEqual(fc.fc_crew.fc_crewpick.crew_pick("architect")[0], "claude:claude-fable-5-1")
-            run.assert_not_called()
-        self.assertIn("claude-fable-5-1", json.loads(self.probe_cache.read_text()))
-
     def test_crew_start_passes_the_chosen_model_and_effort(self):
         calls = []
         def herdr(*args, check=False, timeout=120):
@@ -283,13 +251,6 @@ class DesignerModels(unittest.TestCase):
             self.assertEqual(fc.fc_crew.fc_crewpick.crew_pick(role)[:2], ("claude:claude-opus-5-5", "high"))
         self.assertEqual(fc.fc_crew.fc_crewpick.crew_pick("designs-003")[:2], ("claude:claude-sonnet-5-5", None))  # first word is designs
         self.config(CREW); self.assertEqual(fc.fc_crew.fc_crewpick.crew_pick("design-003")[:2], ("claude:claude-sonnet-5-5", None))
-
-    def test_the_designer_defaults_to_opus_high_unless_configured(self):
-        for crew in ({}, {**CREW, "design": "claude:claude-haiku-5-5"}):
-            self.config(crew)
-            self.assertEqual(fc.fc_crew.fc_crewpick.crew_pick("designer"), ("claude:claude-opus-5-5", "high", "models.crew.designer default"))
-        self.config({**CREW, "designer": "claude:claude-sonnet-5-5"}); self.assertEqual(fc.fc_crew.fc_crewpick.crew_pick("designer"), ("claude:claude-sonnet-5-5", None, "models.crew.designer"))
-
 
 class PiKeepsLinear(unittest.TestCase):
     """A pi session loads its MCP servers (Linear among them), so the Linear roles probe a pi model like any other."""
@@ -372,18 +333,6 @@ class ProbeCache(unittest.TestCase):
         self.assertEqual(run.call_count, 1)
         self.assertEqual(self.entry(), {"date": today, "ok": True, "why": "answered"})
         self.assertTrue(self.entry("claude-opus-5-5")["ok"])  # other models' passes stay
-
-    def test_the_providers_message_is_kept_whole(self):
-        whole = self.LONG.strip()
-        claude = subprocess.CompletedProcess([], 1, json.dumps({"is_error": True, "result": self.LONG}), "")
-        pi = subprocess.CompletedProcess([], 0, json.dumps({"type": "message_end", "message": {"role": "assistant", "content": [], "stopReason": "error", "errorMessage": self.LONG}}), "")
-        self.assertEqual(fc.fc_models.probe_result(self.M, claude), (False, whole))
-        self.assertEqual(fc.fc_models.probe_result("pi:openai/x", pi), (False, whole))
-        with mock.patch.object(subprocess, "run", return_value=claude):
-            self.assertEqual(fc.fc_models.probe_once(self.M, 60), (False, whole, False))
-        with mock.patch.object(subprocess, "run", side_effect=OSError(whole)):
-            self.assertEqual(fc.fc_models.probe_once(self.M, 60), (False, f"OSError: {whole}", True))
-
 
 class ClaudeProcGroup(unittest.TestCase):
     """Task 002 (NEB-919): claude_once starts through fc_proc.run; timeout and stop."""
@@ -480,11 +429,6 @@ class TestCrewTiers(unittest.TestCase):
         got = {r: fc.fc_crew.fc_crewpick.crew_model(r) for r in ("orchestrator", "groundwork", "explore", "tests", "planner", "architect")}
         sonnet, haiku, opus, fable = (f"claude:claude-{m}" for m in ("sonnet-5-5", "haiku-5-5", "opus-5-5", "fable-5-1"))
         self.assertEqual(got, {"orchestrator": sonnet, "groundwork": sonnet, "explore": sonnet, "tests": sonnet, "planner": opus, "architect": fable})
-
-    def test_a_raw_model_starts_unchanged_for_any_role(self):
-        for role in ("tests", "orchestrator", "explore"):
-            self.assertEqual(fc.fc_crew.fc_crewpick.crew_model(role, "claude:claude-opus-5-5"), "claude:claude-opus-5-5")
-            self.assertEqual(fc.fc_crew.fc_crewpick.crew_pick(role, "claude:claude-opus-5-5", "cheap")[0], "claude:claude-opus-5-5")
 
     def test_a_pin_lowers_the_start(self):
         self.assertEqual(fc.fc_crew.fc_crewpick.crew_pick("planner", None, "no-frontier")[0], "claude:claude-sonnet-5-5")

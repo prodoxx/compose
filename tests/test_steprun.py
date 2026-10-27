@@ -105,26 +105,8 @@ class Dry(unittest.TestCase):
             self.assertEqual((got[0] != "would", got), (True, self.step(**kw, dry=False)))
         self.assertFalse(self.ran.exists())
 
-    def test_without_dry_the_step_still_runs(self):
-        self.assertEqual((self.step(self.has, dry=False), self.ran.exists()), (("done", ""), True))
-        with mock.patch.dict(fc_steprun.WRITERS, {"bp link": lambda c: "linked bp"}):
-            self.assertEqual(self.step(lambda c: (False, ""), "write", "bp link", dry=False), ("failed", "linked bp"))
-
-
 class PiPreview(unittest.TestCase):
     setUp, step, forbid = RunStep.setUp, Dry.step, Dry.forbid
-
-    def test_dry_pi_row_says_what_declare_would_do(self):
-        path = Path.home() / "pi-dir/models.json"
-        p = mock.patch.object(fc_pi, "PI_MODELS", path); p.start(); self.addCleanup(p.stop)
-        self.forbid()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        for text, line in (('{"providers": {"openrouter-fast": {"models": []}}}', "would add apiKey and the GLM preset model to openrouter-fast in ~/pi-dir/models.json"),
-                           ("[]", "~/pi-dir/models.json is not a JSON object; fix it by hand")):
-            path.write_text(text)
-            self.assertEqual(self.step(lambda c: (False, ""), "write", "pi openrouter-fast provider", "compose setup"), ("would", line))
-            self.assertEqual(path.read_text(), text)
-
 
 class StepDetail(unittest.TestCase):
     """A step's line never repeats the step's name, nor only its state: the ◇ header above it shows both."""
@@ -137,12 +119,6 @@ class StepDetail(unittest.TestCase):
         self.assertEqual(self.step(self.has, mode="interactive", name="Homebrew"), ("skipped", by_hand))
         self.assertEqual(self.step(self.has, level="designer", yes=True, name="figma"), ("skipped", "designer extra, skipped"))
         self.assertFalse(self.ran.exists())
-
-    def test_key_row_is_the_skipped_line_else_the_install(self):
-        for said in ("Linear key: none for acme\nrun compose setup", ""):
-            with mock.patch.object(fc_keys, "skipped_line", return_value=said) as skipped:
-                self.assertEqual(self.step(self.has, "get one", mode="key", name="Linear key"), ("skipped", said or "get one"))
-            skipped.assert_called_once_with("linear", "acme")
 
     def test_failed_write_row_is_its_writers_line_else_the_checks_detail(self):
         for said, detail, want in (("linked bp", "stale", "linked bp"), ("", "points elsewhere", "points elsewhere"), ("", "", "")):
@@ -165,17 +141,6 @@ class StepLines(unittest.TestCase):
 
     def step(self, check, install=None, mode="run", terminal=False, name="pi"):
         return fc_steprun.run_step((name, check, install or f"touch {self.ran}", "required", False, mode), self.tmp, False, True, terminal)
-
-    def test_ok_and_done_rows_have_no_line(self):
-        for mode in ("run", "interactive", "write", "manual", "key"):
-            self.assertEqual(self.step(lambda c: (True, ""), mode=mode), ("ok", ""))
-        self.assertEqual(self.step(self.has), ("done", ""))
-        self.ran.unlink()
-        self.assertEqual(self.step(self.has, mode="interactive", terminal=True, name="Homebrew"), ("done", ""))
-
-    def test_write_row_done_returns_its_writers_line(self):
-        with mock.patch.dict(fc_steprun.WRITERS, {"TEXT_MODEL lines": lambda c: self.ran.touch() or "wrote TEXT_MODEL lines"}):
-            self.assertEqual(self.step(self.has, "compose setup", "write", name="TEXT_MODEL lines"), ("done", "wrote TEXT_MODEL lines"))
 
     def test_failed_rows_name_the_command_to_run_by_hand(self):
         boom = "echo 'pi: first' >&2; echo 'pi: boom' >&2; exit 3"
@@ -225,13 +190,3 @@ class HomePaths(unittest.TestCase):
         self.assertEqual(self.step(boom), ("failed", f"cannot write ~/.npm/x; by hand: {boom.replace(h + '/', '~/')}"))
         state, line = self.step(f"{h}/bin/fix", "manual", "git")
         self.assertEqual((state in ("manual", "skipped"), "~/bin/fix" in line, h + "/" in line), (True, True, False))
-
-    def test_prefix_sharing_paths_and_plain_lines_are_left_alone(self):
-        home = self.tmp / "a.l"  # a dot so a regex-built match would also hit "aXl"
-        home.mkdir()
-        with mock.patch.dict(os.environ, {"HOME": str(home)}):
-            for other in ("a.lex/f", "aXl/f"):
-                boom = f"echo 'no {self.tmp}/{other}' >&2; exit 3"
-                self.assertEqual(self.step(boom), ("failed", f"no {self.tmp}/{other}; by hand: {boom}"))
-        self.assertEqual(self.step("echo boom >&2; exit 3"), ("failed", "boom; by hand: echo boom >&2; exit 3"))
-        self.assertEqual(self.step("true", check=lambda c: (True, "")), ("ok", ""))

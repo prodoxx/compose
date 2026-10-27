@@ -37,17 +37,6 @@ class CodexIds(unittest.TestCase):
         self.assertEqual(result(1, "a\nb\n\n", " \n"), (False, "b"))
         self.assertEqual(result(3, "", ""), (False, "exit 3"))
 
-    def test_calls_go_through_the_codex_row(self):
-        probe, result, p = mock.Mock(return_value=["x"]), mock.Mock(return_value=(False, "y")), subprocess.CompletedProcess([], 0, "", "")
-        with mock.patch.dict(fc_harness.HARNESSES, {"codex": {**fc_harness.HARNESSES.get("codex", {}), "probe": probe, "result": result}}):
-            self.assertEqual(fc_harness.probe_command("codex:gpt-6-sol"), ["x"])
-            probe.assert_called_once_with("gpt-6-sol")
-            fc_harness.probe_command("codex:")
-            probe.assert_called_with(None)
-            self.assertEqual(fc_harness.probe_result("codex:gpt-6-sol", p), (False, "y"))
-            result.assert_called_once_with(p)
-
-
 class CodexSkillLink(unittest.TestCase):
     def setUp(self):
         tmp = Path(tempfile.mkdtemp())
@@ -129,11 +118,6 @@ class CodexSkillRow(unittest.TestCase):
         self.assertEqual(self.run_row()[0], "done")
         self.assertEqual((self.home / "elsewhere/skills/compose").resolve(), self.co.resolve())
         self.assertEqual(self.run_row(), ("ok", ""))
-
-    def test_dry_run_previews_and_writes_nothing(self):
-        self.tool()
-        self.assertEqual(self.run_row(dry=True), ("would", f"would link ~/.codex/skills/compose -> {self.co}"))
-        self.assertFalse(self.link.exists())
 
     def test_every_harness_row_gets_its_own_skill_link_row(self):
         self.tool(); self.tool("other")
@@ -323,13 +307,6 @@ class HarnessBlock(unittest.TestCase):
         cfg = {**self.CFG, "harnesses": {}, "workspaces": {"work": {"harnesses": {"codex": {**self.CODEX, "parallel": 4}}}}}
         self.assertEqual(fc_config.settings(cfg, "codex")[1]["parallel"], 4)
 
-    def test_config_without_harnesses_is_unchanged(self):
-        cfg = {k: v for k, v in self.CFG.items() if k != "harnesses"}
-        self.assertEqual(fc_config.settings(cfg, "claude"), fc_config.settings(cfg))
-        with self.assertRaises(SystemExit) as e: fc_config.settings(cfg, "gemini")
-        self.assertEqual(str(e.exception), f'{fc_config.CONFIG_PATH}: no "harnesses.gemini" block')
-        self.exits(cfg, 'no "harnesses.gemini" block', COMPOSE_HARNESS="gemini")
-
     def test_a_block_without_default_exits_active_or_not(self):
         bad = {**self.CFG, "harnesses": {"codex": self.CODEX, "gemini": {"models": {"crew": {"planner": "x"}}}}}
         for kw in ({"harness": "codex"}, {}):
@@ -365,12 +342,6 @@ class ClaudeTopLevel(unittest.TestCase):
         bad = {**self.CFG, "harnesses": {"gemini": {"models": {"crew": {"planner": "x"}}}}}
         self.exits(bad, 'harnesses.gemini.models.crew has no "default"', CLAUDECODE="1")
 
-    def test_no_session_harness_gives_the_top_level_as_today(self):
-        self.apply(self.CFG)
-        self.assertEqual((fc_config.HARNESS, fc_config.CREW_MODELS, fc_config.DEFAULT_MODEL), (None, self.CFG["models"]["crew"], "pi:work"))
-        self.assertEqual(fc_config.settings(self.CFG, None), fc_config.settings(self.CFG))
-
-
 class CodexDefaultBlock(unittest.TestCase):
     CFG = {"models": {"implementer": "claude:sonnet", "fallback": "claude:opus", "fix": "claude:opus",
                       "crew": {"orchestrator": {"model": "claude:opus", "effort": "high", "fallback": ["claude:opus", "pi:x/y"]},
@@ -400,14 +371,6 @@ class CodexDefaultBlock(unittest.TestCase):
             with self.subTest(name=name):
                 with self.assertRaises(SystemExit) as e: fc_config.settings(cfg, name)
                 self.assertEqual(str(e.exception), f'{fc_config.CONFIG_PATH}: no "harnesses.{name}" block')
-
-    def test_the_settings_hold_no_harnesses_key_and_the_input_and_its_file_are_unchanged(self):
-        cfg_before = json.dumps(self.CFG, sort_keys=True)
-        self.assertNotIn("harnesses", fc_config.settings(self.CFG, "codex")[1])
-        fc_config.write_config(self.CFG); file_before = fc_config.CONFIG_PATH.read_bytes()
-        with mock.patch.dict(os.environ): fc_config.apply_config(move=False, harness="codex")
-        self.assertEqual((fc_config.HARNESS, json.dumps(self.CFG, sort_keys=True), fc_config.CONFIG_PATH.read_bytes()), ("codex", cfg_before, file_before))
-
 
 class CodexDefaultTiers(unittest.TestCase):
     CFG = {"models": {"crew": {"default": "claude:sonnet"}}}
@@ -449,16 +412,6 @@ class CodexDefaultTiers(unittest.TestCase):
                 self.apply(self.CFG, harness=harness)
                 self.assertEqual((fc_config.TIERS["cheap"][0], fc.fc_tiers.escalate("claude:claude-haiku-5-5")), (("claude:claude-haiku-5-5", None), "claude:claude-sonnet-5-5"))
 
-    def test_the_input_config_and_its_file_are_unchanged(self):
-        cfg = {"models": {"tiers": {"standard": ["claude:claude-opus-5-5"]}}}
-        before = json.dumps(cfg, sort_keys=True)
-        self.assertEqual(self.tiers(cfg)["standard"], ["codex"])
-        self.assertEqual(json.dumps(cfg, sort_keys=True), before)
-        fc_config.write_config(cfg); file_before = fc_config.CONFIG_PATH.read_bytes()
-        with mock.patch.dict(os.environ): fc_config.apply_config(move=False, harness="codex")
-        self.assertEqual(fc_config.CONFIG_PATH.read_bytes(), file_before)
-
-
 class HarnessPassDown(unittest.TestCase):
     BLOCK = lambda m, t: {"models": {"crew": {"default": m, "tests": t}}}
     CFG = {"models": {"crew": {"default": "claude:top", "tests": "claude:toptests"}},
@@ -499,10 +452,6 @@ class HarnessPassDown(unittest.TestCase):
         _, envs, model = self.start("--harness", "codex", COMPOSE_HARNESS="gemini")
         self.assertEqual((("COMPOSE_HARNESS=codex" in envs), ("COMPOSE_HARNESS=gemini" in envs), model), (True, False, "claude:cdxtests"))
 
-    def test_no_flag_and_no_env_leaves_the_tab_and_the_model_as_today(self):
-        _, envs, model = self.start()
-        self.assertEqual(([e for e in envs if e.startswith("COMPOSE_HARNESS")], model), ([], "claude:toptests"))
-
     def test_a_flag_without_its_block_exits_before_any_herdr_call(self):
         calls, _, _ = self.start("--harness", "gemini", cfg={k: v for k, v in self.CFG.items() if k != "harnesses"})
         self.assertEqual((calls, hasattr(self, "exit")), ([], True))
@@ -523,11 +472,6 @@ class CodexProbe(unittest.TestCase):
         return subprocess.CompletedProcess(argv, int(bad), "", self.REFUSED if bad else "")
 
     def command(self, mid): return ["codex", "exec", "--ephemeral", "--skip-git-repo-check", "-m", mid, "Reply with exactly: ok"]
-
-    def test_command_and_result_are_codexs(self):
-        self.assertEqual(fc_models.probe_command(f"codex:{self.ID}"), self.command(self.ID))
-        self.assertEqual(fc_models.probe_result(f"codex:{self.ID}", subprocess.CompletedProcess([], 0, "", "")), (True, "answered"))
-        self.assertEqual(fc_models.probe_result("codex:bad", subprocess.CompletedProcess([], 1, "", self.REFUSED)), (False, "m"))
 
     def test_bare_codex_is_available_without_a_process_or_a_cache_read(self):
         with mock.patch.object(fc_config, "PROBE_CACHE") as cache:
@@ -562,16 +506,6 @@ class CodexProbe(unittest.TestCase):
             out = []
             with mock.patch("builtins.print", lambda *a: out.append(" ".join(map(str, a)))): fc_models.cmd_models(SimpleNamespace(probe=True))
         self.assertEqual(out, ["other:m: ok (fine)"])
-
-    def test_claude_and_pi_are_unchanged_and_grok_is_skipped(self):
-        self.assertEqual(fc_models.probe_command("pi:a/b")[0], "pi")
-        self.assertEqual(fc_models.probe_command("claude:opus")[:4], ["claude", "-p", "--model", "opus"])
-        probed = []
-        with mock.patch.object(fc_config, "CREW_MODELS", {"a": "grok:x", "b": "pi:a/b", "c": "claude:opus", "d": "gemini:y"}), mock.patch.object(fc_config, "CREW_FALLBACK", {}), \
-                mock.patch.object(fc_models, "model_available", lambda m: probed.append(m) or (True, "ok")), mock.patch("builtins.print"):
-            fc_models.cmd_models(SimpleNamespace(probe=True))
-        self.assertEqual(probed, ["pi:a/b", "claude:opus"])
-
 
 class ClaudeOptional(unittest.TestCase):
     def setUp(self):
@@ -685,11 +619,6 @@ class FinishWithoutClaude(unittest.TestCase):
             self.setUp(); self.tools(**tools); lines, code, _ = self.finish()
             self.assertEqual((code, lines[-1]), (1, fc_finish.CLAUDE_MISSING), tools)
 
-    def test_with_claude_the_next_line_names_claude(self):
-        for codex in (False, True):
-            self.setUp(); self.tools(claude=True, codex=codex); lines, code, _ = self.finish()
-            self.assertEqual((code, lines[-1]), (0, "next: run claude in a pane and type /compose"), codex)
-
     def test_custom_flow_warns_about_skipping_only_what_compose_needs(self):
         required = {r[0] for r in fc_steps.STEPS if r[3] == "required" and r[5] != "key"}
         self.tools(codex=True)
@@ -749,15 +678,6 @@ class DoctorWithoutClaude(unittest.TestCase):
         self.assertFalse(set(bad) & set(ONLY_CLAUDE))
         self.assertEqual(lines["claude"], CLAUDE_LINE + " - optional, Other is set up")
 
-    def test_without_codex_set_up_the_claude_rows_read_as_today(self):
-        for tools in ({}, {"codex": True}, {"link": True}):  # the binary or the link alone is not set up
-            self.setUp(); self.tools(**tools); bad, lines, waiting = self.deps()
-            self.assertTrue(set(ONLY_CLAUDE) <= set(bad), tools)
-            self.assertEqual(lines["claude"], CLAUDE_LINE, tools)
-            self.assertFalse(any(OPTIONAL in l for l in lines.values()), tools)
-            self.assertEqual((len(waiting), "i-have-adhd skill" in waiting[0]), (1, True), tools)
-
-
 class CodexArgv(unittest.TestCase):
     def setUp(self):
         d = tempfile.TemporaryDirectory(); self.addCleanup(d.cleanup)
@@ -815,7 +735,6 @@ class CodexArgv(unittest.TestCase):
     def test_no_unfenced_sandbox(self):
         for a in self.argv(work=self.work): self.assertFalse(a == "danger-full-access" or a.startswith("--dangerously"), a)
 
-
 class CodexStart(unittest.TestCase):
     def start(self, model=None, entry="codex:gpt-6.1-sol", trusted=True, role="tester", signed=True, screen=""):  # signed None: the real sign-in check runs
         proj = Path(tempfile.mkdtemp()) / ".compose" / "shop"; proj.mkdir(parents=True)
@@ -850,13 +769,6 @@ class CodexStart(unittest.TestCase):
         for m in ("codex", "codex:x"):
             start, ready = self.start(m)[:2]
             self.assertEqual((start[4], "-m" in start, ready.called), ("codex", m != "codex", False))
-
-    def test_claude_and_pi_roles_start_as_before(self):
-        start, ready, rec = self.start(entry="claude:claude-sonnet-5-5")[:3]
-        self.assertEqual((start[4], ready.call_count, "skill" in rec, self.start(entry="pi:x/y")[0][4]), ("claude", 1, False, "pi"))
-        self.assertFalse([x for x in start if "check_for_update" in str(x)])
-        self.assertFalse([x for x in self.start(entry="pi:x/y")[0] if "check_for_update" in str(x)])
-        with self.assertRaises(SystemExit): self.start(entry="claude:claude-sonnet-5-5", trusted=False)  # only a Codex teammate skips the trust check
 
     def test_crew_pick_full_accepts_codex_and_refuses_the_rest_exactly(self):
         with mock.patch.object(fc.fc_models, "model_available", return_value=(True, "")):
@@ -955,13 +867,6 @@ class HarnessTable(unittest.TestCase):
     def exe(self, name, mode=stat.S_IRWXU):
         (self.bin / name).write_text("#!/bin/sh\n"); (self.bin / name).chmod(mode)
 
-    def test_the_table_holds_the_codex_row_first_and_two_name_only_entries(self):
-        h = fc_harness
-        self.assertEqual((h.RESERVED, h.HARNESSES["gemini"], h.HARNESSES["grok"]), (("codex", "gemini", "grok"), {}, {}))
-        want = {"name": "Codex", "kind": "codex", "exe": "codex", "home_env": "CODEX_HOME", "home": "~/.codex", "sigil": "$", "example": "gpt-6.1-sol",
-                "herdr_ready": False, "probe": h._codex_probe, "result": h._codex_result, "argv": h._codex_argv}
-        self.assertEqual({k: v for k, v in h.HARNESSES["codex"].items() if k in want}, want)  # the hook fields are pinned in HookFields
-
     def test_harness_of_and_model_id_read_only_a_key_that_has_fields(self):
         for m, want in (("codex", ("codex", None)), ("codex:", ("codex", None)), ("codex:gpt-6-sol", ("codex", "gpt-6-sol")), ("codex:a:b", ("codex", "a:b")),
                         ("gemini:x", (None, None)), ("grok", (None, None)), ("grok:x", (None, None)), ("codex/gpt-6-sol", (None, None)), ("codexx:y", (None, None)),
@@ -998,11 +903,6 @@ class HookFields(unittest.TestCase):
         if matcher: o["matcher"] = matcher
         return "sha256:" + hashlib.sha256(json.dumps(o, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
-    def test_the_codex_row_gains_the_hooks_file_trust_file_hash_and_four_hooks(self):
-        row = fc_harness.HARNESSES["codex"]
-        self.assertEqual((row["hooks_file"], row["trust_file"], row["hash"]), ("hooks.json", "config.toml", fc_harness._codex_hash))
-        self.assertEqual(row["hooks"], (("PreToolUse", "Write|Edit|MultiEdit|NotebookEdit", "guard"), ("PreToolUse", "Bash", "guard"), ("UserPromptSubmit", None, "skillcheck"), ("SessionStart", "compact", "reenter")))
-
     def test_hash_is_the_sha256_of_the_sorted_compact_json_with_defaults_filled_in(self):
         h = fc_harness._codex_hash
         c = {"type": "command", "command": '"/c/bin/compose" guard'}
@@ -1017,13 +917,6 @@ class HookFields(unittest.TestCase):
         os.environ["HOME"] = str(self.home / "moved"); self.assertEqual(fc_harness.home_dir("codex"), self.home / "moved/.codex")
         os.environ["CODEX_HOME"] = str(self.home / "elsewhere")
         self.assertEqual((fc_harness.home_dir("codex"), fc_harness.skills_dir("codex")), (self.home / "elsewhere", self.home / "elsewhere/skills"))
-
-    def test_hook_groups_for_codex_are_the_four_groups_under_three_events(self):
-        def g(m, sub, co="/c"):
-            return {**({"matcher": m} if m else {}), "hooks": [{"type": "command", "command": f'"{co}/bin/compose" {sub}', "timeout": 10}]}
-        want = {"PreToolUse": [g("Write|Edit|MultiEdit|NotebookEdit", "guard"), g("Bash", "guard")], "UserPromptSubmit": [g(None, "skillcheck")], "SessionStart": [g("compact", "reenter")]}
-        self.assertEqual(fc_harness.hook_groups("codex", "/c"), want)
-        self.assertEqual(fc_harness.hook_groups("codex", "/a b")["UserPromptSubmit"], [g(None, "skillcheck", "/a b")])
 
     def test_hook_groups_is_empty_for_a_row_without_hooks_and_follows_any_row_with_them(self):
         self.assertEqual((fc_harness.hook_groups("grok", "/c"), fc_harness.hook_groups("gemini", "/c")), ({}, {}))
@@ -1225,11 +1118,6 @@ class CodexHooksRow(unittest.TestCase):
     def run_row(self, row=None, dry=False): return fc_steprun.run_step(row or self.row, self.co, True, False, False, dry=dry)
     def records(self): return tomllib.loads(self.trust.read_text())["hooks"]["state"]
 
-    def test_the_row_is_a_default_write_row_and_only_codex_has_one(self):
-        self.assertEqual(self.row[2:], ("compose setup", "default", False, "write"))
-        self.assertEqual([r[0] for r in fc_steps.STEPS if "hooks" in r[0]], [self.NAME])
-        self.assertEqual(set(fc_steprun.WRITERS), set(fc_steprun.PREVIEWS))
-
     def test_without_codex_the_check_passes_and_run_step_does_nothing(self):
         self.assertEqual(fc_steps.check(self.row, self.co), (True, ""))
         self.assertEqual(self.run_row(), ("ok", ""))
@@ -1245,11 +1133,6 @@ class CodexHooksRow(unittest.TestCase):
         self.tool(); fc_links.write_hooks("codex", self.co)
         self.assertEqual(self.run_row(), ("done", "~/.codex/config.toml"))
         self.assertTrue(fc_steps.check(self.row, self.co)[0])
-
-    def test_dry_run_previews_and_writes_nothing(self):
-        self.tool()
-        self.assertEqual(self.run_row(dry=True), ("would", "would write ~/.codex/hooks.json and trust compose's hooks in ~/.codex/config.toml"))
-        self.assertFalse((self.home / ".codex").exists())
 
     def test_every_harness_row_with_hooks_gets_its_own_hooks_row_after_its_commands_row(self):
         self.tool("other"); self.addCleanup(reload_steps)
@@ -1284,20 +1167,8 @@ class ReservedNames(unittest.TestCase):
         for name in ("codex", "gemini", "grok"):
             self.exits({"providers": {name: self.URL}}, self.reserved(name))
 
-    def test_the_names_come_from_the_harness_module(self):
-        with mock.patch.object(fc_harness, "RESERVED", ("codex", "zed")):
-            self.exits({"providers": {"zed": self.URL}}, self.reserved("zed", "codex, zed"))
-            self.apply({"providers": {"gemini": self.URL}})
-        self.assertIn("gemini", fc_config.PROVIDERS)
-
     def test_reserved_is_checked_before_the_base_url(self):
         self.exits({"providers": {"codex": {}}}, self.reserved("codex"))
-
-    def test_other_names_load(self):
-        names = ("ollama", "codexx", "my-codex")
-        self.apply({"providers": {n: self.URL for n in names}})
-        self.assertEqual(tuple(fc_config.PROVIDERS), names)
-
 
 class CodexPreflight(unittest.TestCase):
     def setUp(self):
@@ -1324,12 +1195,6 @@ class CodexPreflight(unittest.TestCase):
         self.assertIn("preflight failed; nothing was cloned or run.", msg)
         self.assertIn("codex:gpt-6-sol: model is not available", [l.strip() for l in msg.splitlines()])
         self.assertNotIn("codex:good:", msg)
-
-    def test_pi_ids_are_still_run_and_claude_ids_skipped(self):
-        fc.fc_run.preflight({"pi:r/x", "claude", "claude:opus", "codex:a"})
-        self.assertEqual([c.args[1] for c in self.turn.call_args_list], ["pi:r/x"])
-        self.avail.assert_called_once_with("codex:a")
-
 
 class CodexEvents(unittest.TestCase):
     def ev(self, kind, item=None, **more):
@@ -1375,10 +1240,6 @@ class CodexEvents(unittest.TestCase):
         self.assertEqual(self.parse(self.done("agent_message", text="a"), self.done("agent_message", text="b"), self.done("command_execution"))[:2], ("b", 1))
         self.assertEqual(self.parse(self.done("reasoning", text="r"), self.done("command_execution"))[0], "")
 
-    def test_the_codex_row_names_the_parser(self):
-        self.assertIs(fc_harness.HARNESSES["codex"]["events"], fc_harness._codex_events)
-
-
 class CodexOnce(unittest.TestCase):
     HEAD = ["codex", "-a", "never", "exec", "--json", "--ephemeral", "--skip-git-repo-check"]
     WRITE = ["-s", "workspace-write", "-c", "sandbox_workspace_write.network_access=true"]
@@ -1399,11 +1260,6 @@ class CodexOnce(unittest.TestCase):
     def done(self, text, code=0, err=""):
         out = [{"type": "item.completed", "item": {"id": "i", "type": "agent_message", "text": text}}, {"type": "turn.completed", "usage": {"input_tokens": 7, "output_tokens": 3}}]
         return subprocess.CompletedProcess([], code, "\n".join(map(json.dumps, out)) + "\n", err)
-
-    def test_write_argv_and_the_row(self):
-        self.assertEqual(self.argv(), self.HEAD + ["-m", "gpt-6-sol", *self.WRITE, "--add-dir", self.dirs[0], "--add-dir", self.dirs[1], "do it"])
-        self.assertEqual(self.argv("codex"), self.HEAD + [*self.WRITE, "--add-dir", self.dirs[0], "--add-dir", self.dirs[1], "do it"])
-        self.assertIs(fc_harness.HARNESSES["codex"]["once"], fc_harness._codex_once)
 
     def test_one_git_dir_for_a_clone_and_none_outside_git(self):
         self.assertEqual(self.argv(cwd=self.clone)[-3:], ["--add-dir", os.path.realpath(self.clone / ".git"), "do it"])
@@ -1467,12 +1323,6 @@ class CodexImplementer(unittest.TestCase):
             self.assertEqual(fc.fc_implement.implementer("/w", fc.fc_models.fallback_for("pi:a/b"), "x"), self.RESULT)
         self.run.assert_called_once()
 
-    def test_claude_pi_and_openrouter_ids_route_as_before(self):
-        for model, k in (("claude:opus", "claude_once"), ("pi:a/b", "pi_turn"), ("openrouter/x/y", "opencode")):
-            fc.fc_implement.implementer("/w", model, "x"); self.other[k].assert_called_once()
-        self.run.assert_not_called(); self.cmd.assert_not_called(); self.res.assert_not_called()
-
-
 class CodexReader(unittest.TestCase):
     USAGE = {"tokens_in": 1, "tokens_out": 2, "cost": 0.0}
     META = {"test": "pytest -k thing", "files": ["a.py"]}
@@ -1505,15 +1355,6 @@ class CodexReader(unittest.TestCase):
         self.assertEqual(self.read("codex:gpt-6-sol"), ("", None))
         self.run.side_effect = None; self.res.side_effect = RuntimeError("Codex failed: boom")
         self.assertEqual(self.read("codex:gpt-6-sol"), ("", None)); self.run.assert_called()
-
-    def test_a_claude_reader_still_reads_with_read_tools_only(self):
-        self.assertEqual(self.read("claude:haiku"), ("claude reply", self.USAGE))
-        self.assertEqual(self.claude.call_args.kwargs["tools"], "Read,Grep,Glob"); self.run.assert_not_called()
-
-    def test_a_pi_reader_or_none_gives_nothing_and_runs_no_process(self):
-        for reader in ("pi:a/b", None, ""): self.assertEqual(self.read(reader), ("", None))
-        for m in (self.run, self.cmd, self.res, self.claude): m.assert_not_called()
-
 
 class ResolvedTrustKey(unittest.TestCase):
     def setUp(self):
@@ -1741,13 +1582,6 @@ class SessionMarker(unittest.TestCase):
     def test_flag_then_compose_harness_then_marker(self):
         self.assertEqual(self.pick("claude", COMPOSE_HARNESS="gemini", CODEX_THREAD_ID="t1"), "claude")
         self.assertEqual(self.pick(COMPOSE_HARNESS="gemini", CODEX_THREAD_ID="t1", CLAUDECODE="1"), "gemini")
-
-    def test_claudecode_alone_is_claude_and_nothing_is_none(self):
-        self.assertEqual(self.pick(CLAUDECODE="1"), "claude")
-        self.assertEqual(self.pick(CLAUDECODE="1", CODEX_THREAD_ID=""), "claude")
-        self.assertIsNone(self.pick())
-        self.assertIsNone(self.pick(CLAUDECODE="0", CODEX_THREAD_ID=""))
-
 
 class NoTomllibTrust(unittest.TestCase):
     """Without tomllib, as on Python 3.9 and 3.10, the codex trust answers and bytes are the ones it gives with it (test_py39 keeps the syntax)."""

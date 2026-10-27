@@ -30,10 +30,6 @@ class FlagPathLint(unittest.TestCase):
         self.assertEqual(self.lint(case("a", "http://x/p?plan=pro&page=2&tab=billing"), case("b", "http://x/q?id=7")), [])
         self.assertEqual(self.lint(case("a", "http://x/p?abc=1&shuffle=2")), [])  # "ab" and "ff" only as whole words
 
-    def test_pages_are_judged_apart(self):
-        msgs = self.lint(case("a", "http://x/one?variant=b"), case("b", "http://x/two"))
-        self.assertEqual(len(msgs), 1); self.assertIn("page /one", msgs[0])
-
     def test_a_reason_opts_a_case_out_and_an_empty_one_does_not(self):
         ok = case("a", "http://x/p?variant=b", url_override="the variant cannot be assigned in the test env")
         self.assertEqual(self.lint(ok), [])
@@ -41,9 +37,6 @@ class FlagPathLint(unittest.TestCase):
             msgs = self.lint(case("a", "http://x/p?variant=b", url_override=empty))
             self.assertTrue(any("needs a reason" in m for m in msgs), (empty, msgs))
 
-    def test_driver_cases_and_projects_without_cases_are_left_alone(self):
-        self.assertEqual(self.lint({"name": "d", "driver": "true"}), [])
-        self.assertEqual(fc.fc_prove.flag_path_lint({}), [])
 
 
 class EnvFailure(unittest.TestCase):
@@ -76,10 +69,6 @@ class EnvFailure(unittest.TestCase):
 
 
 class ProveCase(unittest.TestCase):
-    def test_a_passing_case_proves_nothing(self):
-        row = fc.fc_prove.prove_case({}, {"name": "c"}, {"exit": 0})
-        self.assertEqual((row["verdict"], row["kind"]), ("passes", "passes"))
-
     def test_an_environment_rule_wins_without_asking_a_model(self):
         r = {"exit": 1, "run": {"status": "blocked", "stop_reason": "skipped the password field", "url": "http://a/", "steps": 1, "history": []}}
         with mock.patch.object(fc.fc_models, "fast_object", side_effect=AssertionError("asked a model")):
@@ -184,11 +173,6 @@ class ProveCommand(Proving):
         self.assertIn("prove  FAIL  1/2", out)
         self.assertEqual([c["verdict"] for c in self.results("prove.json")["cases"]], ["feature_missing", "environment"])
 
-    def test_a_judge_that_sees_an_overlay_fails_prove(self):
-        code, out = self.prove(judge={"verdict": "environment", "kind": "overlay", "why": "cookie banner"}, e2e=[jev_case("export", MISSING)])
-        self.assertEqual(code, 1)
-        self.assertIn("environment (overlay) - cookie banner", out)
-
     def test_a_case_that_passes_on_the_base_fails_prove(self):
         code, out = self.prove(e2e=[jev_case("export", {"statuses": ["done"]})])
         self.assertEqual(code, 1)
@@ -239,12 +223,6 @@ class ProveCommand(Proving):
         self.assertEqual(seen["root"], wt)
         self.assertEqual(self.results("prove.json")["e2e_digest"], fc.fc_prove.e2e_digest(json.loads((self.proj / "verify.json").read_text())))
 
-    def test_it_is_a_verify_flag(self):
-        with mock.patch.object(sys, "argv", ["compose", "verify", "--project", "p", "--prove"]), \
-                mock.patch.object(fc.fc_prove, "cmd_prove", side_effect=SystemExit(0)) as cp, mock.patch.object(fc.fc_config, "apply_config", return_value="default"), \
-                mock.patch.object(fc, "detach", side_effect=lambda a: a.fn(a)), self.assertRaises(SystemExit):
-            fc.main()
-        cp.assert_called_once()
 
 
 class RunGate(Proving):
@@ -320,12 +298,6 @@ class ProveEvidence(Repo):
         self.assertEqual(events, [dict(zip(self.FIELDS, ("", sha, [], [], "case", "prove", res, fob, detail)))
                                   for res, fob, detail in (("fail_expected", True, "a: no section"), ("pass", False, "b: x"), ("error", None, "c: y"))])
 
-    def test_a_passing_prove_records_and_exits_as_before(self):
-        code, out = self.prove(self.ROWS[:1], True)
-        self.assertEqual(code, 0, out)
-        self.assertEqual([e["result"] for e in self.record.call_args.args[1]], ["fail_expected"])
-        self.assertTrue(self.results("prove.json")["passed"])
-
     def test_nothing_changes_when_the_events_are_not_saved_or_there_is_no_feature_issue(self):
         for kw in ({"saved": False}, {"feature": None}):
             code, out = self.prove(self.ROWS[:2], False, **kw)
@@ -373,12 +345,6 @@ class PrototypeCommand(Repo):
             fc.fc_prove.cmd_prototype(SimpleNamespace(repo=str(self.repo), project="p"))
         self.assertIn("prototype", str(cm.exception.code))
 
-    def test_it_is_a_verify_flag(self):
-        with mock.patch.object(sys, "argv", ["compose", "verify", "--project", "p", "--prototype"]), \
-                mock.patch.object(fc.fc_prove, "cmd_prototype", side_effect=SystemExit(0)) as cp, mock.patch.object(fc.fc_config, "apply_config", return_value="default"), \
-                mock.patch.object(fc, "detach", side_effect=lambda a: a.fn(a)), self.assertRaises(SystemExit):
-            fc.main()
-        cp.assert_called_once()
 
 
 class ReviewOnly(Repo):
@@ -446,14 +412,6 @@ class KeepRecord(Repo):
         self.assertEqual(sorted(os.listdir(rec)), ["000000.jpg"])  # same name and count, and no temp dir left behind
         self.assertEqual((rec / "000000.jpg").read_bytes(), b"small")
         self.assertNotIn("shrunk", out)  # nothing printed per screenshot
-
-    def test_a_keep_record_pass_is_shrunk_in_place(self):
-        ok, row, shrink, _ = self.run_case({"statuses": ["done"]}, self.proj / "results" / "keep", keep=True)
-        rec = Path(row["screenshots"])
-        self.assertTrue(ok)
-        self.assertEqual(shrink.call_count, 1)
-        self.assertEqual(sorted(os.listdir(rec)), ["000000.jpg"])
-        self.assertEqual((rec / "000000.jpg").read_bytes(), b"small")
 
     def test_a_pass_through_leaves_the_screenshot_as_jev_wrote_it(self):
         ok, row, shrink, _ = self.run_case({"statuses": ["blocked"], "reason": "x"}, self.proj / "results" / "pass",

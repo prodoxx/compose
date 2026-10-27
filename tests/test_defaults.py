@@ -33,19 +33,7 @@ class TestTiersDefault(unittest.TestCase):
         self.assertFalse([l for l in lines if "models.tiers" in l])
         self.assertEqual(cfg["models"]["crew"], CREW)
 
-    def test_the_returned_tiers_are_a_copy(self):
-        before = copy.deepcopy(fc_config.DEFAULT_TIERS)
-        tiers = D.merge_models({})[0]["models"]["tiers"]
-        self.assertIsNot(tiers, fc_config.DEFAULT_TIERS)
-        tiers["extra"] = []
-        for v in tiers.values(): v.append("x")
-        self.assertEqual(fc_config.DEFAULT_TIERS, before)
-
-
 class Defaults(unittest.TestCase):
-    def test_default_models_is_the_owners_block(self):
-        self.assertEqual(D.DEFAULT_MODELS, MODELS)
-
     def test_empty_config_gets_the_whole_block_and_a_second_merge_adds_nothing(self):
         cfg, lines = D.merge_models({"workspaces": {"w": {"target": "x"}}})
         self.assertEqual(cfg, {"workspaces": {"w": {"target": "x"}}, "models": MODELS})

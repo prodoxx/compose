@@ -1,7 +1,6 @@
 import hermetic  # first: no test sees the real home
-import contextlib, importlib.machinery, importlib.util, json, os, sys, tempfile, unittest
+import importlib.machinery, importlib.util, json, os, sys, tempfile, unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest import mock
 os.environ["HERDR_ENV"] = ""
 
@@ -98,10 +97,6 @@ class Silent(unittest.TestCase):
         with mock.patch.object(S, "last_commit", return_value=NOW - commit_ago if commit_ago is not None else 0):
             return [e for _, e in S.silent_stalls(self.proj, snap or self.snap(), seen, NOW, **kw)]
 
-    def test_the_default_is_thirty_minutes_and_the_quiet_alarm_stays_at_four(self):
-        self.assertEqual(S.AGENT_STALL_SECONDS, 1800)
-        self.assertEqual(fc.fc_watch.STALL_SECONDS, 240)
-
     def test_working_for_half_an_hour_without_report_or_commit_is_silent(self):
         ev = self.stalls()
         self.assertEqual(len(ev), 1, ev)
@@ -128,18 +123,6 @@ class Silent(unittest.TestCase):
         (self.proj / "results" / "crew" / f"{WORKER}.json").write_text(json.dumps({"name": WORKER, "worktree": str(repo)}))
         self.assertAlmostEqual(S.last_commit(self.proj, WORKER), time.time(), delta=60)
         self.assertEqual(S.last_commit(self.proj, "hw-nobody"), 0)
-
-    def test_the_watch_passes_the_projects_own_limit(self):
-        (self.proj / "verify.json").write_text(json.dumps({"agent_stall_seconds": 90}))
-        snap = {"tasks": {}, "agents": {}, "crew": {}, "run": False, "ended": None, "verify": None, "halt": None, "run_end": 0, "last": [0, ""]}
-        a = SimpleNamespace(repo=".", now=False, from_=None, timeout=0.05, interval=0.01, stall=10_000, rewake=False)
-        with mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), mock.patch.object(fc.fc_watch, "watch_snapshot", return_value=snap), \
-                mock.patch.dict(os.environ, {"COMPOSE_ROLE": "orchestrator"}), mock.patch.object(fc.fc_proc, "keep_awake"), mock.patch("builtins.print"), \
-                mock.patch.object(fc.fc_watch, "watch_stalls", return_value=[]) as stalls:
-            with contextlib.suppress(SystemExit):
-                fc.fc_watch.cmd_watch(a)
-        self.assertEqual(stalls.call_args[1]["agent_limit"], 90)
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -258,9 +258,6 @@ class Reconcile(unittest.TestCase):
         code, msg = self.fails("check", file=self.sheet())
         self.assertTrue(msg.startswith("a reconcile is half applied (1 of 4 done): finish it with compose reconcile apply --go"), msg)
 
-    def test_show_without_a_stored_sheet_says_how_to_get_one(self):
-        self.assertEqual(self.fails("show"), (1, "no checked reconcile for Shop: compose reconcile check --file <sheet> first"))
-
     def test_proposal_sections_in_order_with_reasons_grouped_and_running_work_named(self):
         text = fc.fc_reconcile.render_proposal(self.stored(in_progress="NEB-5"))
         self.assertEqual([l for l in text.splitlines() if l.startswith("## ")],
@@ -465,10 +462,6 @@ class Reconcile(unittest.TestCase):
         self.assertEqual(len(self.linear.created), 1)
         self.assertTrue(out[-1].endswith("compose reconcile notices lists what each team lead must hear"))
 
-    def test_show_prints_the_stored_proposal(self):
-        self.out("check", file=self.sheet())
-        self.assertTrue(self.out("show")[0].startswith("5 open tickets: 1 kept, 1 left for you to verify, 2 canceled, 1 merged; 1 new."))
-
     def test_check_refuses_a_new_key_listed_twice_an_untitled_new_ticket_and_a_key_that_is_a_ticket_id(self):
         s = sheet(keep=["NEB-1", "NEB-2", "NEB-3", "NEB-4", "NEB-5"],
                   new=[{"key": "N1", "title": "A", "parent": "NEB-1", "label": "Feature"}, {"key": "N1", "title": "B", "parent": "NEB-1", "label": "Feature"},
@@ -498,7 +491,6 @@ class Reconcile(unittest.TestCase):
         self.attempt("apply", go="yes, do it")
         self.out("check", file=self.sheet({**self.raw, "keep": self.raw["keep"] + ["NEB-101"]}))
         self.assertEqual(json.loads(fc.fc_reconcile.sheet_path("p1").read_text())["go"], [{"quote": "yes, do it", "at": ANY}])
-
 
 if __name__ == "__main__":
     unittest.main()

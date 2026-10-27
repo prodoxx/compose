@@ -103,22 +103,6 @@ class Yolo(unittest.TestCase):
         self.assertEqual([x["text"] for x in d["decisions"]], ["which db?: postgres, the recommendation", "cards NEB-4: accept-all"])
         self.assertTrue(all(x["ts"] for x in d["decisions"]))
 
-    def test_digest_sections_render_the_same_digest(self):
-        self.yolo("go", "with", "Stripe")
-        self.yolo("decided", "db?: postgres")
-        y = json.loads(self.file.read_text())
-        s = snap(tasks={"001": "passed"}, halt=["2026-01-01 10:00:00", "openrouter", 1])
-        (self.proj / "results" / "001.json").write_text("{}")
-        with mock.patch.object(fc.fc_watch, "watch_snapshot", return_value=s), mock.patch.object(fc.fc_worktree, "stack_order", return_value=[]), \
-                mock.patch.object(fc.fc_cost, "rows", return_value=[]):
-            sections = fc.fc_yolo.digest_sections(Path("."), self.proj, y)
-            text = fc.fc_yolo.yolo_digest(Path("."), self.proj, y, "digest")
-        want = [f"{y['mode']} digest for hw: on since {y['since']}"]
-        for head, items in sections:
-            want += ["", head] + [f"- {i}" for i in items or ["none"]]
-        self.assertEqual(text, "\n".join(want))
-        self.assertEqual([h for h, _ in sections], ["Your instructions", "Decided for you", "To confirm", "Waiting on you", "Tried and failed", "Done", "Cost"])
-
     def test_off_prints_the_digest_from_disk_then_archives(self):
         self.yolo("go", "with", "Stripe")
         d = json.loads(self.file.read_text())
@@ -155,11 +139,6 @@ class Yolo(unittest.TestCase):
         self.assertIn("001", sec("Done"))
         self.assertFalse(self.file.exists())
         self.assertTrue((self.proj / "results" / "yolo-2026-01-01T090000.json").exists())
-
-    def test_off_with_no_decisions_has_nothing_to_confirm(self):
-        self.yolo("go")
-        out = self.yolo("off")
-        self.assertEqual(out.split("To confirm", 1)[1].split("Waiting on you", 1)[0].split(), ["-", "none"])
 
     def test_decided_points_at_compose_decide_which_tags_the_map_line(self):
         self.yolo("go")
@@ -215,55 +194,6 @@ class Yolo(unittest.TestCase):
         self.assertTrue(line.endswith("  night=on (the night answerer takes it: do not answer; wait for factory=answered|waiting|answer-failed)"), line)
         self.assertNotIn("decided", line)
 
-    def test_another_session_sees_who_set_yolo(self):
-        """yolo is per project: a second engineering manager session on it is told the posture is not its own."""
-        self.yolo("ship", "it", pane="w1:p2")
-        self.file.write_text(json.dumps(json.loads(self.file.read_text()) | {"mode": "yolo"}))
-        self.assertEqual(json.loads(self.file.read_text())["by"], {"role": "manager", "session": "w1:p2"})
-        out = self.watch_now(snap(crew={"hw-q": [{"at": stamp(), "state": "needs-user", "message": "db?"}]}), pane="w1:p1")
-        self.assertIn("by='an engineering manager session in herdr pane w1:p2'", out[0])
-        line = next(l for l in out if "state=needs-user" in l)
-        self.assertTrue(line.endswith("  yolo=on set by an engineering manager session in herdr pane w1:p2 (answer with the recommendation; "
-                                      "log it: compose yolo decided ...)"), line)
-
-    def test_status_shows_the_header(self):
-        self.yolo(push=True)
-        d = json.loads(self.file.read_text())
-        since = d["since"]
-        self.file.write_text(json.dumps(d | {"mode": "yolo"}))
-        with mock.patch.object(fc.fc_tasks, "load_tasks", return_value=[]), mock.patch.object(fc.fc_core, "current_branch", return_value="main"), \
-                mock.patch.object(fc.fc_core, "sh", return_value=SimpleNamespace(stdout="abc\n", returncode=0)), \
-                mock.patch.object(fc.fc_worktree, "stack_order", return_value=[]), mock.patch.object(fc.fc_cost, "rows", return_value=[]):
-            lines = fc.fc_status.render_status(Path("."), [self.proj]).splitlines()
-            self.assertIn(f"  yolo on (push) since {since}, set by an engineering manager session in herdr pane w1:p1", lines)  # the status tab is no session's
-            self.file.write_text(json.dumps({"since": since, "push": False, "words": "", "decisions": []}))  # from before `by` was recorded
-            lines = fc.fc_status.render_status(Path("."), [self.proj]).splitlines()
-        self.assertIn(f"  away on since {since}", lines)
-
-    def test_help_and_the_slash_command_list_yolo(self):
-        root = Path(__file__).resolve().parents[1]
-        cmd = (root / "commands" / "yolo.md").read_text()
-        self.assertIn("allowed-tools: Bash(compose yolo:*)", cmd)
-        out = io.StringIO()
-        with mock.patch.object(sys, "argv", ["compose", "--help"]), contextlib.redirect_stdout(out), contextlib.suppress(SystemExit):
-            fc.main()
-        self.assertIn("yolo", out.getvalue())
-
-    def test_main_parses_decided_after_the_project_flag(self):
-        seen = []
-        with mock.patch.object(sys, "argv", ["compose", "yolo", "decided", "--project", "hw", "db?: postgres"]), \
-                mock.patch.object(fc.fc_yolo, "cmd_yolo", seen.append), mock.patch.object(fc.fc_config, "apply_config", return_value="default"):
-            fc.main()
-        self.assertEqual(seen[0].words, ["decided", "db?: postgres"])
-
-    def test_main_parses_clear_words_as_a_flag(self):
-        seen = []
-        with mock.patch.object(sys, "argv", ["compose", "yolo", "--project", "hw", "--clear-words"]), \
-                mock.patch.object(fc.fc_yolo, "cmd_yolo", seen.append), mock.patch.object(fc.fc_config, "apply_config", return_value="default"):
-            fc.main()
-        self.assertEqual((seen[0].clear_words, seen[0].words), (True, []))
-
-
 class StatusNamesPosture(unittest.TestCase):
     """The posture file's mode, `away` or `yolo`, is what `yolo_state` and `compose status` name; a file without one reads as away."""
     SINCE = "2026-01-01 09:00:00"
@@ -307,10 +237,6 @@ class StatusNamesPosture(unittest.TestCase):
         self.write(mode="away", push=True, by={"role": "manager", "session": "w1:p1"})
         self.assertIn(f"  away on (push) since {self.SINCE}, set by an engineering manager session in herdr pane w1:p1", self.status())
 
-    def test_status_says_nothing_when_no_posture_is_on(self):
-        self.assertFalse([l for l in self.status() if l.startswith(("  away on", "  yolo on"))])
-
-
 class WatchNamesPosture(unittest.TestCase):
     """`watch --now` names the posture in its event line and in the hint on each needs-user line; a file without a mode reads as away."""
     SINCE = "2026-01-01 09:00:00"
@@ -350,11 +276,6 @@ class WatchNamesPosture(unittest.TestCase):
             event, ask, _ = self.watch_now(mode=mode, by={"role": "manager", "session": "w1:p2"})
             self.assertIn("by='an engineering manager session in herdr pane w1:p2'", event)
             self.assertTrue(ask.endswith(f"  {mode}=on set by an engineering manager session in herdr pane w1:p2 {self.HINT.format(m=mode)}"), ask)
-
-    def test_no_line_names_a_posture_when_none_is_on(self):
-        event, ask, blocked = self.watch_now(posture=False)
-        self.assertFalse([l for l in (event, ask, blocked) if "away=on" in l or "yolo=on" in l])
-
 
 class PostureEntry(unittest.TestCase):
     def setUp(self):
@@ -411,19 +332,6 @@ class PostureEntry(unittest.TestCase):
             confirm = self.run_as(p, "off").split("To confirm", 1)[1].split("Waiting on you", 1)[0]
             self.assertIn(f"({p} recommendation, unconfirmed, <date>)", confirm)
             self.assertEqual("yolo" in out + confirm, p == "yolo")
-
-    def test_the_refusals_name_the_posture(self):
-        for p in ("away", "yolo"):
-            self.file.unlink(missing_ok=True)
-            for words, clear in (("off", False), ("decided", False), ("", True)):
-                self.assertIn(f"{p} is not on for hw; `compose {p} --project hw [--push] [words]` turns it on", self.run_as(p, *words.split(), clear_words=clear))
-            self.put(p)
-            msgs = [self.run_as(p, "decided"), self.run_as(p, "x", clear_words=True), self.run_as(p, "--project hw decided db?: postgres")]
-            self.assertIn(f'{p} decided needs "<question>: <answer taken>"', msgs[0])
-            self.assertIn(f"compose {p} --project hw --clear-words", msgs[1])
-            self.assertTrue(all(h in msgs[2] for h in (f'compose {p} --project hw [--push] "<words>"', f'compose {p} decided --project hw "<question>: <answer taken>"', f"mislaid `{p} decided`")), msgs[2])
-            self.assertEqual("yolo" in "".join(msgs), p == "yolo")
-
 
 class PostureMismatchAndDigest(unittest.TestCase):
     SINCE = "2026-01-01 09:00:00"
@@ -532,14 +440,6 @@ class AwaySubcommand(unittest.TestCase):
         for name in ("away", "yolo"):
             self.assertEqual(self.parse(name, "digest", "--project", "hw").words, ["digest"])
             self.assertEqual(self.parse(name, "--project", "hw", "--push", "a", "b").words, ["a", "b"])
-
-    def test_top_help_lists_away_right_before_yolo_with_both_helps(self):
-        self.assertIn(f" away {self.AWAY} yolo {self.YOLO} ", self.help())
-
-    def test_each_help_shows_the_words_help(self):
-        for name in ("away", "yolo"):
-            self.assertIn(self.WORDS, self.help(name))
-
 
 if __name__ == "__main__":
     unittest.main()

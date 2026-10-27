@@ -155,10 +155,12 @@ def status_lines(repo, state):
 START_WAIT = 30  # seconds start waits for the new loop to take its lock or die, before it calls it started
 
 def _exited(pid):
+    """True once our child pid is gone. No child to wait for means it exited and was reaped already: spawn_loop drops its Popen, and
+    subprocess reaps a dropped Popen's exited child on the next Popen, which start's own git calls make."""
     try:
         return os.waitpid(pid, os.WNOHANG)[0] == pid
     except ChildProcessError:
-        return False
+        return True
 
 def verb_start(a, repo):
     if not fc_herdr.herdr_env():

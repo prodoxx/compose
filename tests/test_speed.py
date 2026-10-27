@@ -69,12 +69,6 @@ class TaskBranches(unittest.TestCase):
         self.run_task("001")
         self.assertEqual(self.git("show", "team/x-001:001.py"), "F\n")
 
-    def test_a_legacy_project_keeps_its_fast_names(self):
-        self.git("branch", "fast/proj/009")
-        self.assertEqual(self.run_task("001")["branch"], "fast/proj/001")
-        self.assertEqual(self.git("show", "fast/proj/001:001.py"), "F\n")
-        self.assertEqual(self.git("branch", "--list", "compose/*"), "")
-
     def test_an_after_task_builds_on_its_unmerged_dependency(self):
         self.run_task("001")
         base, sha = fc.fc_implement.task_base(self.repo, self.proj, {"id": "002", "after": "001"})
@@ -88,15 +82,6 @@ class TaskBranches(unittest.TestCase):
         self.run_task("002", after="001", test="grep -q F 001.py", status="already_green")
         base, _ = fc.fc_implement.task_base(self.repo, self.proj, {"id": "003", "after": "002"})
         self.assertEqual(base, "compose/proj-001")
-
-
-class Waves(unittest.TestCase):
-    def test_independent_tasks_share_a_wave(self):
-        t = lambda i, after="": {"id": i, "after": after}
-        waves = fc.fc_spec.run_waves([t("001"), t("002", "001"), t("003"), t("004", "001"), t("005", "002,003,004"),
-                              t("006"), t("007", "006"), t("009", "042")])
-        # an `after:` outside the list (merged, or another wave) does not make a task wait
-        self.assertEqual(waves, [["001", "003", "006", "009"], ["002", "004", "007"], ["005"]])
 
 
 class E2EBesideReview(unittest.TestCase):

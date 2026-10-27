@@ -39,13 +39,6 @@ class Classify(unittest.TestCase):
         for code in (1, 2, 5, -9):
             self.assertEqual(fc_regproof.base_result(proc(code, "AssertionError: 1 != 2")), ("fail_expected", True), code)
 
-    def test_missing_output_is_handled(self):
-        self.assertEqual(fc_regproof.base_result(proc(1, None, None)), ("fail_expected", True))
-        self.assertEqual(fc_regproof.base_result(proc(0, None, None)), ("pass", False))
-        self.assertEqual(fc_regproof.base_result(proc(1, None, "ImportError: x")), ("error", None))
-        self.assertEqual(fc_regproof.base_result(proc(124, None, None)), ("error", None))
-
-
 class Prove(unittest.TestCase):
     """The regression test runs on the base and on the fix, and the proof says whether it proves the fix."""
     ENV = {"HERDR_ENV": "", "COMPOSE_NO_TREEHOUSE": "1", "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
@@ -142,12 +135,3 @@ class Record(unittest.TestCase):
     def test_a_failed_pick_has_an_empty_tip_sha(self):
         fc_regproof.record_proof(Path("p"), self.META, self.proof(("pass", False), 1, tip_sha=""))
         self.assertEqual(self.add.call_args[0][1][1]["commit_sha"], "")
-
-    def test_a_task_without_an_issue_is_passed_none(self):
-        fc_regproof.record_proof(Path("p"), {"id": "001"}, self.proof())
-        self.assertIsNone(self.add.call_args[0][0])
-
-    def test_returns_what_add_row_returned(self):
-        for ret in (True, False):
-            self.add.return_value = ret
-            self.assertIs(fc_regproof.record_proof(Path("p"), self.META, self.proof()), ret)

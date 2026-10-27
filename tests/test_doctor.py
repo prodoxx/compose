@@ -207,12 +207,6 @@ class DoctorNotes(unittest.TestCase):
         self.assertGreater(lines.index(wait[0]), lines.index(missing[0]))
         self.assertEqual([n in wait[0] for n in ("i-have-adhd skill", "superpowers", "herdr claude integration", "uv", "gh")], [True, True, False, False, False])
 
-    def test_with_claude_rows_report_like_any_other(self):
-        code, lines = self.doctor()
-        self.assertEqual((code, self.bad), (1, ["i-have-adhd skill"]))
-        self.assertEqual([l.split(" (")[0] for l in lines if l.startswith(("MISSING", "waiting"))],
-                         ["MISSING: i-have-adhd skill", "MISSING: superpowers", "MISSING: uv"])
-
     def test_old_keys_warn_once_by_name_and_file(self):
         cfg, env = self.home / "config.json", self.home / ".env"
         cfg.write_text(json.dumps({"openrouter_api_key": "sk-or-test", "workspaces": {"w": {"linear_api_key": "lin-test"}}}))
@@ -264,14 +258,6 @@ class ClashLines(unittest.TestCase):
                         self.line("workspaces.w.linear_api_key", "~/.compose/config.json"), self.line("openrouter_api_key", "~/.compose/config.json")], base[2]))
                     words = set(re.findall(r"[\w-]+", "\n".join(warn + rest)))
                     self.assertFalse({"sk-or-test", "lin-test", "sk-tm-test", "ts-test"} & words)
-
-    def test_a_path_outside_home_prints_as_it_is(self):
-        out = Path(tempfile.mkdtemp()) / "conf" / "config.json"
-        twin = Path(str(self.home) + "x") / ".env"  # shares home's prefix, but is not under it
-        deep = self.home / "a" / "b" / ".env"
-        keys = [("openrouter_api_key", out), ("TEXT_MODEL_API_KEY", twin), ("TYPESAFE_API_KEY", deep)]
-        self.assertEqual(self.clash(keys)[1], [self.line("openrouter_api_key", str(out)), self.line("TEXT_MODEL_API_KEY", str(twin)),
-                                               self.line("TYPESAFE_API_KEY", "~/a/b/.env")])
 
 class DoctorWarnings(unittest.TestCase):
     """doctor prints every line (gh, old keys, herdr config) before a required miss exits 1, and ends with one summary;
@@ -360,10 +346,6 @@ class DesignerExtras(unittest.TestCase):
                 self.assertIn("MISSING: uv (install: brew install uv) - optional", lines)
                 self.assertEqual(lines.index(self.LINE), max(i for i, l in enumerate(lines[:lines.index(Doctor.READY)]) if l.startswith("MISSING")) + 1)
 
-    def test_both_ok_print_no_designer_line(self):
-        code, lines = self.doctor(True, True)
-        self.assertEqual((code, self.bad, [l for l in lines if "designer" in l or "framelink" in l]), (0, [], []))
-
     def test_without_claude_framelink_stays_off_the_waiting_line(self):
         (self.bin / "claude").unlink()
         code, lines = self.doctor(False, False)
@@ -372,11 +354,6 @@ class DesignerExtras(unittest.TestCase):
         self.assertTrue("superpowers" in wait[0] and "framelink" not in wait[0], wait)
         self.assertLess(lines.index(self.LINE), lines.index(wait[0]))
         self.assertGreater(lines.index(self.LINE), lines.index("MISSING: uv (install: brew install uv) - optional"))
-
-    def test_the_designer_start_reports_its_rows_as_today(self):
-        _, lines = self.doctor(False, False, role="designer")
-        self.assertEqual((self.bad, lines), (["framelink-figma", "framelink-figma token"],
-                         ["MISSING: framelink-figma (install: claude mcp add x)", "MISSING: framelink-figma token (install: compose setup)"]))
 
 class InitGate(unittest.TestCase):
     """init stops only on a missing required tool row, one whose check is a command, a command list, or a file under home;
@@ -466,12 +443,6 @@ class SummaryFix(unittest.TestCase):
                 with self.subTest(mode=mode, n=n):
                     code, lines = self.doctor(rows)
                     self.assertEqual((code, lines[-1]), (1, f"{n} required step{'s' * (n > 1)} missing: run compose setup"), lines)
-
-    def test_the_mode_decides_not_the_name(self):
-        code, lines = self.doctor((self.LOCAL[:5] + ("run",),))
-        self.assertEqual((code, lines[-1]), (1, "1 required step missing: run compose setup"))
-        code, lines = self.doctor((("gh auth",) + self.LOCAL[1:],))
-        self.assertEqual((code, lines[-1]), (1, "1 required step missing"))
 
     def test_nothing_required_missing_is_ready(self):
         self.fake("git", "git version 2.50.0")

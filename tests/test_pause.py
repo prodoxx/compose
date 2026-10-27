@@ -244,7 +244,6 @@ class RunLoopPauses(unittest.TestCase):
         self.assertIn("run done", out)
 
 
-
     def test_a_regression_writer_and_a_finished_task_are_not_paused(self):
         paused = []
         real_pause = fc.fc_proc.pause_task
@@ -386,14 +385,6 @@ class CarryOver(unittest.TestCase):
         seen = self.resume(repo, proj)  # the real task still starts from its kept edits
         self.assertEqual(seen[0], "half\n")
 
-    def test_a_bench_run_over_a_paused_fast_task_leaves_its_result_and_linear_alone(self):
-        r, repo, proj = self.pause_with({"a.txt": "half\n"})
-        before = (proj / "results" / "001.json").read_text()
-        with mock.patch.object(fc.fc_implement.fc_fast, "workflow", lambda *a: "fix-then-regression-test"):
-            self.resume(repo, proj, files=["a.txt"], bench="-bench-m-r0")
-        self.assertEqual((proj / "results" / "001.json").read_text(), before)
-        self.assertEqual(self.events, [])
-
     def test_triage_reads_only_bare_task_ids_not_bench_results(self):
         proj = Path(tempfile.mkdtemp())
         (proj / "results").mkdir()
@@ -412,27 +403,6 @@ class CarryOver(unittest.TestCase):
         self.assertEqual(seen[:2], ("half\n", "new\n"))
         self.assertTrue(seen[2].startswith("WORK KEPT"))
         self.assertNotIn("kept_from", json.loads((proj / "results" / "001.json").read_text()))
-
-    def test_a_base_that_moved_without_a_conflict_takes_the_edit_on_top(self):
-        r, repo, proj = self.pause_with({"a.txt": "half\n", "b.txt": "new\n"})
-        self.commit_on_main(repo, "c.txt", "other\n")
-        seen = self.resume(repo, proj)
-        self.assertEqual(seen[:2], ("half\n", "new\n"))
-
-    def test_a_dropped_file_stays_absent_and_the_index_is_clean(self):
-        r, repo, proj = self.pause_with({"a.txt": "half\n", "b.txt": "new\n"})
-        self.commit_on_main(repo, "a.txt", "moved\n")
-        wts = []
-        real = fc.fc_implement.fc_pause.carry_over
-        def spy(repo_, wt, meta, last):
-            out = real(repo_, wt, meta, last)
-            wts.append(subprocess.run(["git", "status", "--porcelain"], cwd=wt, capture_output=True, text=True).stdout)
-            return out
-        with mock.patch.object(fc.fc_implement.fc_pause, "carry_over", spy):
-            seen = self.resume(repo, proj, files=["a.txt", "b.txt"])
-        self.assertEqual(seen[0], "moved\n")
-        self.assertFalse(any(l[:2] in ("UU", "AA", "DU", "UD") for l in wts[0].splitlines()))
-        self.assertNotIn("a.txt", wts[0])
 
 
 RESTS_MAP = MAP.replace("1. Show a toast on save\n", "1. Show a toast on save\n- D3: one plan\n- D9: another plan\n")

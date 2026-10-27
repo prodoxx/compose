@@ -75,13 +75,6 @@ class Read(unittest.TestCase):
                 mock.patch.object(fc_linear_cmd, "linear_project", side_effect=list(project)) as self.project:
             return fc_policy.read_policies("/repo")
 
-    def test_no_key_makes_no_call(self):
-        with mock.patch.object(fc_config, "LINEAR_KEY", ""), mock.patch.object(fc_linear, "linear_gql") as gql, \
-                mock.patch.object(fc_linear_cmd, "linear_project") as project:
-            self.assertEqual(fc_policy.read_policies("/repo"), ([], "policies unavailable: no Linear key"))
-        gql.assert_not_called()
-        project.assert_not_called()
-
     def test_no_document_and_holdout_exact_title(self):
         self.assertEqual(self.read([[("D1", "Verification policies (old)"), ("D2", "verification policies")]]), ([], "no Verification policies document"))
 

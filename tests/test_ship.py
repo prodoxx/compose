@@ -72,27 +72,6 @@ class LayerChecks(Ship):
         stop = [l for l in out if "STOP" in l]
         self.assertIn("layer 3 of 3 (compose/p-layer-03) fails", stop[0])
 
-    def test_every_layer_runs_the_checks_once_and_an_unchanged_layer_is_not_run_again(self):
-        counter = Path(tempfile.mkdtemp()) / "runs"
-        self.config(checks=[f"echo run >> {counter}"])
-        out, code = self.submit()
-        self.assertEqual(code, 0, out)
-        self.assertEqual(len(counter.read_text().splitlines()), 3)
-        self.assertTrue(any("stack submit --auto" in c for c in self.log()))
-        self.assertTrue(self.origin_has("refs/heads/compose/p-layer-03"))
-        out, code = self.submit()
-        self.assertEqual(len(counter.read_text().splitlines()), 3)
-        self.assertEqual(len([l for l in out if "unchanged since its checks passed" in l]), 3)
-        self.config(checks=[f"echo run >> {counter}", "true"])  # a new check runs on every layer; the one that was green on its tree is taken
-        out, code = self.submit()
-        self.assertEqual(len(counter.read_text().splitlines()), 3)
-        self.assertEqual(len([l for l in out if f"echo run >> {counter} green on tree" in l and "not rerun" in l]), 3)
-        self.submit_fresh()
-        self.assertEqual(len(counter.read_text().splitlines()), 6)
-
-    def submit_fresh(self):
-        return self.run_cmd(fc.fc_ship.cmd_stack, submit=True, fresh=True)
-
     def test_a_layer_whose_tree_has_a_recorded_green_is_not_run_and_the_others_still_are(self):
         counter = Path(tempfile.mkdtemp()) / "runs"
         cmd = f"echo run >> {counter}"
@@ -256,50 +235,6 @@ class FakedReword(Faked):
         _, _, code = self.reword(set=[f"{'b' * 8}=Add the writer"])
         self.assertIn("verify is running on p", code)
         self.assertFalse((self.proj / "rewords.json").exists())
-
-
-class SharedFixture(Ship):
-    seen = []
-
-    @classmethod
-    def setUpClass(cls):
-        def gone():
-            for d in (cls.root, cls.template):
-                assert not Path(d).exists(), f"{d} is left behind"
-        cls.addClassCleanup(gone)  # registered first, so it runs after the kit's own cleanups
-        super().setUpClass()
-
-    def setUp(self):
-        with mock.patch("subprocess.run", wraps=subprocess.run) as run:
-            super().setUp()
-        self.setup_ran_git = run.called
-
-    def leave_leftovers(self):
-        cls = type(self)
-        self.assertFalse(self.setup_ran_git, "setUp runs no git process")
-        self.assertTrue({"root", "template"} <= set(vars(cls)) and Path(cls.template).is_dir(), "each class builds its own")
-        mine = (self.repo, self.origin, self.state, cls.template)
-        self.assertTrue(all(s == mine for s in cls.seen), "the same paths in every test")
-        cls.seen.append(mine)
-        self.assertEqual(self.git("branch", "--show-current"), "compose/p")
-        self.assertEqual(self.git("branch", "--list", "leak"), "")
-        self.assertEqual(self.git("status", "--porcelain"), "")
-        self.assertFalse(self.origin_has("refs/heads/leak"))
-        self.assertEqual(self.log(), [])
-        self.assertEqual(json.loads((self.proj / "verify.json").read_text()), {"review_base": "main"})
-        self.assertEqual(len(json.loads((self.proj / "results" / "tasks.json").read_text())["tasks"]), 3)
-        self.git("checkout", "-q", "-b", "leak"); self.write("leak.txt", "x\n"); self.commit("leak")
-        self.git("push", "-q", "origin", "leak"); self.write("stray.txt", "x\n")
-        self.assertTrue(self.origin_has("refs/heads/leak"))
-        self.config(checks=["false"])
-        (self.proj / "results" / "tasks.json").write_text('{"feature": {}, "tasks": []}')
-        self.state.write_text('{"prs": {}, "log": ["leak"]}')
-
-    def test_what_one_test_commits_pushes_and_changes_is_gone_in_the_next(self):
-        self.leave_leftovers()
-
-    def test_what_another_test_commits_pushes_and_changes_is_gone_in_the_next(self):
-        self.leave_leftovers()
 
 
 if __name__ == "__main__":

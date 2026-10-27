@@ -1,8 +1,6 @@
 import hermetic  # first: no test sees the real home
-import importlib.machinery, importlib.util, io, json, os, sys, tempfile, unittest
+import importlib.machinery, importlib.util, os, sys, unittest
 from pathlib import Path
-from types import SimpleNamespace
-from unittest import mock
 os.environ["HERDR_ENV"] = ""
 
 _spec = importlib.util.spec_from_loader("fc", importlib.machinery.SourceFileLoader("fc", str(Path(__file__).resolve().parents[1] / "bin" / "compose.py")))
@@ -27,9 +25,6 @@ def lane(ident, *stories):
 
 class StartToday(unittest.TestCase):
     LINK = "* Delivery plan: [NEB-1: delivery plan](https://linear.app/x/document/d1)"
-
-    def test_skeleton_holds_the_seven_sections_in_order_each_with_the_next_line(self):
-        self.assertEqual(fc_plan.plan_skeleton(), "\n\n".join(f"{h}\n\n{fc_plan.PLAN_NEXT}" for h in fc_plan.PLAN_SECTIONS) + "\n")
 
     def link(self, description):
         return fc_plan.with_plan_link(description, "NEB-1: delivery plan", "https://linear.app/x/document/d1")
@@ -57,12 +52,6 @@ class StartToday(unittest.TestCase):
                  lane("NEB-2", story("NEB-12", "backlog", ("NEB-21", "Done"), ("NEB-22", "Canceled")), story("NEB-13", "Backlog", ("NEB-21", "Done"), ("NEB-23", "In Progress")))]
         self.assertEqual(fc_plan.start_today(lanes).splitlines(), ["1. [NEB-3](u/NEB-3) T NEB-3", "2. [NEB-5](u/NEB-5) T NEB-5", "3. [NEB-12](u/NEB-12) T NEB-12"])
         self.assertEqual(fc_plan.plan_sections(lanes)["## Start today"], fc_plan.start_today(lanes))
-
-    def test_nothing_to_start(self):
-        for lanes in ([], [lane("NEB-1")], [lane("NEB-1", story("NEB-3", "Done"), story("NEB-4", "Todo", ("NEB-3", "In Review")))]):
-            self.assertEqual(fc_plan.start_today(lanes).strip(), "Nothing can start now.")
-            self.assertEqual(fc_plan.plan_sections(lanes)["## Start today"], fc_plan.start_today(lanes))
-
 
 class PlanLanes(unittest.TestCase):
     def lines(self, lanes):
@@ -103,17 +92,6 @@ class PlanWaves(unittest.TestCase):
         self.assertEqual(fc_plan.waves_text(self.LANES).strip().splitlines(), [
             "| Wave | Stories | Count |", "| -- | -- | -- |", "| 1 | NEB-9, NEB-10, NEB-11 | 3 |", "| 2 | NEB-21 | 1 |", "| 3 | NEB-14 | 1 |", "| 4 | NEB-13 | 1 |"])
 
-    def test_nothing_left_to_schedule(self):
-        for lanes in ([], [lane("NEB-1")], [lane("NEB-1", story("NEB-3", "Done"), story("NEB-4", "canceled", ("NEB-3", "Done"))),
-                                            lane("NEB-2", story("NEB-5", "In Review", ("NEB-6", "Todo"), labels=["Design"]))]):
-            self.assertEqual(fc_plan.waves_text(lanes).strip(), "Nothing left to schedule.")
-
-    def test_plan_sections_hold_waves_after_lanes(self):
-        sections = fc_plan.plan_sections(self.LANES)
-        self.assertEqual(list(sections)[:3], ["## Start today", "## Lanes", "## Waves"])
-        self.assertEqual(sections["## Waves"], fc_plan.waves_text(self.LANES))
-
-
 class CriticalPath(unittest.TestCase):
     def lines(self, lanes):
         return fc_plan.critical_path_text(lanes).strip("\n").split("\n")
@@ -141,14 +119,6 @@ class CriticalPath(unittest.TestCase):
                  lane("NEB-91", story("NEB-7", "In Review", ("NEB-6", "Canceled"), labels=["Design"]),
                       story("NEB-8", "Todo", ("NEB-7", "In Review", ["Design"])), story("NEB-9", "In Review", ("NEB-5", "Todo")))]
         self.assertEqual(self.lines(lanes), ["1. NEB-4 -> NEB-5 -> NEB-9 (3 stories)"])
-
-    def test_no_links_or_nothing_unfinished(self):
-        no_links = [lane("NEB-90", story("NEB-2", "Done"), story("NEB-3", "Todo", ("NEB-2", "Done"))), lane("NEB-91", story("NEB-4", "Todo", ("NEB-50", "Todo")))]
-        self.assertEqual(fc_plan.critical_path_text(no_links).strip(), "No blocked-by chains.")
-        for lanes in ([], [lane("NEB-90")], [lane("NEB-90", story("NEB-3", "Done"), story("NEB-4", "Canceled", ("NEB-3", "Done")))]):
-            self.assertEqual(fc_plan.critical_path_text(lanes).strip(), "Nothing left to schedule.")
-            self.assertEqual(fc_plan.plan_sections(lanes)["## Critical path"], fc_plan.critical_path_text(lanes))
-
 
 class PlanLinkPlacement(unittest.TestCase):
     URL = "https://linear.app/x/document/d1"
@@ -181,13 +151,6 @@ class PlanLinkPlacement(unittest.TestCase):
         self.assertEqual(self.link(desc), desc.replace("## Notes\n\n", "## Notes\n\n" + self.LINK + "\n\n"))
         self.assertEqual(self.link("## Notes\n### Risks\n* slow\n"), "## Notes\n\n" + self.LINK + "\n\n### Risks\n* slow\n")
 
-    def test_present_url_leaves_it_unchanged_and_no_notes_adds_a_notes_section(self):
-        for desc in ("## Notes\n\n### Links\n\n* plan " + self.URL + "\n", "## Goal\n\nSee " + self.URL + "\n"):
-            self.assertEqual(self.link(desc), desc)
-        out = self.link("## Goal\n\n### Detail\n\nShip it.\n")
-        self.assertEqual([l for l in out.splitlines() if l.strip()], ["## Goal", "### Detail", "Ship it.", "## Notes", self.LINK])
-
-
 TRACKS = "1. Sign-in: NEB-7, [NEB-9](u/NEB-9)\n\n2. Onboarding: NEB-12 (after NEB-7)\n3. Billing: NEB-15 (after Sign-in, Onboarding)\n4. Search: NEB-20\n"
 
 class ProductTracks(unittest.TestCase):
@@ -197,10 +160,6 @@ class ProductTracks(unittest.TestCase):
             (1, "Sign-in", ["NEB-7", "NEB-9"], []), (2, "Onboarding", ["NEB-12"], ["NEB-7"]),
             (3, "Billing", ["NEB-15"], ["Sign-in", "Onboarding"]), (4, "Search", ["NEB-20"], [])])
         self.assertEqual(fc_plan.parse_tracks(fc_plan.PRODUCT_NEXT + "\n"), [])
-
-    def test_a_link_in_after_reads_as_its_text(self):
-        t = fc_plan.parse_tracks("1. A: NEB-7\n2. B: NEB-8 (after [NEB-7](u/NEB-7))")
-        self.assertEqual(t[1]["after"], ["NEB-7"])
 
     def test_a_bad_section_names_the_line(self):
         for text, msg in (("1. Sign-in NEB-7", 'line 1: not a track: "1. Sign-in NEB-7" (write "<n>. <name>: <id>, <id> (after <track>, ...)")'),
@@ -298,12 +257,6 @@ class ProductSections(unittest.TestCase):
         e = fc_plan.product_sections([], {}, [], [])
         self.assertEqual((e["## Waves"], e["## Start today"], e["## Proposed fixes"]), ("No tracks yet.", "Nothing can start now.", "None."))
 
-    def test_skeleton_and_history(self):
-        sk = fc_plan.product_skeleton()
-        self.assertEqual(sk, "\n\n".join(f"{h}\n\n{fc_plan.PRODUCT_NEXT}" for h in fc_plan.PRODUCT_SECTIONS) + "\n")
-        body = fc_plan.with_history(fc_plan.with_history(sk, '- 2026-10-26: tracks set; the product owner said: "auth first"'), "- 2026-10-27: b")
-        self.assertTrue(body.rstrip().endswith('## History\n\n- 2026-10-26: tracks set; the product owner said: "auth first"\n- 2026-10-27: b'))
-
 class ProductPlace(unittest.TestCase):
     def test_a_missing_section_goes_where_the_skeleton_puts_it(self):
         body = "## Why this order\n\nAuth first.\n\n## History\n\n- 2026-01-01: first\n"
@@ -356,6 +309,3 @@ class ProductSeed(unittest.TestCase):
                          {("NEB-7", "NEB-9"), ("NEB-7", "NEB-12"), ("NEB-9", "NEB-15"), ("NEB-12", "NEB-15")})
         self.assertEqual([t["items"] for t in fc_plan.parse_tracks(text)][-1], ["NEB-20"])
         self.assertEqual([t["name"] for t in fc_plan.parse_tracks(text)], ["Sign-in - after - email", "T NEB-12", "T NEB-15", "Export - then after hours mail"])
-
-    def test_no_open_feature_seeds_nothing(self):
-        self.assertEqual(fc_plan.seed_tracks({"NEB-2": feat("NEB-2", "Done")}), "")

@@ -20,11 +20,6 @@ class Checks(unittest.TestCase):
         (self.bin / tool).write_text(f"#!/bin/sh\n{body}\n")
         (self.bin / tool).chmod(stat.S_IRWXU)
 
-    def test_owned_links(self):
-        co, h = Path("/co"), self.home
-        self.assertEqual(C.owned_links(co), [("compose CLI link", h / ".local/bin/compose", co / "bin/compose"),
-                                             ("compose skill link", h / ".claude/skills/compose", co), ("bp link", h / ".local/bin/bp", co / "bp/bin/bp.mjs")])
-
     def test_link_state(self):
         (self.home / "real").write_text("x")
         (self.home / "hop").symlink_to(self.home / "real")
@@ -81,12 +76,6 @@ class Machine(unittest.TestCase):
 
     def ago(self, seconds):
         return (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%S.123456789Z")
-
-    def test_on_battery_reads_pmset_and_is_false_without_it(self):
-        self.assertFalse(C.on_battery())
-        for out, want in (("Now drawing from 'Battery Power'", True), ("Now drawing from 'AC Power'", False)):
-            self.fake("pmset", f'[ "$*" = "-g batt" ] || exit 9\necho "{out}"')
-            self.assertIs(C.on_battery(), want)
 
     def batt(self, power, pct):
         self.fake("pmset", f"echo \"Now drawing from '{power}'\"\necho \" -InternalBattery-0 (id=4653155)\t{pct}%; discharging; 3:12 remaining present: true\"")
@@ -210,19 +199,3 @@ class Startup(unittest.TestCase):
         self.docker('case "$1" in info) exit 0;; ps) case "$*" in *unhealthy*) ;; *) echo db;; esac;; esac')
         self.assertEqual(C.docker_problems(self.wt), [])
         self.assertEqual(C.docker_line(self.wt), "docker: 1 container up, none unhealthy")
-
-    def test_startup_lines_cover_power_docker_every_database_and_sleep(self):
-        self.fake("pmset", "echo \"Now drawing from 'AC Power'\"\necho \" -InternalBattery-0\t88%; charging\"")
-        with mock.patch.object(platform, "system", return_value="Linux"):
-            lines = C.startup_lines(self.wt, {".env DATABASE_URL": "localhost:5433/dtt", "app/.env DATABASE_URL": "localhost:5433/app"})
-        self.assertEqual(lines, ["startup  power: AC 88%", "startup  docker: not installed", "startup  database: .env DATABASE_URL -> localhost:5433/dtt",
-                                 "startup  database: app/.env DATABASE_URL -> localhost:5433/app", "startup  sleep: no caffeinate here; keep the machine from sleeping yourself"])
-        self.fake("pmset", "echo \"Now drawing from 'Battery Power'\"\necho \" -InternalBattery-0\t40%; discharging\"")
-        self.fake("caffeinate", "")
-        (self.wt / "compose.yaml").write_text("")
-        with mock.patch.object(platform, "system", return_value="Darwin"), mock.patch.dict(os.environ, {"COMPOSE_NO_AWAKE": "1"}):
-            power, docker, db, sleep = C.startup_lines(self.wt, {})
-        self.assertEqual((power, docker, db), ("startup  power: battery 40%", "startup  docker: not installed (compose.yaml is here)", "startup  database: no database URL in the env files"))
-        self.assertEqual(sleep, "startup  sleep: COMPOSE_NO_AWAKE is set, so the Mac may sleep during the work")
-        with mock.patch.object(platform, "system", return_value="Darwin"):
-            self.assertEqual(C.awake_line(), "sleep: caffeinate holds the Mac awake for as long as this command lives (a closed lid on battery still sleeps it)")

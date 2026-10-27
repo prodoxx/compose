@@ -1,8 +1,0 @@
-LIMIT_LINE
-LIMIT_READ
-LIMIT_HOLD
-AGENT_STALL_SECONDS
-limit_line
-limit_spells
-last_commit
-silent_stalls

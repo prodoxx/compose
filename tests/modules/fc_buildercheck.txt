@@ -1,2 +1,0 @@
-BUILDER_CHECK_BRIEF
-cmd_buildercheck

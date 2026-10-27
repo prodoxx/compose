@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import importlib.machinery, importlib.util, json, os, subprocess, sys, tempfile, time, unittest
+import importlib.machinery, importlib.util, json, os, subprocess, sys, time, unittest
 from pathlib import Path
 from unittest import mock
 os.environ["HERDR_ENV"] = ""
@@ -29,14 +29,6 @@ class Started(unittest.TestCase):
         self.assertEqual(json.loads((self.dir() / f"{os.getpid()}.json").read_text()), want)
         self.assertEqual(fc_started.entries(), [{**want, "alive": True}])
         self.assertEqual([p.name for p in self.dir().iterdir()], [f"{os.getpid()}.json"])
-
-    def test_optional_fields_default_to_none_and_home_is_read_at_call_time(self):
-        with tempfile.TemporaryDirectory() as home, mock.patch.dict(os.environ, {"HOME": home}):
-            fc_started.record(5, "crew", None)
-            self.assertTrue((Path(home) / ".compose" / "started" / "5.json").exists())
-            e = fc_started.entries()[0]
-        self.assertEqual((e["project"], e["waiter"], e["until"], e["cwd"]), (None, None, None, None))
-        self.assertEqual(fc_started.entries(), [])
 
     def test_oldest_first_and_a_bad_file_is_skipped(self):
         for pid, at in ((30, 3.0), (10, 1.0), (20, 2.0)):

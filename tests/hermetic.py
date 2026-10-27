@@ -7,7 +7,7 @@ process or any subprocess) fails, naming the files, never their content.
 Nor does a test reach the real machine: `lsof` and `herdr` on PATH are fakes (see guard_dir). The fake lsof answers only for the
 listeners a test registers with listen() and, for a port the call names, the machine's socket table (netstat), so it never walks the machine's processes; the fake herdr answers its version and integration status and fails
 the test that ran any other call, naming it. Every process a test registers is killed when the test ends."""
-import atexit, hashlib, json, os, pwd, shutil, signal, sys, tempfile, time, unittest
+import atexit, hashlib, json, os, pwd, shutil, signal, subprocess, sys, tempfile, time, unittest
 from pathlib import Path
 from unittest import mock
 
@@ -146,7 +146,7 @@ def temp_home():
     (home / ".graft").mkdir()
     (home / ".graft" / "update-check.json").write_text(json.dumps({"latest": None, "checkedAt": int(time.time() * 1000)}))
     return {"HOME": str(home), "COMPOSE_CONFIG": str(home / ".compose" / "config.json"), "DO_NOT_TRACK": "1", "COMPOSE_NO_PREFLIGHT": "1", "COMPOSE_NO_AWAKE": "1", "COMPOSE_NO_LOAD": "1",
-            "PATH": guarded_path(), "COMPOSE_TEST_GUARD": str(home / "guard"),
+            "PATH": guarded_path(), "COMPOSE_TEST_GUARD": str(home / "guard"), **git_env(),
             "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
 
 
@@ -201,6 +201,27 @@ def guard_dir():
             (_guard / name).write_text(body)
             _chmod(_guard / name, 0o755)
     return _guard
+
+
+_git_env = None
+
+
+def git_env():
+    """On macOS /usr/bin/git is an xcrun shim that costs ~7 ms a call on top of git's own ~4, and the suite makes tens of
+    thousands of git calls. guard_dir gets a link to the real git; git finds its helpers through the link only when told where."""
+    global _git_env
+    if _git_env is None:
+        _git_env = {}
+        if sys.platform == "darwin" and shutil.which("git") == "/usr/bin/git":
+            try:
+                real = Path(subprocess.run(["xcrun", "-f", "git"], capture_output=True, text=True, timeout=10).stdout.strip())
+            except (OSError, subprocess.SubprocessError):
+                real = Path()
+            core, templates = real.parents[1] / "libexec" / "git-core", real.parents[1] / "share" / "git-core" / "templates"
+            if real.name == "git" and real.is_file() and core.is_dir():
+                (guard_dir() / "git").symlink_to(real)
+                _git_env = {"GIT_EXEC_PATH": str(core), **({"GIT_TEMPLATE_DIR": str(templates)} if templates.is_dir() else {})}
+    return _git_env
 
 
 def guarded_path():

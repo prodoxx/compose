@@ -1,5 +1,0 @@
-reason
-prompt_text
-writer_live
-reprompt
-restartable

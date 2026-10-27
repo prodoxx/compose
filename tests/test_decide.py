@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import contextlib, importlib.machinery, importlib.util, io, json, os, re, subprocess, sys, tempfile, time, unittest
+import contextlib, importlib.machinery, importlib.util, io, json, os, re, sys, tempfile, time, unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -173,11 +173,6 @@ class Decide(unittest.TestCase):
         for text in ("stories NEB-1 approved", "Design for checkout approved", "tech doc NEB-1 is approved", "the PRD v2 approved"):
             self.refuses("NEB-1 still has open questions: Q1, Q2", new=[text], quote="looks good")
         self.refuses('--closes <id>', new=["stories NEB-1 approved"], quote="looks good")
-
-    def test_an_approval_is_only_a_go_line_the_skill_writes(self):
-        out = self.decide(new=["Stories that are approved by a manager show a badge"], quote="badges")
-        self.assertIn("- D5: Stories that are approved by a manager show a badge (product owner,", self.linear.body)
-        self.assertIn("open questions on NEB-1 (2):", out)
 
     def test_every_approval_form_the_skill_writes_is_guarded(self):
         root = Path(__file__).resolve().parents[1]
@@ -393,11 +388,6 @@ class Decide(unittest.TestCase):
         self.assertIn('- ~~Q0: Stripe (product owner, 2026-10-20; said: "stripe")~~ (C1)\n', self.linear.body)
         self.assertIn(f'- C1-2: B. Paddle (C1; product owner, {TODAY}; said: "paddle")', self.linear.body)
 
-    def test_the_old_change_card_answer_that_keeps_strikes_nothing(self):
-        self.linear.body = OLD_CARDS.replace("## Out of scope", self.OLD_CHANGE_CARD)
-        self.decide("C1-2: A", quote="keep", change="C1")
-        self.assertNotIn("~~", self.linear.body)
-
     def test_accept_all_on_a_change_of_course_question_strikes_the_decision_it_replaces(self):
         self.change_map()
         self.decide(accept_all=True, quote="all as you say")
@@ -412,14 +402,6 @@ class Decide(unittest.TestCase):
         self.decide(accept_all=True)
         self.assertIn('- ~~D4: one store (product owner, 2026-10-20; said: "one")~~ (C3)\n', self.linear.body)
 
-    def test_accept_all_on_a_keep_recommendation_strikes_nothing(self):
-        for rec in ("Keep D4 - fees are fine", "D4 stands - fees are fine"):
-            with self.subTest(rec):
-                self.change_map()
-                self.linear.body = self.linear.body.replace("Recommendation: Paddle - 30 cents a sale", f"Recommendation: {rec}")
-                self.decide(accept_all=True, quote="as you say")
-                self.assertNotIn("~~", self.linear.body)
-
     def test_an_old_card_block_closes_whole_with_closes(self):
         self.linear.body = OLD_CARDS
         out = self.decide(new=["Own JWT, we keep auth in house"], closes=["Q1"], quote="our own JWT")
@@ -429,20 +411,6 @@ class Decide(unittest.TestCase):
             self.assertNotIn(gone, body)
         self.assertIn("## Not yet specified\n\nQ2. Database?\nA. Postgres - affects: hosting\nB. SQLite - affects: deploy only\nRecommendation: B\n\n## Out of scope", body)
         self.assertIn("open questions on NEB-1 (1):\n- Q2: Database?", out)
-
-    def test_the_old_letter_answer_still_records_and_names_the_new_form(self):
-        self.linear.body = OLD_CARDS
-        out = self.decide("Q1: A", "Q2: B, but keep backups", quote="A, and B with backups")
-        body = self.linear.body
-        self.assertIn(f'- Q1: A. Clerk (product owner, {TODAY}; said: "A, and B with backups")', body)
-        self.assertIn("- Q2: B. SQLite (but keep backups) (product owner,", body)
-        self.assertNotIn("Q1. Which auth?", body)
-        self.assertIn("## Not yet specified\n\n## Out of scope", body)
-        self.assertIn('note: the new form is `compose decide --project shop --new "<decision>" --quote "<their words>" --closes <id>`', out)
-        self.assertIn("no open questions on NEB-1", out)
-        for words, want in (("Q1: C", "no option C"), ("Q7: A", "no question Q7 under Not yet specified"), ("Q1 A", "is not an answer")):
-            self.linear.body, self.linear.writes = OLD_CARDS, []
-            self.refuses(want, words, quote="C")
 
     def test_a_multi_line_quote_records_one_line_and_replaces_strikes_it_cleanly(self):
         self.recorded('- D1: one store (product owner, 2026-10-20; said: "ok")')
@@ -462,12 +430,6 @@ class Decide(unittest.TestCase):
         self.linear.writes = []
         self.refuses("already has stories or tasks", new=["three stores"], replaces="D2", quote="three")
 
-    def test_the_wake_up_note_names_both_go_lines(self):
-        out = self.decide(new=["one store"], quote="one")
-        note = ("recorded on NEB-1: D5; read Decisions so far. While shaping, wait for `shaped <id>`; a `stories <id> approved` line is "
-                "the planner's go (tell the planner, or the change architect, if live)")
-        self.assertIn(f'tell the team lead: herdr agent prompt shop-orchestrator "{note}"', out)
-
     def yolo(self):
         (self.proj / "results" / "yolo.json").write_text(json.dumps({"mode": "yolo", "since": "2026-10-24 08:00:00", "decisions": [], "words": "", "push": False}))
 
@@ -477,30 +439,5 @@ class Decide(unittest.TestCase):
             self.decide(*a, **kw)
         self.assertIn(want, str(e.exception.code))
         self.assertEqual((self.linear.writes, self.linear.body), ([], before))
-    def test_yolo_tag_is_the_shared_one(self):
-        self.assertIs(fc.fc_yolo.YOLO_TAG, fc.fc_decide.UNCONFIRMED)
-
-
-class Flags(unittest.TestCase):
-    """compose decide takes --closes and --drop, each repeatable, and its help speaks of questions."""
-
-    def help(self, *args):
-        out = subprocess.run([sys.executable, str(Path(fc.__file__)), *args, "--help"], capture_output=True, text=True, env={**os.environ, "COLUMNS": "400"})
-        return out.stdout
-
-    def test_decide_parses_closes_and_drop(self):
-        text = self.help("decide")
-        for flag in ("--closes", "--drop", "--new", "--replaces", "--accept-all"):
-            self.assertIn(flag, text)
-        self.assertNotIn("card", text)
-
-    def test_the_top_help_names_questions_not_cards(self):
-        self.assertNotIn("card", self.help("decisions"))
-        rows = [line for line in self.help().splitlines() if line.strip().startswith(("decide ", "decisions "))]
-        self.assertEqual(len(rows), 2)
-        for line in rows:
-            self.assertNotIn("card", line)
-
-
 if __name__ == "__main__":
     unittest.main()

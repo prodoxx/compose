@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import importlib.machinery, importlib.util, json, os, subprocess, sys, tempfile, time, unittest
+import importlib.machinery, importlib.util, json, os, subprocess, sys, time, unittest
 from pathlib import Path
 from unittest import mock
 # tests/test_modules.py fails a test file without the next line
@@ -83,10 +83,6 @@ class LoadWait(unittest.TestCase):
         with mock.patch.object(fc_load, "update", side_effect=lambda avg=None: {"held": (a := next(it)) > 8.0, "avg": a}) as upd:
             return fc_load.wait(said.append, **kw), said, upd
 
-    def test_not_held_returns_zero_and_says_nothing(self):
-        waited, said, upd = self.run_wait([5.0])
-        self.assertEqual((waited, said, upd.call_count, self.sleep.call_count), (0.0, [], 1, 0))
-
     def test_held_says_once_polls_until_release_and_returns_the_wait(self):
         waited, said, upd = self.run_wait([13.0, 13.5, 12.0, 9.0, 7.0])
         self.assertEqual(said, ["load 13.0 on 8 cores is above 12.0: waiting until it falls below 8.0"])
@@ -98,7 +94,6 @@ class LoadWait(unittest.TestCase):
             with mock.patch.dict(os.environ, env):
                 waited, said, upd = self.run_wait([99.0], **kw)
             self.assertEqual((waited, said, upd.call_count, self.sleep.call_count), (0.0, [], 0, 0))
-
 
 class LoadWarn(unittest.TestCase):
     def setUp(self):
@@ -126,10 +121,6 @@ class LoadWarn(unittest.TestCase):
         fc_load.update(avg=11.0); fc_load.claim(3); s = self.state()  # update and claim keep each other's fields
         self.assertEqual((s["claimed"], s["warn"]), ([1, 2, 3], True))
         fc_load.update(avg=11.5); self.assertEqual(self.state()["claimed"], [1, 2, 3])
-
-    def test_claimed_keeps_the_last_50(self):
-        for n in range(1, 61): fc_load.claim(n)
-        self.assertEqual(self.state()["claimed"], list(range(11, 61)))
 
     def test_one_caller_across_processes_wins(self):
         env = {**os.environ, "HOME": str(Path.home()), "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "bin")}

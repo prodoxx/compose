@@ -57,8 +57,7 @@ class ProjectBranch(unittest.TestCase):
 
     def test_init_names_and_stores_the_project_branch_from_branch_prefix(self):
         ws = {"branch_prefix": "top/", "workspace": "w", "workspaces": {"w": {"branch_prefix": "ws/"}}}
-        for cfg, args, want in (({}, (), "compose/p"), ({"branch_prefix": ""}, (), "p"), ({"branch_prefix": "team/"}, (), "team/p"),
-                                (ws, (), "ws/p"), (ws, ("--branch", "js-1-p"), "js-1-p")):
+        for cfg, args, want in (({}, (), "compose/p"), ({"branch_prefix": ""}, (), "p"), (ws, (), "ws/p")):
             with self.subTest(cfg=cfg, args=args):
                 self.r, self.run = repo()
                 self.config(cfg)
@@ -89,12 +88,6 @@ class ProjectBranch(unittest.TestCase):
         self.cli("clean", "--project", "p")
         self.assertNotIn("task_prefix", json.loads(f.read_text()))
 
-    def test_clean_still_removes_a_legacy_projects_merged_task_branches(self):
-        self.cli("init", "--project", "p")
-        for b in ("fast/p/001", "fast/p/tests-001"):
-            self.run("branch", b, "compose/p")
-        self.cli("clean", "--project", "p")
-        self.assertEqual([b for b in self.branches() if b.startswith("fast/")], [])
 
 
 class LocallyMergedLayers(unittest.TestCase):
@@ -248,10 +241,6 @@ print(json.dumps([{"number": 7, "mergedAt": "2026-10-15T00:00:00Z"}] if head in 
         self.assertEqual(sorted(ids), ["001", "003"])
         self.assertFalse(project_merged)
 
-    def test_a_task_proven_merged_by_its_branch_and_its_layer_is_counted_once(self):
-        self.linear_project()
-        ids, _ = self.merged_ids()
-        self.assertEqual(sorted(ids), ["001", "003"])
 
 
 class ProjectBranchNamedFirst(unittest.TestCase):
@@ -273,7 +262,6 @@ class ProjectBranchNamedFirst(unittest.TestCase):
 
     def test_each_why_reads_after_the_branch_name(self):
         for branch, land, why, delete_unmerged in (
-                ("compose/p", lambda r, run, proj: run("merge", "-q", "--ff-only", "compose/p"), "contained in main", False),
                 ("compose/p", lambda r, run, proj: run("cherry-pick", "-x", "compose/p"), "contained in main by patch", False),
                 ("compose/p", self.same_change_with_more, "merging it into main changes nothing", False),
                 ("compose/p", lambda r, run, proj: None, "UNMERGED, removed on --delete-unmerged", True)):

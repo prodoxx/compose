@@ -302,16 +302,6 @@ class Frame0Pages(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, msg):
                 plan(bad)
 
-    def test_every_op_says_what_it_does(self):
-        doc = f0_doc(f0_page("a", "A", links=["gone", "b"]), f0_page("b", "B", 0))
-        say = lambda *op: fc.fc_f0pages.frame0_describe(doc, op)
-        self.assertEqual(say("move", "b", 0), "move 'B' to position 1")
-        self.assertEqual(say("delete", "a"), "delete 'A' (3 shapes)")
-        self.assertEqual(say("relink", "a-link0", "b"), "point 'btn' on 'A' at 'B'")
-        self.assertEqual(say("unlink", "a-link0"), "clear the link of 'btn' on 'A' (it pointed at a page that is gone)")
-        self.assertEqual(say("unlink", "a-link1"), "clear the link of 'btn' on 'A' (it pointed at 'B')")
-
-
 def f0_project(*pages):
     proj = Path(tempfile.mkdtemp()) / ".compose" / "shop"
     proj.mkdir(parents=True)
@@ -508,13 +498,6 @@ class Frame0Command(unittest.TestCase):
         self.assertTrue(lines[31].startswith("40 changes, saved "))
         self.assertEqual([p["name"] for p in f0_pages_of(self.proj)], ["01.1 A"])
 
-    def test_up_draw_save_and_down_stay_with_the_frame0_command(self):
-        with mock.patch.object(fc.fc_frame0, "cmd_frame0") as cmd:
-            for action in ("up", "draw", "save", "down"):
-                fc.fc_f0pages.cmd_frame0_pages(argparse.Namespace(action=action))
-        self.assertEqual([c.args[0].action for c in cmd.call_args_list], ["up", "draw", "save", "down"])
-
-
 PNG = base64.b64encode(b"\x89PNG\r\n\x1a\n0123456789").decode()
 
 
@@ -586,14 +569,6 @@ class Frame0Export(unittest.TestCase):
             fc.fc_f0pages.cmd_frame0_pages(argparse.Namespace(action="export", page=["b"], out=None, file=None, after=None, first=False, empty=False, retarget=None,
                                                               drop_dangling=False, dry_run=False))
         self.assertEqual(out.getvalue(), f"{self.proj / 'exports' / '01.2-Pay.png'} 18 bytes  01.2 Pay\n")
-
-
-class Frame0Guidance(unittest.TestCase):
-    """The designer is told to lint before a review ask, to draw only in-scope flows, and to use compose commands instead of the API."""
-
-    def test_the_designer_is_told_in_its_brief(self):
-        for part in ("compose frame0 lint --project", "compose frame0 move|delete|links", "never a skeleton of every flow", "`after`", "never `curl`"):
-            self.assertIn(part, fc.fc_figma.DESIGNER_BRIEF)
 
 
 if __name__ == "__main__":

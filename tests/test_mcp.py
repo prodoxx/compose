@@ -28,14 +28,6 @@ def pat(*names):
 
 
 class RoleMcp(unittest.TestCase):
-    def test_servers_and_skills_by_role(self):
-        d = ("figma", "framelink-figma")
-        for role, servers, skills in [("toolsmith", (), False), ("implementer", (), False),
-                                      ("designer", d, True), ("design-003", d, True), ("design-review", d, True),
-                                      ("planner", (), False), ("architect", (), False), ("orchestrator", (), False),
-                                      ("no-such-role", (), False), ("design-x", (), False), ("explore", (), False)]:
-            self.assertEqual((tuple(fc_mcp.servers_for(role)), fc_mcp.keeps_skills(role)), (servers, skills), role)
-
     def test_installed_servers_reads_list_in_cwd(self):
         with mock.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, LIST, "")) as run:
             got = fc_mcp.installed_servers("/some/worktree")

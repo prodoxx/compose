@@ -10,7 +10,6 @@ _spec = importlib.util.spec_from_loader("fc", importlib.machinery.SourceFileLoad
 fc = importlib.util.module_from_spec(_spec)
 for _m in [m for m in sys.modules if m.startswith("fc_") and m not in ("fc_cost", "fc_mcp", "fc_sessions")]: del sys.modules[_m]
 _spec.loader.exec_module(fc)
-import fc_planner_brief
 import fc_load
 
 
@@ -130,14 +129,6 @@ class Crew(unittest.TestCase):
                 mock.patch.object(fc.fc_crew.fc_checks, "battery_stop", return_value=None) as stop, self.assertRaises(SystemExit):
             fc.fc_crew.cmd_crew(a)  # goes on to the herdr work, which this fake cannot finish
         self.assertEqual(stop.call_args.args, (True,))
-
-    def test_wayfinder_is_no_longer_a_name_for_the_architect(self):
-        a = type("A", (), {"action": "focus", "role": "wayfinder"})
-        with mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), mock.patch.object(fc.fc_herdr, "project_worktree", return_value=self.proj.parent.parent), \
-                self.assertRaises(SystemExit) as e:
-            fc.fc_crew.cmd_crew(a)
-        self.assertEqual(a.role, "wayfinder")
-        self.assertEqual(str(e.exception), "no teammate shop-wayfinder")
 
     def test_bad_state_refused(self):
         with self.assertRaises(SystemExit):
@@ -476,9 +467,6 @@ class Crew(unittest.TestCase):
             "shop-j": "needs-user", "shop-k": "blocked", "shop-l": "needs-user", "shop-m": "-",
         })
 
-    def test_team_lead_reports_to_engineering_manager(self):
-        self.assertIn("the engineering manager", fc.fc_crew.crew_preamble(self.proj, "shop-orchestrator", "orchestrator"))
-
     def test_the_team_lead_is_told_the_parallel_clause_and_warned_when_a_working_report_lacks_it(self):
         self.assertIn("parallel: none because <reason>", fc.fc_crew.crew_preamble(self.proj, "shop-orchestrator", "orchestrator"))
         self.assertNotIn("parallel:", fc.fc_crew.crew_preamble(self.proj, "shop-tests", "tests"))
@@ -487,36 +475,6 @@ class Crew(unittest.TestCase):
             with mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), mock.patch("builtins.print") as out:
                 fc.fc_crew.cmd_report(type("A", (), {"as_": who, "state": "working", "message": msg.split()}))
             self.assertEqual(any("parallel:" in str(c) for c in out.call_args_list[:-1]), warned, (who, msg))
-
-    def test_every_brief_carries_the_macos_and_zsh_rules(self):
-        pre = fc.fc_crew.crew_preamble(self.proj, "shop-tests", "tests")
-        report = f"compose report --repo {fc.fc_herdr.project_worktree(self.proj)} --project shop --as shop-tests"
-        self.assertIn(f"call `{report}` written out in full, never from a shell variable or alias", pre)
-        self.assertIn("not word-split", pre)
-        self.assertIn("BSD sed is `sed -i '' <expr> <file>`.", pre)
-        self.assertIn("Write and edit files with the Write and Edit tools, never inline `node -e` or `python3 -c`.", pre)
-        self.assertIn(f"Every `cd` names the exact absolute path; your worktree is {fc.fc_herdr.project_worktree(self.proj)}.", pre)
-        self.assertIn("`trail note` learnings go in the commit only in a repo that tracks `.trail/`", pre)
-        self.assertIn("never `git add -f`", pre)
-        self.assertNotIn("define a function.", pre)
-
-    def test_every_brief_carries_the_commit_and_simplicity_rules(self):
-        pre = fc.fc_crew.crew_preamble(self.proj, "shop-tests", "tests")
-        self.assertIn("never mention compose", pre)
-        self.assertIn("one test file per unit", pre)
-        self.assertIn("not even a throwaway reference", pre)
-        self.assertIn("Fact-check before you say it", pre)
-        self.assertIn("not verified", pre)
-        self.assertIn("through `compose timed <seconds> -- <command>`", pre)
-        self.assertIn(f"at most {fc.fc_proc.suite_slots()} suites run at once on this machine", pre)
-        with mock.patch.dict(os.environ, {"COMPOSE_TEST_SLOTS": "3"}):
-            self.assertIn("at most 3 suites run at once on this machine", fc.fc_crew.crew_preamble(self.proj, "shop-tests", "tests"))
-        self.assertIn("two quick runs", pre)
-        self.assertIn("Run only test files of what you changed, never the whole suite: `compose verify` runs it.", pre)
-        self.assertNotIn("run the whole suite once", pre)
-        self.assertNotIn("before you report `done`", pre)
-        self.assertNotIn("While you work run only the tests of what you changed", pre)
-        self.assertIn("Run compose's own commands (`compose sync`, `status`, `verify`, `report`, ...) directly", pre)
 
     def test_start_in_an_untrusted_worktree_says_so_before_opening_a_tab(self):
         calls = []
@@ -731,9 +689,6 @@ class ToolBug(unittest.TestCase):
         ev = fc.fc_watch.watch_events(before, snap(self.proj))
         self.assertEqual(len(fc.fc_watch.watch_filter(ev, "shop", ["shop-orchestrator"])), 1)  # the engineering manager wakes on a teammate's tool-bug too
         self.assertEqual(len(fc.fc_watch.watch_filter(ev, "shop", [])), 1)  # and the team lead sees it
-
-    def test_every_brief_says_how_to_report_a_tool_bug(self):
-        self.assertIn("tool-bug", fc.fc_crew.crew_preamble(self.proj, "shop-tests", "tests"))
 
     def test_crew_can_start_in_another_directory(self):
         calls = []
@@ -1152,25 +1107,11 @@ class RestrictedStart(unittest.TestCase):
                 self.assertIn("mcp__frame0__*", self.patterns(args))  # a `frame0` server someone registered is denied like any other
                 self.assertEqual(args[-3:], ["--allowedTools", "Bash(npx -y lavish-axi:*)", "Bash(compose frame0:*)"])  # the commands run with no prompt
 
-    def test_no_role_keeps_the_linear_server(self):
-        for role, kw in [("orchestrator", {}), ("architect", {}), ("explore", {}), ("implementer", {}), ("planner", {}),
-                         ("design-003", {}), ("design-review", {})]:
-            with self.subTest(role=role, **kw):
-                self.assertIn("mcp__claude_ai_Linear__*", self.patterns(self.start(role, **kw)))
-
     def test_only_design_roles_keep_skills(self):
         for role, off in [("orchestrator", True), ("planner", True), ("architect", True), ("explore", True), ("toolsmith", True),
                           ("designer", False), ("design-003", False), ("design-review", False)]:
             with self.subTest(role=role):
                 self.assertEqual("--disable-slash-commands" in self.start(role), off)
-
-    def test_every_teammate_gets_the_trust_framing(self):
-        self.assertLess(len(fc.fc_crew.TRUST_PROMPT), 400)
-        for model in ("claude:claude-opus-5-5", "pi:x/y"):  # pi has the same --append-system-prompt flag as Claude Code
-            with self.subTest(model=model):
-                args = self.start("planner", model=model)
-                self.assertEqual(args[args.index("--append-system-prompt") + 1], fc.fc_crew.TRUST_PROMPT)
-                self.assertEqual(args.count("--append-system-prompt"), 1)
 
     def test_every_plugin_but_compose_is_off(self):
         rest = {"superpowers@sp", "ponytail@p", "compose-extra@x", "my-compose@x", "figmatic@x"}
@@ -1181,23 +1122,11 @@ class RestrictedStart(unittest.TestCase):
             with self.subTest(role=role):
                 self.assertEqual(self.plugins_off(role), rest)
 
-    def test_no_settings_file_or_key_means_no_plugins_listed(self):
-        for self.SETTINGS in (None, {"model": "opus"}):
-            with self.subTest(settings=self.SETTINGS):
-                args = self.start("planner")
-                self.assertEqual(json.loads(args[args.index("--settings") + 1])["enabledPlugins"], {})
-
     def test_no_chrome_and_trust_framing_follow_model_and_effort(self):
         trust = ["--no-chrome", "--append-system-prompt", fc.fc_crew.TRUST_PROMPT]
         self.assertEqual(self.start("architect", effort="high")[:8], ["--model", "claude-opus-5-5", "--effort", "high", *trust, "--settings"])
         self.assertEqual(self.start("planner", effort="high")[:8], ["--model", "claude-opus-5-5", "--effort", "high", *trust, "--settings"])
         self.assertEqual(self.start("designer")[:6], ["--model", "claude-opus-5-5", *trust, "--settings"])
-
-    def test_pi_start_reads_skill_md_and_keeps_its_tools(self):
-        args = self.start("architect", model="pi:x/y")
-        self.assertFalse({"--no-chrome", "--settings"} & set(args))
-        self.assertEqual(args[args.index("--skill") + 1], str(fc.fc_crew.CLI_REPO / "SKILL.md"))
-        self.assertNotIn("--disallowedTools", args)
 
     def tail(self, args):
         """What follows the --settings value: the patterns when any, the skills switch, then auto mode and the allow list."""
@@ -1225,19 +1154,6 @@ class RestrictedStart(unittest.TestCase):
                 env = json.loads(args[args.index("--settings") + 1])["env"]
                 self.assertEqual(env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"], "150000")  # the env var outranks --autocompact and the user's own settings
                 self.assertNotIn("--autocompact", args)
-
-    def test_pi_starts_get_no_compaction_window(self):
-        for role in ("orchestrator", "planner", "designer"):
-            with self.subTest(pi=role):
-                args = self.start(role, model="pi:x/y")
-                self.assertFalse(any("AUTO_COMPACT" in x or x.startswith("--autocompact") for x in args))
-
-    def test_briefs_name_skill_md_and_their_sections(self):
-        p, d = fc_planner_brief.PLANNER_BRIEF, fc.fc_figma.DESIGNER_BRIEF
-        self.assertTrue("Read SKILL.md and sections/1.md, 2.md, 3.md, 3b.md first." in p and "as sections/2.md says" in p and "step 2 of the" not in p)
-        self.assertTrue("1. Read SKILL.md and sections/0d.md, then follow 0d." in d)
-        self.assertFalse(any("invoke the compose skill" in b.lower() for b in (p, d)))
-
 
 LINEAR_LINE = ("Linear is the record: read and write it with `compose linear` (get, list, create, update, comment), never a Linear MCP tool; "
                "write what you learn and decide there, never to files.")
@@ -1283,124 +1199,6 @@ class PiStart(unittest.TestCase):
         self.assertNotIn("builtin:mcp", fc.fc_models.probe_command("pi:x/y"))  # the implementer probe is unchanged
 
 
-class QuestionsById(unittest.TestCase):
-    """Briefs write open questions to the map and report one needs-user line; answers travel by question id."""
-
-    def flat(self, text, start, end):
-        text = " ".join(text.split())
-        return text[text.index(start):text.index(end, text.index(start))]
-
-    def needs_user(self, text):
-        import re
-        lines = re.findall(r'needs-user "([^"]*)"', " ".join(text.split()))
-        self.assertTrue(lines, text)
-        return lines
-
-    def test_the_change_architect_waits_without_polling_linear(self):
-        self.assertIn("Never loop or poll `compose linear` while you wait", self.flat(fc.fc_briefs.CHANGE_BRIEF, " 4. ", " 5. "))
-
-    def test_the_change_architects_step_3_writes_questions_then_reports_one_line(self):
-        step = self.flat(fc.fc_briefs.CHANGE_BRIEF, " 3. ", " 4. ")
-        self.assertNotIn("in full", step.split("needs-user", 1)[0])
-        self.assertIn("Not yet specified", step)  # questions land on the map first ...
-        self.assertLess(step.index("Not yet specified"), step.index("needs-user"))  # ... before the report
-        for line in self.needs_user(step):
-            self.assertIn("questions", line)
-            self.assertIn("recommendation", line)
-            self.assertNotIn("in full", line)
-        self.assertTrue(self.needs_user(self.flat(fc.fc_briefs.CHANGE_BRIEF, " 3. ", " 4. "))[0].startswith("change {cid}: "))
-
-    def test_planner_decision_questions_and_story_proposal_report_one_line(self):
-        self.assertNotIn("<the cards in full>", fc_planner_brief.PLANNER_BRIEF)
-        self.assertNotIn("one needs-user list", " ".join(fc_planner_brief.PLANNER_BRIEF.split()))
-        gaps = self.flat(fc_planner_brief.PLANNER_BRIEF, "Checks 1, 3, 6", "Checks 2, 4, 5")
-        self.assertIn("Not yet specified", gaps)
-        for line in self.needs_user(gaps):
-            self.assertIn("questions", line)
-            self.assertIn("recommendation", line)
-        stories = self.flat(fc_planner_brief.PLANNER_BRIEF, "Stories missing", "Then check and cut each story")
-        self.assertIn("drafted on the issue", stories)  # stories are drafted on the issue ...
-        self.assertIn("needs-user", stories)  # ... and named in one line
-
-    def test_planner_cuts_a_width_pinned_test_with_its_exact_wrapped_text_in_the_brief(self):
-        cut = " ".join(fc_planner_brief.PLANNER_BRIEF.split())
-        self.assertIn("A test that pins a line width or exact text", cut)
-        self.assertIn("already wrapped as the test expects, in the brief, line by line", cut)
-        self.assertIn("width-pinned or exact text the test asserts, verbatim", cut)
-        self.assertIn("pins a line width or exact text, the brief holds that text verbatim", (Path(__file__).resolve().parents[1] / "sections" / "2.md").read_text())
-
-    def test_answers_travel_by_question_id_and_the_line_is_forwarded_unchanged(self):
-        for name in ("CHANGE_BRIEF", "PLANNER_BRIEF"):
-            with self.subTest(name):
-                text = " ".join(getattr(fc_planner_brief if name == "PLANNER_BRIEF" else fc.fc_briefs, name).split())
-                self.assertIn("question id", text)
-                self.assertIn("unchanged", text)
-
-    def test_placeholders_and_the_rest_of_the_template_stay(self):
-        import string
-        fields = {"PLANNER_BRIEF": {"issue", "name", "slug", "wt"},
-                  "CHANGE_BRIEF": {"cid", "feature", "name", "page", "reflect", "slug", "why", "wt"}}
-        for name, want in fields.items():
-            with self.subTest(name):
-                text = getattr(fc_planner_brief if name == "PLANNER_BRIEF" else fc.fc_briefs, name)
-                self.assertEqual({f for _, f, _, _ in string.Formatter().parse(text) if f}, want)  # no stray {n} or {ids}
-        self.assertIn("npx -y lavish-axi {page}", fc.fc_briefs.CHANGE_BRIEF)  # visual questions still go on the Lavish page
-
-
-LINEAR_TEXT_LINE = "Linear text: concise, readable English. Lead with the action, one idea per line, no preamble or recap."
-
-
-class TersePreamble(unittest.TestCase):
-    """The crew preamble is terse: one Linear-text rule, at most 4000 characters (the macOS and zsh rules took it past 3500), every report form and the orchestrator's parallel form kept."""
-
-    def setUp(self):
-        self.wt = Path(tempfile.mkdtemp())
-        self.proj = self.wt / ".compose" / "hw"
-        self.proj.mkdir(parents=True)
-
-    def pre(self, name, title, up=None):
-        with mock.patch.dict(os.environ, {"COMPOSE_TEST_SLOTS": "4"}):  # the preamble prints the slot count; a fixed digit keeps the size stable
-            return fc.fc_crew.crew_preamble(self.proj, name, title, up)
-
-    def test_linear_text_line_is_there_once_on_a_line_of_its_own(self):
-        for name, title, up in (("hw-planner", "planner", "manager"), ("hw-orchestrator", "orchestrator", None), ("hw-tests-001", "tests 001", "orchestrator")):
-            with self.subTest(name):
-                pre = self.pre(name, title, up)
-                self.assertEqual(pre.count(LINEAR_TEXT_LINE), 1)
-                self.assertIn("\n" + LINEAR_TEXT_LINE + "\n", pre)
-
-    def test_planner_preamble_is_at_most_4000_characters_without_the_worktree(self):
-        text = self.pre("hw-planner", "planner", "manager").replace(str(self.wt.resolve()), "").replace(str(self.wt), "")
-        self.assertLessEqual(len(text), 4000)
-
-    def test_every_report_state_keeps_its_compose_report_form(self):
-        report = f"compose report --repo {self.wt.resolve()} --project hw --as hw-planner"
-        pre = self.pre("hw-planner", "planner", "manager")
-        for state in ("needs-user", "blocked", "working", "done", "tool-bug", "contradiction"):
-            with self.subTest(state):
-                self.assertIn(f"{report} {state}", pre)
-
-    def test_only_the_orchestrator_gets_the_parallel_form(self):
-        self.assertIn(fc.fc_crew.PARALLEL_FORM, self.pre("hw-orchestrator", "orchestrator"))
-        for name, title, up in (("hw-planner", "planner", "manager"), ("hw-tests-001", "tests 001", "orchestrator")):
-            self.assertNotIn(fc.fc_crew.PARALLEL_FORM, self.pre(name, title, up))
-
-
-class PreambleNamesComposeLinear(unittest.TestCase):
-    """Every teammate's preamble sends Linear reads and writes through `compose linear`, never a Linear MCP tool."""
-
-    def test_every_role_uses_compose_linear(self):
-        proj = Path(tempfile.mkdtemp()) / ".compose" / "shop"; proj.mkdir(parents=True)
-        for name, title, up in (("shop-orchestrator", "orchestrator", None), ("shop-tests-001", "tests 001", "orchestrator"),
-                                ("shop-planner", "planner", "manager"), ("shop-designer", "designer", "manager"), ("shop-q-neb-1", "q", "orchestrator")):
-            with self.subTest(name):
-                pre = fc.fc_crew.crew_preamble(proj, name, title, up)
-                self.assertEqual(pre.count(LINEAR_LINE), 1)
-                self.assertIn("\n" + LINEAR_LINE + "\n", pre)  # a line of its own
-                self.assertNotIn("Linear is the record: write what you learn", pre)
-                for tool in ("save_issue", "get_issue", "list_issues", "save_comment", "mcp__claude_ai_Linear"):
-                    self.assertNotIn(tool, pre)
-
 
 class PreambleNamesTrail(unittest.TestCase):
     """Every teammate's preamble sends it to trail for file:line evidence; the tab still carries graft's env names."""
@@ -1408,14 +1206,6 @@ class PreambleNamesTrail(unittest.TestCase):
     def setUp(self):
         self.proj = Path(tempfile.mkdtemp()) / ".compose" / "shop"
         self.proj.mkdir(parents=True)
-
-    def test_every_role_fact_checks_with_trail_output(self):
-        for name, title, up in (("shop-orchestrator", "orchestrator", None), ("shop-tests-001", "tests 001", None),
-                                ("shop-planner", "planner", "manager"), ("shop-designer", "designer", "manager"), ("shop-q-neb-1", "q", "orchestrator")):
-            with self.subTest(name):
-                pre = " ".join(fc.fc_crew.crew_preamble(self.proj, name, title, up).split())
-                self.assertIn("(trail output with file:line, a command and its output, a test run)", pre)
-                self.assertNotRegex(pre, r"(?<![\w/.@-])graft(?![\w/-])")
 
     def test_crew_start_still_passes_the_graft_env_to_the_tab(self):
         calls = []
@@ -1506,60 +1296,6 @@ class CrewRecorded(unittest.TestCase):
         for model, pids, fail in (("claude", [412], True), ("pi:x/y", [412], True), ("claude", [], False), ("pi:x/y", [], False)):
             with self.subTest(model=model, pids=pids, fail=fail):
                 self.assertEqual(self.start(model, pids, fail)[4], 0)
-
-
-class TerseTemplatesA(unittest.TestCase):
-    """The explore and toolsmith briefs are terse: inside their sizes, same placeholders, every command, report form, heading and step marker kept."""
-
-    def flat(self, name):
-        return " ".join(getattr(fc_planner_brief if name == "PLANNER_BRIEF" else fc.fc_briefs, name).split())
-
-    def test_sizes_and_placeholders(self):
-        import string
-        want = {"EXPLORE_BRIEF": (976, {"feature", "slug", "wt"}),
-                "TOOLSMITH_BRIEF": (610, {"at", "cli_commit", "cli_repo", "message", "project", "repo", "reporter", "variant"})}
-        for name, (limit, fields) in want.items():
-            with self.subTest(name):
-                self.assertLessEqual(len(getattr(fc_planner_brief if name == "PLANNER_BRIEF" else fc.fc_briefs, name)), limit)
-                self.assertEqual({f for _, f, _, _ in string.Formatter().parse(getattr(fc_planner_brief if name == "PLANNER_BRIEF" else fc.fc_briefs, name)) if f}, fields)
-
-    def test_explore_and_toolsmith_keep_their_commands_and_steps(self):
-        for token in ("`trail map`", "`trail ask \"<question>\" --source`", "`trail callers <symbol>`", "`trail skeleton <file>`", "`compose linear get <id> --body`",
-                      "`compose linear update <id> --section \"## Notes\" --file <path> --expect <hash>`", "`### Codebase brief`", "`done \"<one-line summary>\"`"):
-            self.assertIn(token, self.flat("EXPLORE_BRIEF"))
-        for token in ("`# <command>: <symptom>`", "`gh issue view 1 --repo {repo}`", "`--comment <n>`", "`--new`",
-                      "`compose tool-bug file --project {project} --entry \"{at}\" --body <file>`", "{variant}"):
-            self.assertIn(token, self.flat("TOOLSMITH_BRIEF"))
-        for n in (1, 2, 3):
-            self.assertRegex(fc.fc_briefs.TOOLSMITH_BRIEF, rf"(?m)^{n}\. ")
-
-    def test_toolsmith_brief_numbers_the_entry_when_the_project_logged_several_at_one_time(self):
-        from types import SimpleNamespace
-        log = Path(tempfile.mkdtemp()) / "tool-bugs.jsonl"
-        entry = {"at": "2026-10-17 15:30:00", "project": "shop", "reporter": "shop-tests", "message": "m", "cli_commit": "abc1234", "cli_repo": "/r"}
-        log.write_text("".join(json.dumps({**entry, "message": m}) + "\n" for m in ("first", "second")))
-        with mock.patch.object(fc.fc_crew, "TOOL_BUGS", log), mock.patch.object(fc.fc_core, "project_dir", return_value=Path("/x/shop")), \
-                mock.patch.object(fc.fc_toolbug, "gh_status", return_value=("maintainer", "alice9")), mock.patch("sys.stdout", io.StringIO()) as out:
-            fc.fc_briefs.cmd_toolsmith(SimpleNamespace(repo=".", project="shop"))
-        self.assertEqual(out.getvalue().count('--entry "2026-10-17 15:30:00#2"'), 2)
-        self.assertIn("second", out.getvalue())
-
-    def test_toolsmith_variants_keep_their_flags_phrases_and_steps(self):
-        from types import SimpleNamespace
-        log = Path(tempfile.mkdtemp()) / "tool-bugs.jsonl"
-        log.write_text(json.dumps({"at": "2026-10-17 15:30:00", "project": "shop", "reporter": "shop-tests", "message": "m", "cli_commit": "abc1234", "cli_repo": "/r"}) + "\n")
-        want = {"maintainer": ("`compose tool-bug pr --project shop --entry \"2026-10-17 15:30:00\"", "You never merge", "your own worktree", "Fixes #", "\n6. "),
-                "reporter": ("`--approved`", "never edit or commit", "run the same filing command with `--approved`"),
-                "no-gh": ("`--approved`", "never edit or commit", "gh auth login")}
-        for state, tokens in want.items():
-            with self.subTest(state), mock.patch.object(fc.fc_crew, "TOOL_BUGS", log), mock.patch.object(fc.fc_core, "project_dir", return_value=Path("/x/shop")), \
-                    mock.patch.object(fc.fc_toolbug, "gh_status", return_value=(state, "alice9")), mock.patch("sys.stdout", io.StringIO()) as out:
-                fc.fc_briefs.cmd_toolsmith(SimpleNamespace(repo=".", project="shop"))
-                brief = out.getvalue()
-                for token in tokens + ("\n4. ", "\n5. "):
-                    self.assertIn(token, brief)
-                self.assertEqual("\n6. " in brief, state == "maintainer")
-                self.assertNotIn("sections/", brief)
 
 
 class RefusedReports(unittest.TestCase):

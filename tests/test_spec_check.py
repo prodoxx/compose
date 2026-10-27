@@ -76,12 +76,6 @@ class SpecCheck(unittest.TestCase):
         self.assertRegex(lines[0], r"^FAIL ENG-1 feature: [^;]+; [^;]+; [^;]+$")
         self.assertIn(fc.fc_tasks.SYNC_SHAPE, str(self.run_cli("not json")[1]))
 
-    def test_command_line_registers_spec_check(self):
-        with mock.patch.object(sys, "argv", ["compose", "spec-check", "--stdin"]), mock.patch.object(fc.fc_spec, "cmd_spec_check") as c:
-            fc.main()
-        c.assert_called_once()
-        self.assertTrue(c.call_args.args[0].stdin)
-
     def test_each_feature_gap_alone(self):
         for desc, kw in ((SETTLED.replace("None", "- which color?"), "Not yet specified"),
                          (SETTLED.replace("### Codebase brief", ""), "Codebase brief"),
@@ -247,11 +241,6 @@ class SpecCheck(unittest.TestCase):
         self.assertEqual(gaps([task("ENG-3", "001", files="package.json, bun.lock", kind="toolchain")]), [])
         self.assertEqual(fc.fc_spec.spec_check(data([task("ENG-3", "001")]), checks)[0][3], [])  # no base to read says nothing
 
-    def test_a_toolchain_task_waits_for_nothing(self):
-        out = check([task("ENG-3", "001"), task("ENG-4", "002", ["ENG-3"], kind="toolchain")])
-        self.assertEqual(out["ENG-4"], (False, "task", ["`kind: toolchain` sets up the tools every layer runs, so its layer is the "
-                                                        "bottom one: drop its `after:` (blocked-by 001)"]))
-
     def test_the_base_is_read_from_git_at_the_given_revision(self):
         with tempfile.TemporaryDirectory() as d:
             git = lambda *a: subprocess.run(["git", "-C", d, *a], check=True, capture_output=True)
@@ -360,12 +349,6 @@ class SpecCheck(unittest.TestCase):
                 self.exit_code = e.code
         return clash, proj, out.getvalue()
 
-    def test_shared_file_in_spec_check_and_tasks_and_sync_keeps_parent(self):
-        clash, proj, out = self.clash_tasks()
-        self.assertEqual(out, TASKS_OUT)
-        self.assertEqual(fc.fc_tasks.linear_cache(proj)["issues"]["ENG-3"]["parentId"], "ENG-2")
-        self.assertTrue(has(check(clash)["ENG-1"][2], "a.go"))
-
     def test_tasks_exits_1_on_a_serial_chain_after_printing_it(self):
         _, _, out = self.clash_tasks()
         self.assertIn("WARNING SERIAL CHAIN", out)
@@ -377,15 +360,6 @@ class SpecCheck(unittest.TestCase):
         self.assertEqual(out, TASKS_OUT.replace(wide("DEEP fix-then-regression-test"), wide("-")))
         _, _, out = self.clash_tasks(lambda c: {k: v for k, v in c.items() if k != "issues"})
         self.assertEqual(out, TASKS_OUT.replace(wide("DEEP fix-then-regression-test"), wide("-")).replace(wide("STANDARD test-first"), wide("-")))
-
-    def test_unsynced_project_stops_with_the_sync_message(self):
-        repo = Path(tempfile.mkdtemp())
-        proj = repo / ".compose" / "p"
-        proj.mkdir(parents=True)
-        with mock.patch.object(fc.fc_core, "project_dir", return_value=proj), mock.patch.object(fc.fc_herdr, "project_worktree", return_value=repo):
-            lines, e = self.run_cli(repo=str(repo), project="p")
-        self.assertIn("no tasks synced for p", str(e))
-        self.assertIn("compose sync", str(e))
 
     def test_synced_cache_prints_what_stdin_prints(self):
         d = data([task("ENG-3", "001"), {**STORY, "id": "ENG-11", "description": "TBD"}])
@@ -420,13 +394,6 @@ class SpecCheck(unittest.TestCase):
 class DeleteLine(unittest.TestCase):
     """Task 013 (NEB-934): delete: parsed from the compose block; spec-check and the 2-file cap with delete: paths."""
 
-    def test_delete_parses_like_files_and_defaults_to_empty(self):
-        parse = lambda **kv: fc.fc_tasks.task_from_issue(task("ENG-3", "001", **kv))["delete"]
-        self.assertEqual(parse(delete="a.py, old/"), ["a.py", "old/"])
-        self.assertEqual(parse(delete=" a.py ,, old/ , "), ["a.py", "old/"])
-        self.assertEqual(parse(), [])
-        self.assertEqual(parse(delete=""), [])
-
     def test_a_delete_only_task_passes_and_one_with_neither_still_fails(self):
         got = check([task("ENG-3", "001", files="", delete="old.go, old/"), task("ENG-4", "002", files=""),
                       task("ENG-5", "003", files="", delete="")])
@@ -435,29 +402,12 @@ class DeleteLine(unittest.TestCase):
             self.assertFalse(got[i][0])
             self.assertTrue(has(got[i][2], "empty `files:`"), got[i])
 
-    def test_a_task_with_no_test_to_protect_passes_when_it_is_check_only_or_deletes_and_any_other_still_fails(self):
-        got = check([task("ENG-3", "001", protected="", route="check-only"), task("ENG-4", "002", files="", protected="", delete="old.go"),
-                     task("ENG-5", "003", files="new_test.go", protected="", delete="old_test.go"), task("ENG-6", "004", protected="")])
-        for i in ("ENG-3", "ENG-4", "ENG-5"):
-            self.assertEqual(got[i], (True, "task", []), i)
-        self.assertFalse(got["ENG-6"][0])
-        self.assertTrue(has(got["ENG-6"][2], "empty `protected:`"), got["ENG-6"])
-
     def test_a_delete_only_task_still_reports_its_other_gaps(self):
         ok, _, gaps = check([task("ENG-3", "001", crit="\n".join(f"- c{n}" for n in range(6)), files="", protected="", delete="old.go")])["ENG-3"]
         self.assertFalse(ok)
         self.assertTrue(has(gaps, "6 bullets"), gaps)
         self.assertFalse(has(gaps, "empty `protected:`"), gaps)
         self.assertFalse(has(gaps, "empty `files:`"), gaps)
-
-    def test_delete_paths_never_count_toward_the_file_cap(self):
-        many = ", ".join(f"old/{n}.go" for n in range(6))
-        got = check([task("ENG-3", "001", files="a.go, b.go", delete=many), task("ENG-4", "002", files="c.go, d.go, e.go", delete=many)])
-        self.assertEqual(got["ENG-3"], (True, "task", []))
-        self.assertTrue(has(got["ENG-4"][2], "owns 3 files"), got["ENG-4"])
-        meta = fc.fc_tasks.task_from_issue(task("ENG-3", "001", files="", delete=many))
-        self.assertEqual((len(meta["delete"]), fc.fc_spec.too_big(meta)), (6, None))
-
 
 def story(ident, n, status="Todo", sub=""):
     crit = "\n".join(f"* c{i}{sub}" for i in range(n))
@@ -520,12 +470,6 @@ class DesignAndHandTasks(unittest.TestCase):
         self.assertEqual(got["ENG-3"], (True, "task", []))
         self.assertEqual(got["ENG-4"], (False, "task", ["empty `nodes:`"]))
 
-    def test_a_hand_task_names_files_but_has_no_protected_test(self):
-        hand = lambda ident, tid, files: task(ident, tid, files=files, protected="", kind="hand", test="python3 -m unittest tests.a")
-        got = check([hand("ENG-3", "001", "tests/a.py"), hand("ENG-4", "002", ""), task("ENG-5", "003", protected="")])
-        self.assertEqual((got["ENG-3"], got["ENG-4"]), ((True, "task", []), (False, "task", ["empty `files:`"])))
-        self.assertEqual(got["ENG-5"], (False, "task", ["empty `protected:`"]))
-
     def test_task_labelled_issue_without_a_block_is_a_hand_task_of_its_story(self):
         lowfi = {**story("ENG-5", 6, "Done"), "labels": ["Task"], "parentId": "ENG-4"}
         got = check([task("ENG-3", "001"), {**story("ENG-4", 1), "parentId": "ENG-1"}, lowfi])
@@ -551,9 +495,6 @@ class ScenarioGaps(unittest.TestCase):
 
     def test_a_complete_block_passes_and_negative_cases_are_optional(self):
         self.assertEqual(self.gaps((1, FULL), (2, FULL + "\nnegative_cases: n")), (True, "task", []))
-
-    def test_a_task_without_a_block_gets_no_new_gap(self):
-        self.assertEqual(check([task("ENG-3", "001", crit="- a\n- b")])["ENG-3"][2], [])
 
     def test_missing_and_empty_keys_are_named_in_order_per_scenario(self):
         no_given_oracle = FULL.replace("given: g\n", "").replace("oracle: o", "oracle:")

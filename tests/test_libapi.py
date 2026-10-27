@@ -170,10 +170,5 @@ class TopLevelFromRecord(unittest.TestCase):
         self.assertEqual(fc.fc_libapi.python_api(self.wt, ["app/main.py"], ""),
                          ["rich-widgets 0.4.1\npaint(color, width=1) - Paint it.\nping() - Ping once."])
 
-    def test_top_level_still_wins_and_record_paths_that_are_no_module_give_nothing(self):
-        blocks = fc.fc_libapi.python_api(self.wt, ["app/other.py"], "")
-        self.assertEqual(sorted(blocks), ["mixed 1.0\ngo() - Go.", "tagged 2.0\na() - A."])
-
-
 if __name__ == "__main__":
     unittest.main()

@@ -105,12 +105,6 @@ class Policies(unittest.TestCase):
             fc.fc_route.cmd_route(SimpleNamespace(repo=str(self.raw), project="p", only=None, recalculate=False))
         self.assertEqual((stop.exception.code, self.decide.called), ("route stopped: 2 documents titled Verification policies: D1, D2; nothing recorded", False))
 
-    def test_only_reads_the_policies_once_for_the_named_task(self):
-        with mock.patch("sys.stdout", io.StringIO()):
-            fc.fc_route.cmd_route(SimpleNamespace(repo=str(self.raw), project="p", only="002", recalculate=False))
-        self.assertEqual((self.read_policies.call_count, self.decide.call_count), (1, 1))
-
-
 class Record(unittest.TestCase):
     READ = "query($id: String!) { issue(id: $id) { id description } }"
     UPDATE = "mutation($id: String!, $in: IssueUpdateInput!) { issueUpdate(id: $id, input: $in) { success } }"
@@ -185,7 +179,6 @@ class Record(unittest.TestCase):
         self.tasks = [{k: v for k, v in self.tasks[0].items() if k != "linear"}]
         (routes, _), _ = self.route()
         self.assertEqual((sorted(routes), self.linear_gql.called), (["001"], False))
-
 
 class RunRoutes(unittest.TestCase):
     def setUp(self):

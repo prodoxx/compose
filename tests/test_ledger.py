@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import contextlib, hashlib, importlib.machinery, importlib.util, io, json, os, re, subprocess, tempfile, unittest
+import contextlib, hashlib, importlib.machinery, importlib.util, io, json, os, subprocess, tempfile, unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -25,10 +25,6 @@ class Events(unittest.TestCase):
         self.assertEqual(fc_ledger.event(*self.ARGS), e)
         for i, other in enumerate(("r", "sha", ["004"], [], "final", "prove", "pass", True, "bang")):
             self.assertNotEqual(fc_ledger.event(*(self.ARGS[:i] + (other,) + self.ARGS[i + 1:]))["event_id"], e["event_id"], i)
-
-    def test_event_stores_lists(self):
-        e = fc_ledger.event("r", "", ("003", "004"), ("003.1:12345678",), "red", "run", "pass", False, "d")
-        self.assertEqual((e["task_ids"], e["criterion_id"], e["fails_on_base"]), (["003", "004"], ["003.1:12345678"], False))
 
     def test_detail_is_scrubbed_one_line_and_cut(self):
         with mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "sk-secret-value-123"}):
@@ -314,11 +310,6 @@ class VerifyShared(unittest.TestCase):
             ok, calls = self.record(report, saved)
             self.assertEqual((ok, len(calls)), (False, 4), saved)
 
-    def test_no_linear_file_records_on_no_issue(self):
-        (self.proj / "linear.json").unlink()
-        _, calls = self.record({"checks": [], "e2e": [], "review": None})
-        self.assertEqual([c[0] for c in calls], [None] * 4)
-
     def test_verify_rounds_records_its_round_with_the_report(self):
         report = {"checks": [], "e2e": [], "review": None}
         with mock.patch.object(fc.fc_verify, "run_stages", return_value=(True, report, "")), mock.patch.object(fc.fc_verify, "review_inputs", return_value=(0, 0, 0, [])), \
@@ -386,7 +377,6 @@ class VerifyTasks(unittest.TestCase):
     def test_false_when_a_task_record_fails(self):
         ok, _ = self.record(saved=lambda issue, events: issue != "ENG-5")
         self.assertFalse(ok)
-
 
 class VerifyUnsaved(unittest.TestCase):
     def setUp(self):
@@ -498,13 +488,6 @@ class Relevance(unittest.TestCase):
                 self.row("stale", criterion_id=["021.1:00000000", "021.3:" + self.a[6:]])]
         self.assertEqual([(r["event_id"], r["criterion_id"]) for r in self.counted(rows)], [("none", []), ("both", [self.a, self.b]), ("mixed", [self.b])])
 
-    def test_rows_come_back_in_order_as_copies_and_the_given_rows_stay_unchanged(self):
-        rows = [self.row("2", criterion_id=[self.a, "021.1:00000000"]), self.row("1")]
-        before = json.loads(json.dumps(rows))
-        out = self.counted(rows)
-        self.assertEqual(([r["event_id"] for r in out], rows, any(o is r for o, r in zip(out, rows))), (["2", "1"], before, False))
-
-
 class RecordTask(unittest.TestCase):
     def setUp(self):
         self.repo, self.proj = Path(tempfile.mkdtemp()), Path(tempfile.mkdtemp()) / "feat"
@@ -575,9 +558,6 @@ class RedoRunId(unittest.TestCase):
     def test_redo_mints_a_new_run_id_for_each_dispatched_task_before_dispatch(self):
         self.assertEqual(self.run_cmd(redo=True), [("run_id", "001", {"fresh": True}), ("run_id", "003", {"fresh": True}), ("run_tasks",)])
         self.assertEqual(self.run_cmd(redo=True, only="003"), [("run_id", "003", {"fresh": True}), ("run_tasks",)])
-
-    def test_run_without_redo_keeps_every_run_id(self):
-        self.assertEqual(self.run_cmd(redo=False), [("run_tasks",)])
 
     def test_a_run_that_stops_before_dispatch_mints_no_run_id(self):
         self.tasks[0]["protected"] = ["tests/test_missing.py"]

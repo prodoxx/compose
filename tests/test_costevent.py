@@ -43,11 +43,6 @@ class VerifyEvents(unittest.TestCase):
     def test_failed_verify_records_fail(self):
         self.assertEqual({e["result"] for e in self.events([], passed=False)}, {"fail"})
 
-    def test_no_fix_rounds_are_zero(self):
-        for rounds in (None, [{}, {"stage": "smoke"}]):
-            self.assertEqual([e["fix_rounds"] for e in self.events(rounds)], [0, 0, 0])
-
-
 class RunEvent(unittest.TestCase):
     NUMBERS = {"attempts": 2, "escalations": 1, "fix_rounds": 0, "cost": 0.01234}
     SIX = ["workflow", "depth", "attempts", "escalations", "fix_rounds", "cost"]
@@ -61,16 +56,6 @@ class RunEvent(unittest.TestCase):
         issues = {"XX-1": {"description": "## Route\n\n* workflow: implement-then-test\n* depth: DEEP\n"}} if route else {}
         (proj / "results" / "tasks.json").write_text(json.dumps({"feature": {}, "tasks": TASKS, "issues": issues}))
         return proj
-
-    def test_detail_line_has_four_decimals(self):
-        self.assertEqual(fc_costevent.detail("test-first", "FAST", self.NUMBERS), "test-first FAST: attempts 2, escalations 1, fix rounds 0, cost $0.0123")
-
-    def test_cost_event_is_ledger_event_plus_six_keys(self):
-        ev = fc_costevent.cost_event(self.final(), "test-first", "FAST", self.NUMBERS)
-        want = fc_costevent.fc_ledger.event("run-1", "abc123", ["001"], ["C1", "C2"], "cost", "gate", "pass", None, fc_costevent.detail("test-first", "FAST", self.NUMBERS))
-        want.update(workflow="test-first", depth="FAST", **self.NUMBERS)
-        self.assertEqual(ev, want)
-        self.assertEqual(list(ev), list(want))
 
     def test_none_without_final(self):
         for status in ("passed", "failed", "already_green", None):

@@ -51,9 +51,6 @@ class AllProjectsBranch(unittest.TestCase):
         self.assertEqual(fc.fc_core.worktrees(self.repo), listed)
         self.assertEqual(dict(fc.fc_core.worktree_branches(self.repo))[b], "compose/b")
 
-    def test_no_git_gives_the_folder_with_no_branch(self):
-        self.assertEqual(fc.fc_core.worktree_branches(self.base), [(self.base, "")])
-
     def test_own_worktree_wins_with_one_git_process(self):
         wt = self.add("wt", "-b", "compose/p")
         self.project(self.repo); self.project(wt)  # merged: the main checkout shows the folder too

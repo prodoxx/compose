@@ -1,4 +1,0 @@
-SIMPLICITY_BAR
-PERSPECTIVES
-well_formed
-llm_review

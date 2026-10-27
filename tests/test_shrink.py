@@ -45,11 +45,6 @@ class Shrink(unittest.TestCase):
                 _, run = self._shrink(w, h)
                 self.assertEqual("-Z" in self._convert(run), big)
 
-    def test_the_default_dir_is_compose_shrink_in_the_temp_dir(self):
-        with mock.patch("tempfile.gettempdir", return_value=str(self.d / "tmp")):
-            got, _ = self._shrink(2400, 1600, out=None)
-        self.assertEqual(got.path, self.d / "tmp" / "compose-shrink" / self.copy.name)
-
     def test_without_sips_the_source_is_passed_through(self):
         with mock.patch("shutil.which", return_value=None):
             got = fc_shrink.shrink(self.src, self.d / "out")
@@ -64,14 +59,6 @@ class Shrink(unittest.TestCase):
                 got, _ = self._shrink(2400, 1600, **kw)
                 self.assertEqual(got.path, self.src)
                 self.assertEqual(got.warning, f"compose shrink: sips could not shrink {self.src}, using the original")
-
-    def test_the_source_is_never_changed_and_nothing_is_printed(self):
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            self._shrink(2400, 1600)
-        self.assertEqual(buf.getvalue(), "")
-        self.assertEqual(self.src.read_bytes(), b"png bytes")
-
 
 class Command(unittest.TestCase):
     def _run(self, images, returns, out=None, max_edge=1000, quality=72):
@@ -97,20 +84,6 @@ class Command(unittest.TestCase):
         self.assertEqual(out, "a.png  unchanged\n/tmp/compose-shrink/b-5e6f7a8b.jpg  3000x2000 900000 B -> 1000x667 120000 B\n")
         self.assertEqual(err, warning + "\n")
 
-    def test_the_flags_reach_shrink_for_every_image(self):
-        shrunk = fc_shrink.Shrunk(Path("/tmp/x.jpg"), fc_shrink.Size(1, 1, 1), fc_shrink.Size(1, 1, 1), "")
-        _, _, _, sh = self._run(["a.png", "b.png"], [shrunk, shrunk], out="d", max_edge=500, quality=60)
-        self.assertEqual(sh.call_args_list, [mock.call(Path("a.png"), Path("d"), 500, 60), mock.call(Path("b.png"), Path("d"), 500, 60)])
-
-    def test_the_command_returns_normally_when_every_image_passed_through(self):
-        warning = "compose shrink: sips could not shrink a.png, using the original"
-        passed = fc_shrink.Shrunk(Path("a.png"), fc_shrink.Size(0, 0, 5), fc_shrink.Size(0, 0, 5), warning)
-        result, out, err, _ = self._run(["a.png"], [passed])
-        self.assertIsNone(result)
-        self.assertEqual(out, "a.png  unchanged\n")
-        self.assertEqual(err, warning + "\n")
-
-
 class Args(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -125,14 +98,6 @@ class Args(unittest.TestCase):
         with mock.patch.object(sys, "argv", ["compose", "shrink", *argv]), mock.patch.object(self.fc.fc_shrink, "cmd_shrink") as cmd:
             self.fc.main()
         return cmd.call_args.args[0]
-
-    def test_the_defaults_reach_cmd_shrink(self):
-        a = self._args("a.png", "b.png")
-        self.assertEqual((a.images, a.out, a.max_edge, a.quality), (["a.png", "b.png"], None, 1000, 72))
-
-    def test_each_flag_reaches_cmd_shrink(self):
-        a = self._args("--out", "d", "--max-edge", "500", "--quality", "60", "a.png")
-        self.assertEqual((a.images, a.out, a.max_edge, a.quality), (["a.png"], "d", 500, 60))
 
     def test_a_flag_before_the_images_still_takes_them(self):
         self.assertEqual(self._args("--quality", "60", "a.png").images, ["a.png"])

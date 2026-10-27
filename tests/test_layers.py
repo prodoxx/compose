@@ -310,26 +310,6 @@ class Layers(LayersBase):
         self.assertFalse([l for l in out if "WARN" in l or "STOP" in l])
         self.assertIn("stack submit --auto", (self.repo / ".git" / "fake-gh-calls").read_text().splitlines())
 
-    def test_stack_without_submit_prints_each_layers_pr_title_and_body_and_calls_no_gh_pr(self):
-        (self.proj / "verify.json").write_text(json.dumps({"review_base": "main"}))
-        cache = json.loads((self.proj / "results" / "tasks.json").read_text())
-        (self.proj / "results" / "tasks.json").write_text(json.dumps({**cache, "feature": {"title": "Build it", "description": "Fixes o/r#9."}}))
-        out = []
-        with mock.patch.object(fc.fc_core, "say", out.append):
-            fc.fc_ship.cmd_stack(argparse.Namespace(repo=str(self.repo), project="p", trunk="compose/p", submit=False, update=False))
-        prs = [l for l in out if l.startswith("pr ")]
-        self.assertEqual([l.split()[1] for l in prs], self.layers())
-        for i, l in enumerate(prs, 1):
-            self.assertIn(f"({i}/3)", l.splitlines()[0])
-            self.assertIn("## What changed", l)
-            self.assertNotRegex(l, r" lines|attempt")  # no size line or attempt count reaches a reviewer
-        self.assertIn("## What changed\n    - Build 001\n    - Build 002\n\n", prs[1])  # one line per task, its test commit folded in
-        self.assertIn("- Part of o/r#9", prs[1])  # as submit writes it: the issue is fixed by the layer with its last task
-        self.assertIn("- Fixes o/r#9", prs[2])
-        calls =(self.repo / ".git" / "fake-gh-calls").read_text().splitlines()
-        self.assertFalse([c for c in calls if not c.startswith("stack ")])
-        self.assertFalse((self.proj / "pr_text.json").exists())
-
     def preview(self, **cfg):
         """`compose stack`'s pr lines without --submit: ({branch: its pr line and body}, the other pr lines)."""
         (self.proj / "verify.json").write_text(json.dumps({"review_base": "main", **cfg}))
@@ -339,9 +319,24 @@ class Layers(LayersBase):
         prs = [l for l in out if l.startswith("pr ")]
         return {l.split()[1]: l for l in prs if l.split()[1] in self.layers()}, [l for l in prs if l.split()[1] not in self.layers()]
 
-    def test_a_layers_written_pr_text_replaces_its_title_why_and_what_changed_and_compose_keeps_the_facts(self):
+    def test_stack_without_submit_prints_each_layers_pr_text_and_a_written_one_replaces_its_title_why_and_what_changed_and_compose_keeps_the_facts(self):
+        (self.proj / "verify.json").write_text(json.dumps({"review_base": "main"}))
         cache = json.loads((self.proj / "results" / "tasks.json").read_text())
         (self.proj / "results" / "tasks.json").write_text(json.dumps({**cache, "feature": {"title": "Build it", "description": "Fixes o/r#9."}}))
+        out = []  # without --submit: each layer's pr title and body are printed, no gh pr is called, and nothing is recorded
+        with mock.patch.object(fc.fc_core, "say", out.append):
+            fc.fc_ship.cmd_stack(argparse.Namespace(repo=str(self.repo), project="p", trunk="compose/p", submit=False, update=False))
+        prs = [l for l in out if l.startswith("pr ")]
+        self.assertEqual([l.split()[1] for l in prs], self.layers())
+        for i, l in enumerate(prs, 1):
+            self.assertIn(f"({i}/3)", l.splitlines()[0])
+            self.assertIn("## What changed", l)
+            self.assertNotRegex(l, r" lines|attempt")  # no size line or attempt count reaches a reviewer
+        self.assertIn("## What changed\n    - Build 001\n    - Build 002\n\n", prs[1])  # one line per task, its test commit folded in
+        self.assertIn("- Part of o/r#9", prs[1])  # the issue is fixed by the layer with its last task
+        self.assertIn("- Fixes o/r#9", prs[2])
+        self.assertFalse([c for c in (self.repo / ".git" / "fake-gh-calls").read_text().splitlines() if not c.startswith("stack ")])
+        self.assertFalse((self.proj / "pr_text.json").exists())
         self.pr_file("001-002", self.WRITTEN)
         self.pr_file("groundwork", "# Prepare the build\n\n## Why\nIt needs stubs.\n\n## What changed\n- Add stubs\n\n## Notes\nmore\n")
         prs, rest = self.preview()

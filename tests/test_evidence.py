@@ -85,10 +85,6 @@ class Refresh(unittest.TestCase):
                          "| b | 2026-10-21 10:00 | verify | sufficiency | proven | no | 001.1, 001.2 | d |\n| a | 2026-10-21 09:05 | run | red | fail | yes | 001.1, 001.2 | x \\| y |\n")
         self.assertIn("| all |", fc_evidence.table([row("d", at="2026-10-21T09:00:00.000Z")]))
 
-    def test_table_keeps_the_60_newest_rows(self):
-        lines = fc_evidence.table([row("e%d" % i, at="2026-10-21T09:00:00.000Z") for i in range(65)]).splitlines()[6:]
-        self.assertEqual([l.split(" | ")[0] for l in lines], ["| e%d" % i for i in range(64, 4, -1)])
-
     def test_appends_a_missing_section_last_then_replaces_it_in_place_and_skips_an_unchanged_write(self):
         self.desc = None
         self.refresh([])

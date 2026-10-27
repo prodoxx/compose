@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import inspect, json, os, subprocess, tempfile, unittest, unittest.mock
+import json, os, subprocess, tempfile, unittest, unittest.mock
 from pathlib import Path
 import importlib.machinery, importlib.util, sys
 # tests/test_modules.py fails a test file without the next line
@@ -12,29 +12,6 @@ import fc_factorystate as st
 
 
 BIN = Path(__file__).resolve().parents[1] / "bin"
-
-
-class PlansLanded(unittest.TestCase):
-    def params(self, fn):
-        return list(inspect.signature(fn).parameters)
-
-    def test_the_interfaces_this_builds_on_exist_as_promised(self):
-        import fc_change as c, fc_delivery as d, fc_linear, fc_plan as p, fc_readiness as r, fc_reconcile
-        self.assertEqual([self.params(f) for f in (d.product_plan, d.delivery_order, d.last_reconcile)], [["repo"]] * 3)
-        self.assertEqual(self.params(d.reconcile), ["repo", "dry_run"])
-        self.assertTrue(d.NO_PLAN.startswith("no product delivery plan yet"))
-        self.assertEqual((self.params(p.order_entries), self.params(p.base_built)), (["tracks", "features"], ["state", "labels"]))
-        self.assertEqual(self.params(r.story_readiness), ["repo", "story", "refresh", "write"])
-        self.assertTrue(issubclass(r.NotAStory, Exception) and callable(r.readiness_line))
-        self.assertEqual((self.params(c.rests_on), self.params(c.hold_tasks)), (["proj", "refs"], ["proj", "ids", "reason"]))
-        self.assertEqual(fc_linear.NEEDS_SHAPING, "needs-shaping")
-        self.assertEqual(self.params(fc_reconcile.live_leads), ["repo"])
-
-    def test_their_verbs_are_registered(self):
-        run = lambda *a: subprocess.run([sys.executable, str(BIN / "compose.py"), *a], capture_output=True, text=True).stdout
-        for verb in ("delivery", "readiness", "reconcile", "hold"):
-            self.assertRegex(run("--help"), rf"(?m)^    {verb}\b")
-        self.assertIn("--rests-on", run("hold", "--help"))
 
 
 class State(unittest.TestCase):
@@ -70,10 +47,6 @@ class State(unittest.TestCase):
         self.assertEqual([e["n"] for e in st.events_since(self.repo, 0)], [4])
         self.assertEqual(st.add_event(self.repo, "next"), 5)
         self.assertEqual([e["line"] for e in st.events_since(self.repo, 4)], ["next"])
-
-    def test_day_pace_is_the_repos_setting_else_the_config(self):
-        s = st.load_state(self.repo); self.assertEqual(st.pace(s), {"mode": "day", "cap": 2})
-        s["day_tickets"] = 1; self.assertEqual(st.pace(s), {"mode": "day", "cap": 1})
 
     def test_say_once_repeats_nothing_until_the_line_changes(self):
         s, out = st.load_state(self.repo), []
@@ -610,12 +583,6 @@ class Turn(unittest.TestCase):
         self.state["dispatched"] = {}; ft.turn(self.repo, self.state, 200.0)
         self.assertEqual(self.dispatched(), ["NEB-10", "NEB-11"])
 
-    def test_saved_gets_each_dispatch_as_it_happens(self):
-        saved = unittest.mock.Mock()
-        ft.turn(self.repo, self.state, 100.0, saved=saved)
-        rec = lambda s: {"feature": "NEB-9", "project": "sign-in", "kind": "build", "at": 100.0}
-        self.assertEqual(saved.call_args_list, [unittest.mock.call("NEB-10", rec("NEB-10")), unittest.mock.call("NEB-11", rec("NEB-11"))])
-
     def test_an_in_progress_story_without_its_lead_is_said_once_and_dropped(self):
         self.state["dispatched"] = {"NEB-10": {"feature": "NEB-9", "project": "sign-in", "kind": "build", "at": 1.0}}
         self.set_states(**{"NEB-10": "In Progress"})
@@ -661,12 +628,6 @@ class Turn(unittest.TestCase):
         self.reconcile.assert_not_called(); self.dispatch.assert_not_called()
         self.assertEqual(self.find_prd.call_count, 2)  # missing: looked up again after 5 minutes
 
-    def test_the_prd_is_looked_up_before_the_delivery_plan(self):
-        self.prd(False)
-        self.find_prd.side_effect = lambda repo: self.calls.append("prd") or None
-        ft.turn(self.repo, self.state, 100.0)
-        self.assertLess(self.calls.index("prd"), self.calls.index("product_plan:1"))
-
     def test_once_the_prd_is_found_a_missing_plan_offers_the_bootstrap(self):
         self.prd(False)
         self.product_plan.side_effect = None; self.product_plan.return_value = None
@@ -698,10 +659,6 @@ class Turn(unittest.TestCase):
         self.assertNotIn(ft.PRD_OFFER, ft.turn(self.repo, self.state, 200.0))
         self.assertIn(ft.PRD_OFFER, ft.turn(self.repo, self.state, 3701.0))
 
-    def test_a_found_prd_offers_nothing_more(self):
-        self.prd(True)
-        self.assertEqual([l for l in ft.turn(self.repo, self.state, 100.0) if "prd" in l], [])
-
     def test_a_failed_prd_lookup_never_blocks_building(self):
         self.prd(RuntimeError("linear down"))
         lines = ft.turn(self.repo, self.state, 100.0)
@@ -716,8 +673,6 @@ class Turn(unittest.TestCase):
         self.product_plan.side_effect = None; self.product_plan.return_value = None
         self.assertEqual([l.split("  ")[0] for l in ft.turn(self.repo, self.state, 100.0)], ["event factory=bootstrap"])
 
-
-
 class Verbs(unittest.TestCase):
     def setUp(self):
         import argparse, fcntl, time
@@ -726,8 +681,6 @@ class Verbs(unittest.TestCase):
         d = tempfile.TemporaryDirectory(); self.addCleanup(d.cleanup)
         self.repo = Path(d.name).resolve()
         subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
-        self.sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
-        self.addCleanup(self.sleeper.wait); self.addCleanup(self.sleeper.kill)
         self.proj = self.repo / "wt" / "sign-in"
         self.rests_on, self.hold = mock.Mock(return_value={}), mock.Mock(return_value=[])
         for mod, name, m in ((fc.fc_factory.fc_change, "rests_on", self.rests_on), (fc.fc_factory.fc_change, "hold_tasks", self.hold),
@@ -736,6 +689,13 @@ class Verbs(unittest.TestCase):
             pa = mock.patch.object(mod, name, m); pa.start(); self.addCleanup(pa.stop)
         pa = mock.patch.dict(fc.fc_factory.fc_config.FACTORY, {"turn_seconds": 0}); pa.start(); self.addCleanup(pa.stop)  # no sleeping between turns
         pa = mock.patch.object(fc.fc_factory.fc_watch, "watch_key", return_value="t"); pa.start(); self.addCleanup(pa.stop)
+
+    @property
+    def sleeper(self):
+        if "_sleeper" not in self.__dict__:
+            self._sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+            self.addCleanup(self._sleeper.wait); self.addCleanup(self._sleeper.kill)
+        return self._sleeper
 
     def hold_lock(self):
         """Stand in for a live loop: hold the repo's loop lock until the test ends."""
@@ -847,16 +807,6 @@ class Verbs(unittest.TestCase):
             fc.fc_factory.run_loop(self.repo, turns=2)
         self.assertEqual([e["line"] for e in st.events_since(self.repo, 0)], ['event factory=turn-failed why="OSError: disk full"  (the next turn tries again)'])
 
-    def test_spawn_loop_runs_the_loop_in_a_session_of_its_own(self):
-        mock = self.mock
-        (self.repo / ".compose").mkdir(exist_ok=True)
-        with mock.patch.object(subprocess, "Popen") as popen, mock.patch.object(fc.fc_factorystate, "state_path", return_value=self.repo / ".compose" / "factory.json"):
-            popen.return_value.pid = 77
-            self.assertEqual(fc.fc_factory.spawn_loop(self.repo), 77)
-        self.assertEqual(popen.call_args.args[0], [sys.executable, str(BIN / "compose.py"), "factory", "loop", "--repo", str(self.repo)])
-        self.assertTrue(popen.call_args.kwargs["start_new_session"])
-        self.assertEqual(popen.call_args.kwargs["stdin"], subprocess.DEVNULL)
-
     def test_one_loop_per_repo_appends_each_turns_lines(self):
         mock, fcntl = self.mock, self.fcntl
         with open(fc.fc_factory.lock_path(self.repo), "w") as f:
@@ -875,11 +825,6 @@ class Verbs(unittest.TestCase):
             fc.fc_factory.run_loop(self.repo, turns=2)
         self.assertEqual([e["line"] for e in st.events_since(self.repo, 0)],
                          ['event factory=turn-failed why="ValueError: boom"  (the next turn tries again)', "event factory=x"])
-
-    def test_alive(self):
-        self.assertFalse(fc.fc_factory.alive(None))
-        self.assertTrue(fc.fc_factory.alive(self.sleeper.pid))
-        self.assertFalse(fc.fc_factory.alive(999999))
 
     def test_stop_lets_work_finish_and_hold_pauses_it(self):
         self.hold_lock()

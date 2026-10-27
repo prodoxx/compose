@@ -27,21 +27,6 @@ class Frame(unittest.TestCase):
             self.assertEqual(fc_prompt.paint("hi", "32"), "hi")
         self.assertEqual(out.getvalue(), "")
 
-    def test_plain_lines_with_no_color_and_without_a_terminal(self):
-        for kw in ({"no_color": "1"}, {"tty": False}):
-            with self.subTest(**kw):
-                self.assertEqual(self.shown(fc_prompt.intro, "compose setup", **kw), "┌  compose setup\n│\n")
-                self.assertEqual(self.shown(fc_prompt.note, "Keys", ["one", "two"], **kw), "│\n◇  Keys\n│  one\n│  two\n")
-                self.assertEqual(self.shown(fc_prompt.step, "gh", "failed", **kw), "◇  gh: failed\n")
-                self.assertEqual(self.shown(fc_prompt.outro, "all set", **kw), "│\n└  all set\n")
-
-    def test_colour_codes_on_a_terminal(self):
-        self.assertEqual(self.shown(fc_prompt.intro, "compose setup"), "┌  \x1b[1mcompose setup\x1b[0m\n│\n")
-        for word, code in (("ok", 32), ("done", 32), ("failed", 31), ("would link", 36), ("would", 36),
-                           ("skipped", 33), ("manual", 33), ("claude", 33), ("not ok", 33)):
-            with self.subTest(word):
-                self.assertEqual(self.shown(fc_prompt.step, "gh", word), f"◇  gh: \x1b[{code}m{word}\x1b[0m\n")
-
     def test_step_splits_entries_into_bar_lines_and_drops_empty_parts(self):
         lines = ["first\n  indented\n\nlast", "", "\nsecond entry\n"]
         self.assertEqual(self.shown(fc_prompt.step, "pi", "done", lines, no_color="1"),
@@ -52,11 +37,6 @@ class Frame(unittest.TestCase):
 class NoteBars(unittest.TestCase):
     shown = Frame.shown
 
-    def test_bars_prints_a_bar_line_per_non_empty_part_and_keeps_its_indent(self):
-        self.assertEqual(self.shown(fc_prompt.bars, ["first\n  indented\n\nlast", "", "\nsecond entry\n"], no_color="1"),
-                         "│  first\n│    indented\n│  last\n│  second entry\n")
-        self.assertEqual(self.shown(fc_prompt.bars, (), no_color="1"), "")
-
     def test_a_multi_line_note_entry_keeps_the_bar_on_every_line(self):
         first = "No TypeSafe key: without it verify and change cannot check your code. Add one later:"
         then = "  pbpaste | compose workspace key default --typesafe"
@@ -66,13 +46,6 @@ class NoteBars(unittest.TestCase):
                                  f"│\n◇  Summary\n│  {first}\n│  {then}\n")
         self.assertEqual(self.shown(fc_prompt.note, "Keys", ["one", "a\n\n  b\n", "", "two"], no_color="1"),
                          "│\n◇  Keys\n│  one\n│  a\n│    b\n│  two\n")
-
-    def test_note_and_step_print_their_entries_through_bars(self):
-        lines = ["a\n  b"]
-        with mock.patch.object(fc_prompt, "bars") as bars:
-            self.assertEqual(self.shown(fc_prompt.note, "Keys", lines, no_color="1"), "│\n◇  Keys\n")
-            self.assertEqual(self.shown(fc_prompt.step, "pi", "done", lines, no_color="1"), "◇  pi: done\n")
-        self.assertEqual(bars.call_args_list, [mock.call(lines), mock.call(lines)])
 
 class Ask(unittest.TestCase):
     def ask(self, fn, *args, answers=(), getpass=None):

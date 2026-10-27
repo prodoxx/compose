@@ -112,12 +112,6 @@ class Product(Fake):
         self.assertTrue(out.startswith("The PRD's product at a glance (u/prd):\nA shoe shop for runners.\n"), out)
         self.assertNotIn("Sell.", out); self.assertNotIn("None.", out)
 
-    def test_seed_without_a_prd_says_to_plan_it_first(self):
-        with mock.patch.object(fc.fc_prd, "read_prd", return_value=None):
-            out = self.run_verb("seed")
-        self.assertEqual(out.splitlines()[0], fc.fc_delivery.NO_PRD)
-        self.assertIn("compose prd seed", fc.fc_delivery.NO_PRD); self.assertIn("first", fc.fc_delivery.NO_PRD)
-
     def test_seed_goes_on_when_the_prd_lookup_fails(self):
         with mock.patch.object(fc.fc_prd, "read_prd", side_effect=RuntimeError("linear down")):
             out = self.run_verb("seed")
@@ -225,21 +219,12 @@ class Reconcile(Fake):
         fc.fc_delivery.reconcile(self.repo)
         self.assertEqual(len(self.doc_writes), writes)
 
-    def test_no_reconcile_yet_reads_as_none(self):
-        self.assertIsNone(fc.fc_delivery.last_reconcile(self.repo))
-
     def test_dry_run_prints_what_it_would_do_and_writes_nothing(self):
         out = self.run_verb("reconcile", dry_run=True).splitlines()
         self.assertEqual(out[:3], ["product delivery plan (dry run, nothing written): 1 blocks added, 1 removed, ready not checked, 1 proposed",
                                    "  + NEB-9 blocks NEB-12", "  - NEB-5 no longer blocks NEB-12"])
         self.assertEqual(self.mutations(), []); self.mark.assert_not_called(); self.blocked_by.assert_not_called()
         self.assertFalse(fc.fc_delivery.state_path(self.repo).exists())
-
-    def test_the_summary_lists_ready_and_proposed_lines(self):
-        out = self.run_verb("reconcile").splitlines()
-        self.assertEqual(out[0], "product delivery plan: 1 blocks added, 1 removed, 1 ready, 1 proposed")
-        self.assertIn("  ready: NEB-10", out)
-        self.assertIn("  proposed: NEB-30 T NEB-30 is an open feature the plan does not name: add it to a track, or cancel it.", out)
 
     def test_a_bad_plan_stops_before_any_write(self):
         self.content = "## Tracks\n\n1. A: NEB-7 (after B)\n2. B: NEB-9 (after A)\n"

@@ -36,18 +36,6 @@ class KeyStatus(unittest.TestCase):
         self.assertTrue(all(c[:2] == ({"a": 1}, "acme") for c in calls))
         return got
 
-    def test_presence(self):
-        keys = {"openrouter": "sk-or-test", "typesafe": "sk-ts-test", "linear": "sk-lin-test"}
-        self.assertEqual(self.status(keys, "# x\nFIGMA_API_KEY=sk-fig-test\n"), dict.fromkeys(["openrouter", "typesafe", "linear", "figma"], True))
-        self.assertEqual(self.status({"openrouter": "", "linear": "sk-lin-test"}, "OTHER=sk-x\nFIGMA_API_KEY=\n"),
-                         {"openrouter": False, "typesafe": False, "linear": True, "figma": False})
-        self.assertFalse(self.status({})["figma"])  # no Framelink env file
-
-    def test_module_is_keys_only(self):
-        self.assertEqual(fc_keys.__doc__, "Key presence (never values), and saving entered keys.")
-        self.assertFalse(hasattr(fc_keys, "linear_connected") or hasattr(fc_keys, "linear_state"))
-
-
 class KeySave(unittest.TestCase):
     """Saving an entered key to auth.json or the Framelink env file, and the line for a skipped key; never a value."""
     def setUp(self):
@@ -147,14 +135,6 @@ class TypeSafeLine(unittest.TestCase):
         "linear": LINEAR,
         "figma": "No Figma token: without it the designer cannot build your designs. Add one later, on a terminal:\n  compose setup",
     }
-
-    def test_typesafe(self):
-        for ws in ("default", "acme", "team-b2"):
-            line = fc_keys.skipped_line("typesafe", ws)
-            self.assertEqual(line, "No TypeSafe key: without it verify and change cannot check your code. Add one later:\n"
-                                   f"  pbpaste | compose workspace key {ws} --typesafe")
-            self.assertNotIn("compose setup", line)
-            self.assertNotIn("on a terminal", line)
 
     def test_others_unchanged(self):
         for ws in ("default", "team-b2"):

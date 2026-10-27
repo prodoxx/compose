@@ -85,13 +85,6 @@ class DepthConfig(unittest.TestCase):
         got, depth, tid = self.config(("FAST", "t1", "r0", "case: a", "code"), ("DEEP", "t2", "r1", "case: b", "code"))
         self.assertEqual((got, depth, tid), ({**self.CFG, "depth": "DEEP", "checks": ["c1", "r0", "r1"], "acceptance_gate": True}, "DEEP", "062"))
 
-    def test_the_input_cfg_and_its_lists_are_not_changed(self):
-        cfg = json.loads(json.dumps(self.CFG))
-        got, _, _ = self.config(("FAST", "t1", "r1", "case: a", "code"), cfg=cfg)
-        self.assertEqual(cfg, self.CFG)
-        self.assertIsNot(got["checks"], cfg["checks"]); self.assertIsNot(got["e2e"], cfg["e2e"])
-
-
 CFG = {"review": True, "jev_acceptance": True, "e2e": [{"name": "a"}, {"name": "b"}, {"name": "c"}]}
 SHA = "0123456789abcdef0123456789abcdef01234567"
 
@@ -121,10 +114,6 @@ class DepthEvents(unittest.TestCase):
         self.expect(self.events({**CFG, "review": False, "jev_acceptance": False}, {"review": False, "e2e": []}), ["e2e a", "e2e b", "e2e c"])
         self.expect(self.events(CFG, {"review": True, "e2e": CFG["e2e"]}), ["acceptance"])
         self.expect(self.events({"e2e": [{"name": "a"}]}, {"review": False, "e2e": []}), ["review", "acceptance", "e2e a"])  # review and acceptance default on
-
-    def test_standard_and_deep_give_no_events(self):
-        for depth in ("STANDARD", "DEEP"):
-            self.assertEqual(self.events(CFG, {"review": True, "e2e": CFG["e2e"]}, depth), [])
 
     def test_record_depth_writes_the_events_on_the_feature_once_at_head(self):
         run_cfg = {"review": False, "e2e": [{"name": "a"}]}

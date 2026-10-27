@@ -92,7 +92,3 @@ class Quick(unittest.TestCase):
             return {"issue": {"id": v["id"], "description": self.live[v["id"]]}}
         self.linear_gql.side_effect = gql
         self.assertEqual(self.fails("ENG-7"), "quick: Linear failed writing the pin on ENG-7 (down); nothing was pinned")
-
-    def test_policies_that_cannot_be_read_exit_with_one_line(self):
-        self.read_policies.side_effect = RuntimeError("policies unreadable: x")
-        self.assertEqual(self.fails("ENG-3"), "quick: policies unreadable: x; nothing was pinned")

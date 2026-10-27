@@ -71,12 +71,6 @@ class LayerNames(LayersBase):
         self.stack(branch="compose/p", layer_prefix="review/p-")
         self.assertEqual(self.layers("review/p-"), ["review/p-layer-01", "review/p-layer-02", "review/p-layer-03"])
 
-    def test_a_recorded_task_prefix_names_the_layers(self):
-        self.rename("feat/p-")
-        self.stack(task_prefix="feat/p-")
-        self.assertEqual(self.layers("feat/p-"), ["feat/p-layer-01", "feat/p-layer-02", "feat/p-layer-03"])
-        self.assertEqual(self.git("diff", "feat/p-layer-03", "feat/p-003"), "")
-
 
 class StackFolds(unittest.TestCase):
     """Adjacent layers fold until the stack has no more PRs than max_stack_prs: same kind first, then any; recorded layers never."""

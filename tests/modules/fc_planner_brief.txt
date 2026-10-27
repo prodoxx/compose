@@ -1,2 +1,0 @@
-PLANNER_BRIEF
-with_prd

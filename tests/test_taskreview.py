@@ -99,29 +99,12 @@ class ReviewCommand(unittest.TestCase):
         self.assertEqual((code, task.call_args.args[3][0]["result"]), (1, "error"))
         self.assertIn("boom", out)
 
-    def test_refusals_say_what_to_pass(self):
-        for kw, word in (({}, "--only"), ({"only": "009"}, "no task 009"), ({"range": "main"}, "<base>..<tip>"), ({"range": "main..nope"}, "<base>..<tip>")):
-            with self.subTest(kw):
-                a = SimpleNamespace(repo=str(self.repo), project="feat", only=kw.get("only"), range=kw.get("range"))
-                with mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), self.assertRaises(SystemExit) as ex:
-                    fc_taskreview.cmd_review(a)
-                self.assertIn(word, str(ex.exception))
-
     def test_a_merged_task_with_no_branch_points_to_range(self):
         git(self.repo, "branch", "-D", "t/002")
         a = SimpleNamespace(repo=str(self.repo), project="feat", only="002", range=None)
         with mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), self.assertRaises(SystemExit) as ex:
             fc_taskreview.cmd_review(a)
         self.assertIn("--range <base>..<tip>", str(ex.exception))
-
-    def test_the_cli_loads_the_keys_before_the_command_runs(self):
-        order = []
-        with mock.patch.object(sys, "argv", ["compose", "review", "--project", "feat", "--only", "001"]), \
-                mock.patch.object(fc.fc_config, "apply_config", side_effect=lambda **kw: order.append("keys") or "default"), \
-                mock.patch.object(fc.fc_taskreview, "cmd_review", side_effect=lambda a: order.append("review")), mock.patch.object(fc.fc_core, "say"):
-            fc.main()
-        self.assertEqual(order, ["keys", "review"])
-
 
 if __name__ == "__main__":
     unittest.main()

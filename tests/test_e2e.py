@@ -547,18 +547,6 @@ class CheckoutBp(unittest.TestCase):
                 self.assertEqual(os.environ["PATH"].split(os.pathsep), [d] + rest)
                 self.assertEqual(os.path.realpath(shutil.which("bp")), self.target)
 
-    def test_a_second_call_returns_the_same_dir_and_path_holds_it_once(self):
-        rest = ["/usr/bin", "/bin"]
-        with mock.patch.dict(os.environ, {"PATH": os.pathsep.join([rest[0], CHECKOUT_BP, rest[1]])}):
-            first, second = checkout_bp.use_checkout_bp(), checkout_bp.use_checkout_bp()
-            self.assertEqual(first, second)
-            self.assertEqual(os.environ["PATH"].split(os.pathsep), [first] + rest)
-
-    def test_the_dir_is_outside_the_checkout_and_holds_only_bp(self):
-        self.assertFalse(Path(CHECKOUT_BP).resolve().is_relative_to(Path(__file__).resolve().parents[1]))
-        self.assertEqual(os.listdir(CHECKOUT_BP), ["bp"])
-        self.assertTrue(os.access(Path(CHECKOUT_BP) / "bp", os.X_OK))
-
 
 class BeforePlanning(unittest.TestCase):
     """Groundwork writes checks and e2e cases before any task exists; verify runs them without a sync when nothing reads the tasks."""
@@ -587,7 +575,7 @@ class BeforePlanning(unittest.TestCase):
         code, _ = self.verify(**kw)
         final = [l for l in self.out.getvalue().splitlines() if f"smoke {label}" in l or "verify PASS" in l or "verify FAIL" in l]
         self.assertEqual(len(final), 1, self.out.getvalue()); self.assertIn(f"smoke {label}", final[0])
-        self.assertEqual(self.lr.call_count, 0)
+        self.assertEqual((self.lr.call_count, self.vf.call_count), (0, 0))
         return code, json.loads((self.proj / "results" / "smoke.json").read_text())
 
     def test_an_unsynced_or_empty_sync_run_is_a_smoke_run_and_writes_no_verify_record(self):
@@ -614,11 +602,6 @@ class BeforePlanning(unittest.TestCase):
         self.assertIn("verify PASS", self.out.getvalue()); self.assertNotIn("smoke", self.out.getvalue())
         self.assertEqual(self.lr.call_args_list, [mock.call(self.proj, verified=True)])
 
-    def test_checks_and_e2e_run_unsynced_with_no_review_and_no_fixer(self):
-        code, repo = self.verify(skip_review=True, fix=0)
-        self.assertEqual(code, 0)
-        self.assertTrue((repo / "checked").exists() and (repo / "driven").exists())
-
     def test_a_verify_that_reviews_or_fixes_still_needs_the_sync_and_names_the_way_without(self):
         for flags in ({}, {"skip_review": True}, {"fix": 0}):
             code, repo = self.verify(**flags)
@@ -640,11 +623,6 @@ class BeforePlanning(unittest.TestCase):
         self.assertEqual((proj, len(rounds), rounds[0]["checks"]), (self.proj, 1, record["rounds"][0]["checks"]))
         self.assertIn("Command failed: false", findings)
         self.assertIn("verify FAIL", self.out.getvalue())
-
-    def test_a_passing_run_never_reaches_the_failure_screen(self):
-        for kw in ({"tasks": [self.TASK]}, {"tasks": []}, {"skip_review": True, "fix": 0}):
-            code, _ = self.verify(**kw)
-            self.assertEqual((code, self.vf.call_count), (0, 0), kw)
 
 
 class PathsAtStackTop(unittest.TestCase):

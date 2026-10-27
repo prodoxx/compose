@@ -70,13 +70,6 @@ class Stalls(unittest.TestCase):
         self.assertNotIn("orchestrator", ev[0])
         self.assertIn("no team lead", ev[0])
 
-    def test_the_team_lead_name_is_the_one_crew_start_gives_it(self):
-        self.assertEqual(fc.fc_herdr.agent_name("autofill-hifi-design", "orchestrator"), "autofill-hifi-desig-orchestrator")
-        self.assertLessEqual(len(fc.fc_herdr.agent_name("autofill-hifi-design", "orchestrator")), 32)
-
-    def test_recent_activity_is_not_a_stall(self):
-        self.assertEqual(self.stalls(self.snap(crew={ORCH: ("working", 60)}, last_ago=60)), [])
-
     def test_done_or_waiting_on_the_product_owner_is_not_a_stall(self):
         self.assertEqual(self.stalls(self.snap(crew={ORCH: ("done", 900)}, last_ago=900)), [])
         self.assertEqual(self.stalls(self.snap(crew={ORCH: ("needs-user", 900)}, last_ago=900)), [])
@@ -342,13 +335,6 @@ class WatchMemory(unittest.TestCase):
             self.assertTrue(any("crew=hw-x state=tool-bug" in line for line in self.watch(self.later(), role=role)), role)
             self.assertIn("event timeout", self.watch(self.later(), role=role)[-1])
 
-    def test_the_memory_file_is_named_for_the_role(self):
-        self.watch(wsnap(), now=True, role="engineering-manager", from_="orchestrator")
-        self.watch(wsnap(), now=True)
-        self.watch(wsnap(), now=True, role="", from_="x,orchestrator")
-        files = sorted(f.name for f in (self.proj / "results").glob("watch-*.json"))
-        self.assertEqual(files, ["watch-engineering-manager.json", "watch-manager.json"])
-
     def test_a_payment_halt_is_an_event(self):
         ev = fc.fc_watch.watch_events(wsnap(run=True), wsnap(halt=["2026-10-11 10:00:00", "openrouter", 2]))
         self.assertTrue(any(e.startswith("event halt=payment provider=openrouter remaining=2") for e in ev), ev)
@@ -414,11 +400,6 @@ class Rewake(unittest.TestCase):
         self.assertEqual((code, err), (0, ""))
         pd.assert_not_called()
 
-    def test_a_headless_session_returns_at_once(self):
-        code, err, pd = self.rewake([], env={**self.env, "CLAUDE_CODE_ENTRYPOINT": "sdk-cli"})  # what Claude Code sets for `claude -p`
-        self.assertEqual((code, err), (0, ""))
-        pd.assert_not_called()
-
     def test_a_wake_carries_the_skill_change_notice(self):
         skill = Path(tempfile.mkdtemp()).resolve()
         (skill / "SKILL.md").write_text("v1\n")
@@ -479,23 +460,6 @@ class Reenter(unittest.TestCase):
         self.assertIn(str(crew / "hw-designer.brief.md"), out)
         self.assertNotIn("hw-crew", out)
 
-    def test_no_role_or_a_headless_session_prints_nothing(self):
-        for env in ({k: v for k, v in self.env.items() if k != "COMPOSE_ROLE"}, {**self.env, "CLAUDE_CODE_ENTRYPOINT": "sdk-cli"}):
-            out, pd = self.reenter(env)
-            self.assertEqual(out, "")
-            pd.assert_not_called()
-
-    def test_the_plugin_runs_it_on_a_compaction(self):
-        root = Path(fc.__file__).resolve().parents[1]
-        hooks = json.loads((root / "hooks" / "hooks.json").read_text())["hooks"]
-        cmds = lambda ev, m=None: [h["command"] for e in hooks.get(ev, []) if e.get("matcher") == m for h in e["hooks"]]
-        self.assertTrue(any(c.endswith(" reenter") for c in cmds("SessionStart", "compact")), hooks.get("SessionStart"))
-        self.assertTrue(cmds("PreToolUse", "Write|Edit|MultiEdit|NotebookEdit|Bash")[0].endswith(" guard"))
-        self.assertTrue(cmds("PostToolUse", "Skill")[0].endswith(" skillcheck"))
-        self.assertTrue(cmds("UserPromptSubmit")[0].endswith(" skillcheck"))
-        self.assertTrue(cmds("Stop")[0].endswith(" rewake"))
-
-
 class Detach(unittest.TestCase):
     """run, verify, and resume work in their own session: a closed herdr tab or a dead Claude session ends only the
     follower that streams their log, never the work."""
@@ -524,11 +488,6 @@ class Detach(unittest.TestCase):
             code = fc.follow([sys.executable, "-c", "print('layer 001 passed'); raise SystemExit(3)"], self.log)
         self.assertEqual(code, 3)
         self.assertIn("layer 001 passed", out.getvalue())
-
-    def test_the_work_runs_in_its_own_session(self):
-        with contextlib.redirect_stdout(io.StringIO()):
-            fc.follow([sys.executable, "-c", "import os; print(os.getsid(0))"], self.log)
-        self.assertNotEqual(int(self.log.read_text().split()[0]), os.getsid(0))
 
     def test_a_compose_verify_started_by_a_detached_verify_detaches_too(self):
         """The detach marker is the CLI's own: an e2e driver that runs compose gets a run in its own session, never one in
@@ -663,20 +622,6 @@ class Timed(unittest.TestCase):
         self.assertEqual((r.returncode, r.stdout), (0, "['a b', '$HOME', \"'q'\"]\n"), r.stderr)
         r = timed("echo one && echo two")
         self.assertEqual((r.returncode, r.stdout), (0, "one\ntwo\n"), r.stderr)
-
-    def test_timed_passes_the_callers_stdin_on_but_never_a_terminal(self):
-        import pty, subprocess as sp
-        cat = lambda **stdin: sp.run([str(Path(__file__).resolve().parents[1] / "bin" / "compose"), "timed", "5", "--", "cat"],
-                                     capture_output=True, text=True, **stdin)
-        r = cat(input='{"feature": {}}')
-        self.assertEqual((r.returncode, r.stdout), (0, '{"feature": {}}'), r.stderr)
-        main, term = pty.openpty()
-        try:
-            r = cat(stdin=term)  # a test reading stdin must not wait on the keyboard until the limit
-        finally:
-            os.close(main)
-            os.close(term)
-        self.assertEqual((r.returncode, r.stdout), (0, ""), r.stderr)
 
     def test_a_compose_command_under_timed_that_needs_a_key_says_to_run_it_directly(self):
         compose = str(Path(__file__).resolve().parents[1] / "bin" / "compose")

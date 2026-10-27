@@ -1,5 +1,0 @@
-pct
-CASE_RE
-score_test
-bench_tests
-cmd_bench

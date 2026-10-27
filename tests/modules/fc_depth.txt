@@ -1,4 +1,0 @@
-stack_depth
-depth_config
-depth_events
-record_depth

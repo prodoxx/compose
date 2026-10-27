@@ -1,8 +1,0 @@
-RULES
-NAME
-settings_path
-read_settings
-missing
-check
-write
-offer

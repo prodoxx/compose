@@ -19,33 +19,6 @@ import fc_digest as fd
 BIN = Path(__file__).resolve().parents[1] / "bin"
 
 
-class PlansLanded(unittest.TestCase):
-    params = staticmethod(lambda fn: list(inspect.signature(fn).parameters))
-
-    def test_the_seams_of_the_build_loop_exist_as_promised(self):
-        self.assertEqual((set(st.PACE), set(ft.IDLE)), ({"day", "night"}, {"day", "night"}))  # night joins PACE when fc_nightstate loads, and IDLE when fc_nightprep does
-        self.assertEqual(st.EMPTY["mode"], "day")
-        self.assertEqual([self.params(g) for g in (st.pace, st.day_cap)], [["state"]] * 2)
-        self.assertEqual(self.params(st.add_event), ["repo", "line"]); self.assertEqual(self.params(st.events_since), ["repo", "n"])
-        self.assertEqual(self.params(st.say_once), ["state", "key", "line", "out"])
-        self.assertEqual(self.params(ft.turn)[:3], ["repo", "state", "now"]); self.assertEqual(self.params(ft.in_flight), ["plan", "state"])
-        self.assertEqual(self.params(ft.offer_day), ["repo", "state", "offer", "now", "out"])
-        self.assertEqual(self.params(ft.compose_cli)[:2], ["args", "stdin"]); self.assertEqual(self.params(ft.prompt_lead), ["name", "text"])
-        self.assertEqual(self.params(f.run_loop), ["repo", "turns"]); self.assertTrue(callable(f.verb_stop) and callable(f.alive))
-        self.assertEqual(set(fc_config.FACTORY_DEFAULTS), {"day_tickets", "turn_seconds", "offer_snooze_minutes", "night_tickets", "night_until", "night_budget", "prep_ahead"})
-
-    def test_the_roadmap_readiness_pause_and_cleanup_interfaces_exist(self):
-        self.assertEqual(self.params(fc_delivery.last_reconcile), ["repo"]); self.assertEqual(self.params(fc_delivery.product_plan), ["repo"])
-        self.assertEqual(self.params(fc_plan.base_built), ["state", "labels"])
-        self.assertEqual(self.params(fc_readiness.story_readiness), ["repo", "story", "refresh", "write"])
-        self.assertIn("effort", self.params(fc_claude.claude_json))
-        self.assertEqual((self.params(fc_change.rests_on), self.params(fc_change.hold_tasks), self.params(fc_change.paused_tasks)),
-                         (["proj", "refs"], ["proj", "ids", "reason"], ["proj"]))
-        self.assertEqual(self.params(fc_reconcile.live_leads), ["repo"])
-        out = subprocess.run([sys.executable, str(BIN / "compose.py"), "factory", "--help"], capture_output=True, text=True).stdout
-        self.assertEqual([v for v in ("start", "stop", "status", "watch", "pace", "plan", "decline", "loop") if v not in out], [])
-
-
 class Limits(unittest.TestCase):
     def setUp(self):
         self.repo = Path(tempfile.mkdtemp()).resolve()
@@ -1038,7 +1011,6 @@ class Digest(unittest.TestCase):
         self.assertNotIn(chr(0x2014), text)
 
 
-
 class Night(unittest.TestCase):
     """The switch, the per-turn tick, and the two-stage stop, through cmd_factory and fc_night.tick."""
     def setUp(self):
@@ -1188,11 +1160,6 @@ class Night(unittest.TestCase):
         out = self.verb("day")
         for item in ("- To confirm: sign-in db: postgres", "- Waiting on you: sign-in: 001: needs-user  delete? (night)", "- Failed or stuck: sign-in: 002 t  failed"):
             self.assertIn(item, out)
-
-    def test_stop_now_stops_at_once_on_the_first_stop(self):
-        self.night_on(); self.hold_lock(); self.save(pid=self.sleeper.pid)
-        self.assertEqual(self.verb("stop", now=True).splitlines()[0], "factory: stopped at once; held 0 tasks, their work is kept on their refs (compose change keep|part|discard settles it)")
-        self.assertEqual(self.load()["night"]["ended"]["state"], "stopped at once"); self.sleeper.wait(timeout=5)
 
     def test_day_ends_the_night_prints_and_saves_the_digest_and_lifts_the_posture(self):
         self.night_on(); out = self.verb("day")

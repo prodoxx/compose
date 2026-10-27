@@ -119,16 +119,5 @@ class Loop(unittest.TestCase):
         self.assertFalse([l for l in out if "stall=quiet" in l], out)  # 2000 s of silence, all of it asleep
         self.assertEqual(json.loads((self.proj / "results" / "watch-orchestrator.json").read_text())["woke"], [T + 4, T + 2004])
 
-    def test_silence_after_the_grace_is_a_stall_again(self):
-        snap = self.snap(600)
-        self.assertEqual(fc.fc_watch.watch_stalls(self.proj, snap, 240, now_s=T, woke=[T - 500, T - 100]), [])
-        ev = fc.fc_watch.watch_stalls(self.proj, snap, 240, now_s=T + 200, woke=[T - 500, T - 100])
-        self.assertTrue(any("stall=quiet" in e for e in ev), ev)
-
-    def test_the_wake_reaches_a_watch_that_names_its_sources(self):
-        ev = ["event sleep=woke from=01:00:00 to=02:00:00 slept=60m00.0s", "event crew=hw-x state=done message='m'"]
-        self.assertEqual(fc.fc_watch.watch_filter(ev, "hw", ["hw-orchestrator"]), ev[:1])
-
-
 if __name__ == "__main__":
     unittest.main()

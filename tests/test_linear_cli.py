@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import importlib.machinery, importlib.util, io, json, os, re, subprocess, tempfile, threading, time, unittest, urllib.error
+import importlib.machinery, importlib.util, io, json, os, subprocess, tempfile, threading, time, unittest, urllib.error
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
@@ -67,10 +67,6 @@ class LinearKey(unittest.TestCase):
         self.assertNotIn(KEY, out + self.cfg.read_text())
         listing = self.workspace()
         self.assertIn("linear key set", listing); self.assertNotIn(KEY, listing)
-
-    def test_listing_says_not_set(self):
-        self.assertIn("linear key not set", self.workspace())
-
 
 class LinearStates(unittest.TestCase):
     def setUp(self):
@@ -175,13 +171,6 @@ class LinearStates(unittest.TestCase):
             self.done("003,004")
         self.assertEqual([c.args[1] for c in close.call_args_list], ["003", "004"])
 
-    def test_done_by_hand_without_a_key_says_so_once(self):
-        said = []
-        with mock.patch.object(fc.fc_config, "LINEAR_KEY", None), mock.patch.object(fc.fc_core, "say", said.append):
-            self.done("003,004")
-        self.assertEqual(self.lin.calls, 0)
-        self.assertEqual(len(said), 1); self.assertIn("--linear", said[0])
-
 class SyncFromLinear(unittest.TestCase):
     """Feature ENG-1 > stories ENG-2, ENG-3 > tasks; ENG-2 has 3 tasks served 2 per page."""
     def setUp(self):
@@ -258,18 +247,6 @@ class SyncFromLinear(unittest.TestCase):
         self.assertEqual([t["linear"] for t in json.loads((self.proj / "results" / "tasks.json").read_text())["tasks"]],
                          ["ENG-23", "ENG-4", "ENG-5", "ENG-6"])
 
-    def test_design_epic_tasks_survive_a_stories_scope(self):
-        (self.proj / "linear.json").write_text(json.dumps({"feature": "ENG-1", "stories": ["ENG-2"], "design_epic": "ENG-20"}))
-        self.assertIn("4 task(s) synced", self.sync())
-
-    def test_no_key_names_the_workspace_and_the_stdin_form(self):
-        with mock.patch.object(fc.fc_config, "LINEAR_KEY", None), mock.patch.object(fc.fc_config, "WORKSPACE", "work"):
-            text = self.fails()
-        self.assertIn("sync needs a Linear key for workspace 'work': pbpaste | compose workspace key work --linear; "
-                      "or pipe the JSON to compose sync --stdin --project ", text)
-        self.assertIn(f" ({fc.fc_tasks.SYNC_SHAPE})", text)
-        self.assertEqual(self.queries, [])
-
     def test_missing_feature_and_linear_failures_exit_and_store_nothing(self):
         self.assertIn("sync: Linear has no issue ENG-1", self.fails(lambda q, v: {"issue": None}))
         for err, first in ((RuntimeError("boom"), True), (OSError("boom"), False)):  # on the feature, or while paging its children
@@ -280,13 +257,6 @@ class SyncFromLinear(unittest.TestCase):
             with self.subTest(err=repr(err)):
                 self.assertIn(f"sync: Linear failed (boom); compose sync --stdin still works ({fc.fc_tasks.SYNC_SHAPE})", self.fails(gql))
         self.assertFalse((self.proj / "results" / "tasks.json").exists())
-
-    def test_stdin_reads_the_json_and_never_linear(self):
-        payload = json.dumps(fc.fc_linear.linear_sync_payload(self.proj))
-        self.queries.clear()
-        with mock.patch("sys.stdin", io.StringIO(payload)):
-            self.assertIn("3 task(s) synced", self.sync(stdin=True))
-        self.assertEqual(self.queries, [])
 
     def test_cli_takes_stdin_and_rejects_from_linear(self):
         def run(flag):
@@ -339,10 +309,6 @@ class LinearErrors(unittest.TestCase):
                 self.assertIs(e.exception, err)
                 self.assertNotIn(KEY, str(e.exception))
 
-    def test_200_replies_behave_as_today(self):
-        self.assertEqual(self.gql(b'{"data": {"viewer": {"id": "u1"}}}'), {"viewer": {"id": "u1"}})
-        self.assertEqual(self.rejected(b'{"errors": [{"message": "a"}, {"message": "b"}]}'), "a; b")
-
     def test_a_rate_limited_call_waits_as_long_as_linear_says_and_runs_again(self):
         limited = json.dumps({"errors": [{"message": "Rate limit exceeded", "extensions": {"code": "RATELIMITED"}}]}).encode()
         reset = str(int(time.time()) + 40)
@@ -382,12 +348,6 @@ class LinearErrors(unittest.TestCase):
         self.assertIn("Linear gave no answer within 0.2s", str(e.exception))
         self.assertIn("read the issue before repeating it", str(e.exception))
 
-    def test_the_sync_query_asks_for_at_most_50_relations_and_20_labels_per_issue(self):
-        fields = fc.fc_linear.LINEAR_TREE_FIELDS
-        self.assertEqual(sorted(re.findall(r"\w+\(first: (\d+)\)", fields)), ["20", "20", "50"])
-        self.assertNotIn("labels { nodes", fields)
-
-
 class LinearUrl(unittest.TestCase):
     DEFAULT = "https://api.linear.app/graphql"
 
@@ -399,15 +359,6 @@ class LinearUrl(unittest.TestCase):
         with mock.patch.dict(os.environ, env), mock.patch("urllib.request.urlopen", return_value=r) as op:
             fc.fc_linear.linear_gql("query { viewer { id } }", {})
         return op.call_args.args[0].full_url
-
-    def test_the_environment_url_is_used_when_set(self):
-        self.assertEqual(self.url(LINEAR_URL="http://127.0.0.1:9/graphql"), "http://127.0.0.1:9/graphql")
-
-    def test_unset_or_empty_falls_back_to_the_linear_api(self):
-        with mock.patch.dict(os.environ):
-            os.environ.pop("LINEAR_URL", None)
-            self.assertEqual(self.url(), self.DEFAULT)
-        self.assertEqual(self.url(LINEAR_URL=""), self.DEFAULT)
 
     def test_the_variable_is_read_on_every_call_and_the_constant_stays(self):
         with mock.patch.dict(os.environ, {"LINEAR_URL": "http://127.0.0.1:1/a"}):

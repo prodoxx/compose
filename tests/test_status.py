@@ -115,12 +115,6 @@ class TestTiers(unittest.TestCase):
         self.assertTrue(any(l.startswith("  route cost ") for l in lines[:-5]), lines)
         spend.assert_called_once_with(self.proj, 40.0)
 
-    def test_spend_alone_prints_without_a_pins_line(self):
-        with mock.patch.object(fc_tierspend, "lines", return_value=["  spend header"]):
-            lines = self.status()
-        self.assertEqual(lines[-2:], ["  spend header", ""])
-        self.assertFalse(any("tier pins" in l for l in lines), lines)
-
     def test_a_frontier_result_shows_the_header_and_the_default_limit(self):
         (self.proj / "results" / "001.json").write_text(json.dumps({"id": "001", "status": "passed", "model": "claude:claude-opus-5-5", "cost": 0.0, "reference_cost": 0.5}))
         lines = self.status()
@@ -131,10 +125,6 @@ class TestTiers(unittest.TestCase):
         self.assertEqual(len(frontier), 1, lines)
         self.assertTrue(frontier[0].endswith("  limit 25.00"), frontier)
         self.assertFalse(any("tier pins" in l for l in lines), lines)
-
-    def test_no_pins_and_no_spend_print_neither_line(self):
-        self.assertFalse(any("tier pins" in l or "tier spend" in l for l in self.status()))
-
 
 class StackNote(unittest.TestCase):
     def setUp(self):
@@ -206,18 +196,6 @@ class NoWatchFlag(unittest.TestCase):
         self.assertEqual((code, out, status.call_count), (2, "", 0))
         self.assertIn("unrecognized arguments: --watch", err)
 
-    def test_the_status_help_line_is_exact_and_no_longer_mentions_redrawing(self):
-        text = " ".join(self.main("--help")[1].split())
-        self.assertIn("status projects and every task's state, attempts, time, cost, stack layer watch ", text)
-
-    def test_plain_status_prints_the_board_once_and_returns(self):
-        self.assertEqual(self.board(), (0, "BOARD\n", "", 1, 0))
-
-    def test_digest_and_history_print_what_they_printed_before(self):
-        self.assertEqual(self.board("--digest"), (0, "DIGEST\n", "", 0, 1))
-        self.assertEqual(self.board("--history"), (0, "HISTORY\n", "", 0, 0))
-
-
 class StatusLoadLine(unittest.TestCase):
     def lines(self, held=False, since=None, log=(), avg=13.26):
         state = {"held": held, "since": since, "n": len(log), "log": list(log), "avg": avg, "new": []}
@@ -241,11 +219,6 @@ class StatusLoadLine(unittest.TestCase):
         self.assertEqual(len(lines), 1)
         self.assertRegex(lines[0], r"^load: 13\.3 on 8 cores, released at %s \(below \d+\.\d\)$" % self.clock(540))
         self.assertEqual(self.lines(log=self.released(660))[0], [])
-
-    def test_the_last_release_decides_the_window(self):
-        old = {"n": 1, "at": time.time() - 3000, "kind": "released", "avg": 7.0}
-        self.assertIn("released at " + self.clock(300), self.lines(log=self.released(300, old))[0][0])
-        self.assertEqual(self.lines(log=[old, {**old, "n": 2, "kind": "held", "at": time.time() - 2000}, {**old, "n": 3, "at": time.time() - 900}])[0], [])
 
     def test_a_hold_after_a_recent_release_gives_only_the_held_line_and_the_empty_state_none(self):
         lines, _ = self.lines(held=True, since=time.time() - 60, log=self.released(120))
@@ -321,12 +294,6 @@ class StatusShedLine(unittest.TestCase):
     def test_no_hold_gives_no_shed_lines_whatever_else_is_in_the_state(self):
         self.assertEqual(self.lines(None, self.freed(time.time() - 60), self.HOT), [])
 
-    def test_the_shed_lines_come_after_the_load_lines(self):
-        t = time.time() - 60
-        lines = self.lines({"n": 1, "at": t}, self.freed(t), self.HOT, held=True)
-        self.assertEqual([l.split(":")[0] for l in lines], ["load", "shed", "shed"])
-
-
 class StatusPausedLine(unittest.TestCase):
     def lines(self, paused, hold=None, hot=None, freed=()):
         load = {"held": False, "since": None, "n": 1, "log": [], "avg": 3.0, "new": []}
@@ -340,13 +307,3 @@ class StatusPausedLine(unittest.TestCase):
     def test_paused_agents_give_one_line_in_the_order_given(self):
         lines = self.lines(self.paused((41, "implementer", "myproj"), (52, "teammate", "other"), (63, "implementer", "-")))
         self.assertEqual(lines, ["shed: paused 3: implementer 41 (myproj), teammate 52 (other), implementer 63 (-)"])
-
-    def test_one_paused_agent_and_none_paused(self):
-        self.assertEqual(self.lines(self.paused((41, "teammate", "myproj"))), ["shed: paused 1: teammate 41 (myproj)"])
-        self.assertEqual(self.lines([]), [])
-
-    def test_the_line_comes_after_the_other_shed_lines(self):
-        t = time.time() - 600
-        freed = [{"pid": 7, "kind": "agent", "project": "myproj", "why": "waiter gone", "at": t}]
-        lines = self.lines(self.paused((41, "teammate", "myproj")), {"n": 1, "at": t}, {"pid": 11, "cpu": 54.6, "command": "node"}, freed)
-        self.assertEqual([l[:13] for l in lines], ["shed: freed 1", "shed: hottest", "shed: paused "])

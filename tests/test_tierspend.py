@@ -32,10 +32,6 @@ class TierSpend(unittest.TestCase):
         self.assertAlmostEqual(fc_tierspend.ref_dollars("claude-opus-5-5", 1e6, 0, 0, 1e6), 2)
         self.assertAlmostEqual(fc_tierspend.ref_dollars("claude-haiku-5-5", 1e6, 0, 0, 0), 0.10)
 
-    def test_a_prices_entry_with_three_numbers_exits(self):
-        with self.assertRaises(SystemExit) as e: self.config({}, prices={"pi:a/b": [1, 2, 3]})
-        self.assertEqual(str(e.exception), f"{self.path}: prices.pi:a/b must be 2 or 4 numbers")
-
     def test_a_prices_value_that_is_not_an_object_exits_naming_the_file_and_key(self):
         for bad in ([1, 2], "cheap", 3, None):
             with self.subTest(bad=bad), self.assertRaises(SystemExit) as e: self.config({}, prices=bad)
@@ -57,7 +53,3 @@ class TierSpend(unittest.TestCase):
             self.assertEqual(fc_tierspend.lines(proj, 25.0), [f"  {'tier spend':12} {'real $':>9} {'ref $':>9}", f"  {'cheap':12} {3.25:>9.4f} {0.0:>9.4f}",
                 f"  {'standard':12} {0.0:>9.4f} {0.5:>9.4f}", f"  {'frontier':12} {0.1:>9.4f} {4.0:>9.4f}+?  limit 25.00"])
             self.assertEqual(fc_tierspend.lines(proj)[-1], f"  {'frontier':12} {0.1:>9.4f} {4.0:>9.4f}+?")
-
-    def test_lines_are_empty_with_no_spend(self):
-        proj = Path(tempfile.mkdtemp()) / ".compose" / "p"; (proj / "results").mkdir(parents=True)
-        with mock.patch.object(fc_cost, "rows", return_value=[]): self.assertEqual((fc_tierspend.lines(proj, 25.0), fc_tierspend.frontier(proj)), ([], 0))

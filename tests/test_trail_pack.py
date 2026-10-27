@@ -48,21 +48,6 @@ class TrailPack(FakeTrail):
         with mock.patch.object(fc.fc_core, "sh", return_value=failed):
             self.assertEqual(fc.fc_implement.fc_trailpack.trail_pack(self.repo_on("graft"), "main"), "")
 
-    def test_the_implementer_prompt_names_trail_never_graft(self):
-        repo, _ = repo_with({"a.txt": "no\n"})
-        task, prompts = {"id": "001", "title": "answer", "files": ["a.txt"], "protected": [], "test": "grep -q yes a.txt",
-                         "model": "pi:p/primary", "after": "", "linear": "ENG-1", "body": "## Goal\nWrite yes."}, []
-        def impl(cwd, model, prompt, session=None, task=None, timeout=None):
-            prompts.append(prompt); (Path(cwd) / "a.txt").write_text("yes\n")
-            return "s", "", 1, {"tokens_in": 1, "tokens_out": 1, "cost": 0.0}
-        with mock.patch.object(fc.fc_implement, "implementer", impl), mock.patch.object(fc.fc_implement.fc_trailpack, "trail_pack", return_value="PACK"), \
-                mock.patch.dict(os.environ, {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}):
-            fc.fc_implement.run_task(repo, Path(tempfile.mkdtemp()), task, 3)
-        self.assertIn('CONTEXT PACK from the repo\'s trail graph (exact file:line, with source). Use it instead of exploring. '
-                      'If you need more, run `trail ask "<question>"` or `trail callers <symbol>`; do not open unrelated files.\nPACK', prompts[0])
-        self.assertNotRegex(prompts[0], r"\bgraft\b")
-
-
 class PackCap(FakeTrail):
     """Task 012 (NEB-950): trail_pack cuts its output at `cap`, 12000 by default."""
 

@@ -1,6 +1,0 @@
-read_auth
-write_auth
-workspace_key
-set_key
-old_keys
-move_keys

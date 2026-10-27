@@ -1,6 +1,0 @@
-writer_branch
-writer_brief
-start_writer
-READY_RE
-parse_ready
-wait_ready

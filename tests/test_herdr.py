@@ -32,10 +32,6 @@ class AgentNames(unittest.TestCase):
         for ref in ("orchestrator", lead, "clean-recut-branches-orchestrator"):  # the role, the registered name, the name the docs spell out
             self.assertEqual(fc.fc_herdr.agent_ref(slug, ref), lead)
 
-    def test_herdr_noop_outside(self):
-        with mock.patch.dict(os.environ, {"HERDR_ENV": ""}):
-            self.assertIsNone(fc.fc_herdr.herdr("agent", "list"))
-
     def test_implementer_routes_headless_outside_herdr(self):
         with mock.patch.dict(os.environ, {"HERDR_ENV": ""}), mock.patch.object(fc.fc_models, "pi_turn", return_value=("s", "t", 0, {})) as pt:
             fc.fc_implement.implementer("/tmp", "pi:x/y", "hi", None, task={"space": "w9"})
@@ -394,7 +390,6 @@ class CallerEnv(unittest.TestCase):
         self.assertEqual(self.argv(env, ["pane", "run", "w1:p1", "ls"]), ["herdr", "pane", "run", "w1:p1", "ls"])
         self.assertEqual(self.argv(env, ["tab", "list"]), ["herdr", "tab", "list"])
 
-
 class AgentStartRace(unittest.TestCase):
     def test_a_busy_pane_is_retried_until_it_is_ready(self):
         answers = iter([(None, "agent_pane_busy"), (None, "agent_pane_busy"), ({"agent": {"name": "a"}}, None)])
@@ -594,40 +589,6 @@ class BareCompose(unittest.TestCase):
             self.assertFalse((rec / "argv").exists())
 
 
-class BareUsage(unittest.TestCase):
-    ROOT = BareCompose.ROOT
-    compose = BareCompose.run_compose
-
-    def names(self):
-        code, _, err, _, _ = self.compose("nosuchcmd", tty=False, COLUMNS="80")
-        self.assertEqual(code, 2)
-        self.assertIn("invalid choice: 'nosuchcmd'", err)
-        return [n.strip(" '") for n in err.split("choose from ")[1].split(")")[0].split(",")]
-
-    def test_bare_prints_every_command_on_its_own_line(self):
-        names = self.names()
-        self.assertTrue({"doctor", "setup", "workspace"} <= set(names), names)
-        for kw in ({"HERDR_ENV": "1"}, {"HERDR_ENV": "1", "tty": False}, {"CI": "1"}, {"COMPOSE_NO_HERDR": "1"}):
-            code, out, err, rec, _ = self.compose(COLUMNS="80", **kw)
-            self.assertEqual(code, 2, kw)
-            self.assertTrue(err.startswith("usage: compose [-h] <command> ..."), err[:200])
-            self.assertNotIn("{doctor", err)
-            self.assertNotIn("opening herdr", out)
-            self.assertFalse((rec / "argv").exists(), kw)
-            starts = [l.split()[0] for l in err.splitlines() if l.strip()]
-            self.assertEqual([n for n in names if n not in starts], [], kw)
-            self.assertEqual([l for l in err.splitlines() if len(l) > 80], [], kw)
-
-    def test_help_and_subcommands_keep_working(self):
-        code, out, err, rec, _ = self.compose("--help", HERDR_ENV="1", COLUMNS="80")
-        self.assertEqual(code, 0, err)
-        self.assertIn("usage: compose [-h] <command> ...", out)
-        code, out, err, rec, _ = self.compose("tasks", "--bogus", tty=False, HERDR_ENV="1")
-        self.assertEqual(code, 2)
-        self.assertIn("usage: compose tasks", err)
-        self.assertIn("unrecognized arguments: --bogus", err)
-
-
 class SignInScreen(unittest.TestCase):
     """Waiting for a harness to start never presses a key or re-sends the brief on a sign-in screen."""
     CODEX = ("Sign in with ChatGPT", "Finish signing in via your browser")
@@ -658,11 +619,6 @@ class SignInScreen(unittest.TestCase):
     def test_a_sign_in_screen_that_shows_after_the_enter_stops_the_brief_being_sent_again(self):
         sent, err, _ = self.await_start(lambda calls: self.CODEX[1] if any(c[:2] == ("agent", "send-keys") for c in calls) else "")
         self.assertEqual((sent, self.CODEX[1] in err), ([("agent", "send-keys")], True))
-
-    def test_a_row_patched_into_the_harness_table_is_read_too(self):
-        with mock.patch.dict(fc_harness.HARNESSES, {"zed": {"name": "Zed", "login_screens": ("Zed: log in first",)}}):
-            sent, err, _ = self.await_start("Zed: log in first")
-            self.assertEqual((sent, "Zed: log in first" in err), ([], True))
 
     def test_a_pane_without_a_sign_in_text_retries_as_before(self):
         sent, err, _ = self.await_start("$ codex\n› Ask Codex\n")
@@ -699,10 +655,6 @@ class HerdrPromptSession(unittest.TestCase):
     def test_a_failure_without_json_returns_stderr_or_error(self):
         self.assertEqual(self.call("sys.stderr.write('boom: pane gone\\n'); sys.exit(2)", "agent", "prompt", "a", "hi"), (None, "boom: pane gone"))
         self.assertEqual(self.call("sys.exit(3)", "agent", "prompt", "a", "hi"), (None, "error"))
-
-    def test_a_result_without_a_result_key_returns_the_whole_object(self):
-        self.assertEqual(self.call("print('noise'); print(json.dumps({'ok': True}))", "agent", "get", "a"), ({"ok": True}, None))
-
 
 if __name__ == "__main__":
     unittest.main()

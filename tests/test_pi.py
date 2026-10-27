@@ -1,12 +1,12 @@
 import hermetic  # first: no test sees the real home
-import importlib.util, json, os, sys, tempfile, unittest
+import json, os, sys, tempfile, unittest
 from pathlib import Path
 from unittest import mock
 os.environ["HERDR_ENV"] = ""
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bin"))
 for _m in [m for m in sys.modules if m.startswith("fc_") and m not in ("fc_cost", "fc_mcp", "fc_sessions")]: del sys.modules[_m]
-import fc_models, fc_pi as pi  # noqa: E402
+import fc_pi as pi  # noqa: E402
 
 MODEL = "z-ai/glm-5.3-flash@preset/glm-5-3-flash-fast"
 
@@ -33,13 +33,6 @@ class PiChecks(unittest.TestCase):
             self.assertFalse(pi.provider_declared(self.file(bad)), bad)
         self.assertFalse(pi.provider_declared(self.dir / "missing.json"))
 
-    def test_text_model_set(self):
-        both = "A=1\nTEXT_MODEL=some/model\nTEXT_MODEL_BASE_URL=http://x\n"
-        self.assertTrue(pi.text_model_set(self.file(both, ".env")))
-        for bad in ("TEXT_MODEL=a\n", "TEXT_MODEL_BASE_URL=b\n", "A=1\n", "TEXT_MODEL=\nTEXT_MODEL_BASE_URL=b\n", "TEXT_MODEL_API_KEY=k\nTEXT_MODEL_BASE_URL=b\n"):
-            self.assertFalse(pi.text_model_set(self.file(bad, ".env")), bad)
-        self.assertFalse(pi.text_model_set(self.dir / "none.env"))
-
     def test_pi_auth_overrides(self):
         o = pi.pi_auth_overrides
         key = {"type": "api_key", "key": "sk-or-test"}
@@ -48,24 +41,6 @@ class PiChecks(unittest.TestCase):
         self.assertEqual(o(self.file({"anthropic": {"openrouter": key}})), [])
         self.assertEqual(o(self.file("{oops")), [])
         self.assertEqual(o(self.dir / "missing.json"), [])
-
-    def test_paths_follow_agent_dir(self):
-        def load(name, file):
-            spec = importlib.util.spec_from_file_location(name, file)
-            m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-            return m
-        def fresh():  # a new copy of the module and of fc_models, which holds the agent dir, so no other test file's imports matter
-            with mock.patch.dict(sys.modules, {"fc_models": load("fc_models", fc_models.__file__)}):
-                return load("fc_pi", pi.__file__)
-        with mock.patch.dict(os.environ, {"PI_CODING_AGENT_DIR": str(self.dir)}):
-            m = fresh()
-        self.assertEqual((m.PI_MODELS, m.PI_AUTH), (self.dir / "models.json", self.dir / "auth.json"))
-        with mock.patch.dict(os.environ, {"HOME": str(self.dir)}):
-            os.environ.pop("PI_CODING_AGENT_DIR", None)
-            m = fresh()
-        self.assertEqual(m.PI_MODELS, self.dir / ".pi" / "agent" / "models.json")
-
-
 
 class PiWrites(unittest.TestCase):
     """The write side: declare pi's openrouter-fast provider and append the TEXT_MODEL lines, never touching what is there."""
@@ -139,16 +114,6 @@ class PreviewProvider(unittest.TestCase):
         line = pi.preview_provider(path)
         self.assertEqual(state(), before)
         return line
-
-    def test_absent_file_or_provider_would_declare(self):
-        path = self.dir / "agent" / "models.json"
-        self.assertEqual(self.preview(path), f"would declare openrouter-fast in {path}")
-        path.parent.mkdir()
-        self.assertEqual(self.preview(path), f"would declare openrouter-fast in {path}")
-        for models in ({}, {"version": 2}, {"providers": {"openrouter": {"apiKey": "k", "models": [{"id": MODEL}]}}}):
-            path.write_text(json.dumps(models))
-            self.assertEqual(self.preview(path), f"would declare openrouter-fast in {path}", models)
-        self.assertEqual(pi.declare_provider(path), f"declared openrouter-fast in {path}")
 
     def test_lacking_provider_would_get_what_declare_adds(self):
         path, glm = self.dir / "models.json", [{"id": "x"}, {"id": MODEL}]

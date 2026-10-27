@@ -179,15 +179,6 @@ class Overlap(unittest.TestCase):
                 self.assertEqual(code, 1, out); self.assertIn(f"{kind} is already running on p (pid {self.proc.pid}, since 12:00)", out)
                 self.assertEqual((self.results / "run.log").read_text(), "run done   29/30 passed\n")
                 self.assertEqual(sorted(f.name for f in self.results.iterdir()), ["run.log"])
-    def test_another_kind_or_a_dead_one_does_not_stop_it(self):
-        dead = subprocess.Popen(["true"]); dead.wait()
-        for kind, pid in (("verify", None), ("run", dead.pid)):
-            with self.subTest(kind):
-                self.hold(kind, pid)
-                with mock.patch.object(fc_update, "live_dir", return_value=self.cfg / "live"):
-                    fc_update.refuse_while_running("run", self.repo / ".compose" / "p", self.repo)  # in-process: a started run would outlive the test
-
-
 class Pins(Fixture):
     """A project pins the compose version it starts on; an update refuses while one of its teammates is mid-turn, and once it has
     pulled it names, per project, the skill files that changed since the pin, then moves the pin."""

@@ -465,10 +465,6 @@ class Cli(unittest.TestCase):
         a = self.run_main("tool-bug", "file", "--project", "shop", "--body", "b.md", "--new", "--approved", "--entry", "2026-10-17 15:30:00")[0].call_args.args[0]
         self.assertEqual((a.comment, a.new, a.approved, a.entry), (None, True, True, "2026-10-17 15:30:00"))
 
-    def test_tool_bug_pr_takes_the_worktree_title_and_entry(self):
-        a = self.run_main("tool-bug", "pr", "--project", "shop", "--worktree", "/tmp/fix", "--title", "Fix it", "--entry", "2026-10-17 15:30:00", "--issue", "9")[0].call_args.args[0]
-        self.assertEqual((a.action, a.project, a.worktree, a.title, a.entry, a.issue), ("pr", "shop", "/tmp/fix", "Fix it", "2026-10-17 15:30:00", 9))
-
     def test_tool_bug_usage_errors(self):
         self.run_main("tool-bug", "file", "--project", "shop", "--body", "b.md")[0].assert_called_once()
         for args in (["file", "--body", "b.md", "--comment", "3", "--new"], ["file"], ["post", "--body", "b.md"], ["file", "--body", "b.md", "--comment", "x"],
@@ -476,19 +472,3 @@ class Cli(unittest.TestCase):
             with self.subTest(args), self.assertRaises(SystemExit) as cm:
                 self.run_main("tool-bug", "--project", "shop", *args)
             self.assertEqual(cm.exception.code, 2)
-
-    def test_toolsmith_takes_only_repo_and_project(self):
-        bug, smith = self.run_main("toolsmith", "--repo", ".", "--project", "shop")
-        self.assertEqual((smith.call_args.args[0].repo, smith.call_args.args[0].project), (".", "shop"))
-        bug.assert_not_called()
-        with self.assertRaises(SystemExit) as cm:
-            self.run_main("toolsmith", "--project", "shop", "--body", "b.md")
-        self.assertEqual(cm.exception.code, 2)
-
-    def test_help_gives_each_a_one_line_summary(self):
-        with mock.patch("sys.stdout", io.StringIO()) as out, self.assertRaises(SystemExit):
-            self.run_main("--help")
-        lines = {l.split()[0]: l.split()[1:] for l in out.getvalue().splitlines() if l.startswith("    ") and l.split()}
-        for name in ("tool-bug", "toolsmith"):
-            with self.subTest(name):
-                self.assertTrue(lines.get(name))

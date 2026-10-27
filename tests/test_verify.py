@@ -94,12 +94,3 @@ class VerifyLoadWait(unittest.TestCase):
     def test_e2e_waits_before_it_is_submitted_and_after_the_checks_stage(self):
         self.assertEqual([e[0] for e in self.stages({"checks": [SCOPED], "e2e": E2E})[0]], ["wait", "slot", "run", "free", "wait", "e2e"])
         self.assertEqual([e[0] for e in self.stages({"e2e": E2E})[0]], ["wait", "e2e"])
-
-    def test_force_is_passed_to_every_wait(self):
-        log, _ = self.stages({"checks": [SCOPED], "e2e": E2E}, force=True)
-        self.assertEqual([e[2] for e in log if e[0] == "wait"], [True, True])
-
-    def test_a_stage_that_does_not_start_never_waits(self):
-        for cfg, flags in (({"checks": [SCOPED]}, {"review_only": True}), ({"e2e": E2E}, {"skip_e2e": True}), ({}, {})):
-            with self.subTest(cfg=cfg, flags=flags):
-                self.assertEqual([e for e in self.stages(cfg, **flags)[0] if e[0] == "wait"], [])

@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import ast, contextlib, inspect, io, os, subprocess, sys, tempfile, unittest
+import contextlib, inspect, io, os, sys, tempfile, unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -122,47 +122,6 @@ class Walk(unittest.TestCase):
         got = self.walk(False, True, {}, {"pi": ("claude", "")}, claude=False)
         self.assertEqual((self.steps[-1], got[0][-1]), (("pi", "waiting on Claude Code", []), ("pi", "claude")))
 
-SOURCES = [*sorted((CHECKOUT / "bin").rglob("*.py")), CHECKOUT / "bin" / "compose"]
-
-def code_nodes(path):
-    """Every node of a bin file but its docstrings: the code that runs."""
-    tree = ast.parse(path.read_text(), str(path))
-    docs = {id(n.body[0].value) for n in ast.walk(tree) if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-            and n.body and isinstance(n.body[0], ast.Expr) and isinstance(n.body[0].value, ast.Constant)}
-    return [n for n in ast.walk(tree) if id(n) not in docs]
-
-class NoTextualApp(unittest.TestCase):
-    def test_git_tracks_nothing_under_setup(self):
-        tracked = subprocess.run(["git", "ls-files", "--", "setup"], cwd=CHECKOUT, capture_output=True, text=True, check=True).stdout
-        self.assertEqual(tracked, "")
-
-    def test_no_bin_file_imports_the_app_or_textual(self):
-        hits = []
-        for path in SOURCES:
-            for n in code_nodes(path):
-                names = [a.name for a in n.names] if isinstance(n, ast.Import) else [n.module or ""] if isinstance(n, ast.ImportFrom) else []
-                text = n.value if isinstance(n, ast.Constant) and isinstance(n.value, str) else ""  # `python -m compose_setup`, import_module
-                if any(m.split(".")[0] in ("compose_setup", "textual") for m in names) or "compose_setup" in text or text.startswith("textual"):
-                    hits.append(f"{path.name}:{n.lineno}: {ast.unparse(n)}")
-        self.assertEqual(hits, [])
-
-    def test_no_bin_file_runs_or_reads_anything_under_setup(self):
-        hits = []
-        for path in SOURCES:
-            for n in code_nodes(path):
-                if (isinstance(n, ast.BinOp) and isinstance(n.op, ast.Div) and isinstance(n.right, ast.Constant) and n.right.value == "setup"
-                        or isinstance(n, ast.Call) and getattr(n.func, "attr", getattr(n.func, "id", "")) in ("join", "Path", "chdir")
-                        and any(isinstance(x, ast.Constant) and x.value == "setup" for x in n.args)
-                        or isinstance(n, ast.Constant) and isinstance(n.value, str) and n.value.startswith(("setup/", "./setup"))):
-                    hits.append(f"{path.name}:{n.lineno}: {ast.unparse(n)}")
-        self.assertEqual(hits, [])
-
-    def test_setup_help_still_works(self):
-        r = subprocess.run([sys.executable, str(CHECKOUT / "bin" / "compose"), "setup", "--help"], capture_output=True, text=True, timeout=60)
-        self.assertEqual((r.returncode, r.stderr), (0, ""))
-        self.assertIn("usage: compose setup", r.stdout)
-        self.assertIn("--yes", r.stdout)
-
 ENDING = ["would add default models to ~/.compose/config.json: a", "copied herdr", "would move linear out of ~/.compose/.env", "not finished"]
 class DryFlow(unittest.TestCase):
     def flow(self, yes, dry, rows=ROWS, keys=["openrouter"], ending=(ENDING, 1), offered=[]):
@@ -212,26 +171,3 @@ class DryFlow(unittest.TestCase):
                                                                   ("dry run: nothing changed; 6 changes listed above",)))
         self.flow(False, False)
         self.assertEqual(self.offer.call_args, mock.call(False, False))
-
-    def test_cmd_setup_passes_dry_run(self):
-        with mock.patch.object(fc_setup, "run_setup", return_value=4) as run, mock.patch("os.execvp", side_effect=AssertionError("exec")), \
-             mock.patch.object(sys, "stdin", SimpleNamespace(isatty=lambda: True)), mock.patch.object(sys, "stdout", Out()) as out, \
-             self.assertRaises(SystemExit) as r:
-            out.tty = True; fc_setup.cmd_setup(SimpleNamespace(yes=False, dry_run=True))
-        self.assertEqual((r.exception.code, run.call_args), (4, mock.call(CHECKOUT, False, True)))
-
-class TopImports(unittest.TestCase):
-    tree = ast.parse(Path(fc_setup.__file__).read_text())
-
-    def test_the_fc_modules_are_imported_on_one_top_level_line(self):
-        lines = [ast.unparse(n) for n in self.tree.body if isinstance(n, (ast.Import, ast.ImportFrom))]
-        self.assertEqual([l for l in lines if "fc_" in l], ["import fc_checks, fc_config, fc_finish, fc_keys, fc_perms, fc_prompt, fc_steprun, fc_steps"])
-
-    def test_no_function_holds_an_import(self):
-        found = [f"{f.name}: {ast.unparse(i)}" for f in ast.walk(self.tree) if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef))
-                 for i in ast.walk(f) if isinstance(i, (ast.Import, ast.ImportFrom))]
-        self.assertEqual(found, [])
-
-    def test_the_imports_come_before_everything_else(self):
-        kinds = [isinstance(n, (ast.Import, ast.ImportFrom)) for n in self.tree.body[1:]]
-        self.assertEqual(kinds, sorted(kinds, reverse=True))

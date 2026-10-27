@@ -22,15 +22,24 @@ class ChangedLayer(Ship):
         self.git("checkout", "-q", "compose/p-001"); self.write("001.src", "d\n"); self.commit("Change 001"); self.git("checkout", "-q", "compose/p")
         return self.heads()
 
-    def test_a_layer_whose_own_file_changed_stops_the_submit_with_nothing_pushed(self):
+    def test_a_changed_layer_stops_the_submit_and_a_refused_push_pushes_nothing_after_it_and_update_pushes_bottom_up(self):
         before = self.change_001()
         out, code = self.submit()
         self.assertEqual(code, 1)
         self.assertIn(self.stop_line(2, before, "its own files changed: 001.src"), out)
         self.assertEqual(self.heads(), before)
-
-    def test_update_pushes_each_changed_layer_bottom_up_and_opens_no_pull_request(self):
-        before = self.change_001()
+        self.set_pr(2, state="CLOSED")  # a layer whose pull request is not open is not compared
+        out, code = self.submit()
+        self.assertEqual(code, 1)
+        self.assertIn(self.stop_line(3, before, "a layer below it or the base moved"), out)
+        self.set_pr(2, state="OPEN")
+        hook = self.origin / "hooks" / "pre-receive"
+        hook.write_text("#!/bin/sh\necho nope >&2\nexit 1\n"); hook.chmod(0o755)
+        out, code = self.run_cmd(fc.fc_ship.cmd_stack, submit=True, update=True)
+        self.assertEqual(code, 1)
+        self.assertTrue(any("stack  STOP  push of compose/p-layer-02 refused: " in l for l in out), out)
+        self.assertEqual(self.heads(), before)
+        hook.unlink()
         out, code = self.run_cmd(fc.fc_ship.cmd_stack, submit=True, update=True)
         self.assertEqual(code, 0, out)
         tips = self.heads(local=True)
@@ -41,22 +50,6 @@ class ChangedLayer(Ship):
         self.assertEqual(len(self.prs()), 3)
         out, code = self.submit()
         self.assertEqual(code, 0, out)
-
-    def test_a_layer_whose_pull_request_is_not_open_is_not_compared(self):
-        before = self.change_001()
-        self.set_pr(2, state="CLOSED")
-        out, code = self.submit()
-        self.assertEqual(code, 1)
-        self.assertIn(self.stop_line(3, before, "a layer below it or the base moved"), out)
-
-    def test_a_refused_push_is_the_reason_and_pushes_nothing_after_it(self):
-        before = self.change_001()
-        hook = self.origin / "hooks" / "pre-receive"
-        hook.write_text("#!/bin/sh\necho nope >&2\nexit 1\n"); hook.chmod(0o755)
-        out, code = self.run_cmd(fc.fc_ship.cmd_stack, submit=True, update=True)
-        self.assertEqual(code, 1)
-        self.assertTrue(any("stack  STOP  push of compose/p-layer-02 refused: " in l for l in out), out)
-        self.assertEqual(self.heads(), before)
 
 
 if __name__ == "__main__":

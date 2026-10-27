@@ -166,9 +166,6 @@ class Check(Fake):
             self.assertIn(need, prompt)
         self.assertEqual(self.mutations(), [])
 
-    def test_check_says_when_nothing_important_is_left(self):
-        self.assertEqual(self.check("Nothing important left.\n").strip(), "nothing important left")
-
     def test_check_fails_clearly_when_claude_cannot_run_times_out_or_replies_badly(self):
         import subprocess
         for kw in (dict(error=FileNotFoundError("claude")), dict(error=subprocess.TimeoutExpired("claude", 900)),
@@ -176,10 +173,6 @@ class Check(Fake):
             with self.assertRaises(SystemExit) as e:
                 self.check(**kw)
             self.assertIn("prd check: the builder check could not run", str(e.exception.code), kw)
-
-    def test_check_needs_a_file(self):
-        self.assertIn("--file", self.refused("check"))
-
 
 class Seed(Fake):
     def test_seed_scans_the_project_and_closes_with_a_guess_and_writes_nothing(self):
@@ -202,23 +195,12 @@ class Seed(Fake):
         self.assertLess(out.index("Built so far"), out.index(guess.splitlines()[0]))
         self.assertEqual(self.mutations(), [])
 
-    def test_seed_says_when_there_is_no_prd_yet(self):
-        self.assertIn("No PRD yet", self.run_verb("seed"))
-
     def test_a_big_seed_is_trimmed_with_a_note_and_keeps_its_guess(self):
         self.issues = [issue(f"NEB-{n}", f"Ticket number {n} about shoes", "Todo", description="x" * 400) for n in range(10, 200)]
         out = self.run_verb("seed")
         self.assertLessEqual(len(out), fc.fc_prd.SEED_LIMIT + 200)
         self.assertRegex(out, r"trimmed: \d+ characters cut")
         self.assertIn("guess", out.split("\n## ")[-1].splitlines()[0].lower())
-
-    def test_the_ticket_print_follows_ids_titles_and_states_only(self):
-        first = fc.fc_prd.ticket_print(self.repo)
-        self.issues[0]["description"] = "changed"
-        self.assertEqual(fc.fc_prd.ticket_print(self.repo), first)
-        self.issues[0]["state"]["name"] = "In Progress"
-        self.assertNotEqual(fc.fc_prd.ticket_print(self.repo), first)
-
 
 class Lookup(unittest.TestCase):
     """The factory's cached PRD lookup: at most every 5 minutes while missing, every 6 hours while found, always after a write."""

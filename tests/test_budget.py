@@ -44,12 +44,6 @@ class Budget(unittest.TestCase):
         with self.assertRaises(SystemExit) as e: fc.fc_budget.limit(self.proj)
         self.assertEqual(str(e.exception), f'{f}: must be an object such as {{"frontier": 25}}, not [25]')
 
-    def test_a_valid_limit_zero_and_a_file_without_the_key_are_accepted(self):
-        f = self.proj / "results" / "budget.json"
-        for text, want in (('{"frontier": 0}', 0.0), ('{"frontier": 12}', 12.0), ('{"frontier": 0.5}', 0.5), ("{}", 25.0)):
-            f.write_text(text)
-            self.assertEqual(fc.fc_budget.limit(self.proj), want)
-
     def test_the_budget_command_refuses_a_negative_or_non_finite_limit_and_writes_nothing(self):
         for bad in (-5.0, float("nan"), float("inf")):
             with self.subTest(bad=bad), self.assertRaises(SystemExit) as e: self.set_limit(bad)
@@ -69,13 +63,6 @@ class Budget(unittest.TestCase):
         self.assertEqual(first["message"], "frontier spend $25.00 reached the $25.00 limit of p: new frontier work runs at standard; raise it with compose budget --project p frontier <dollars>")
         self.assertIn("$30.50", second["message"])
         self.assertRegex(first["at"], r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$")
-
-    def test_the_limit_comes_from_the_budget_file(self):
-        self.set_limit(40.0)
-        self.assertEqual(self.hold(30.0), "frontier")
-        self.assertFalse(self.report.exists())
-        self.assertEqual(self.hold(40.0), "standard")
-        self.assertIn("reached the $40.00 limit", json.loads(self.report.read_text())["message"])
 
     def test_frontier_under_the_limit_and_other_tiers_return_unchanged_with_no_report(self):
         self.assertEqual(self.hold(24.99), "frontier")

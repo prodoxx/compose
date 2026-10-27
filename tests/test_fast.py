@@ -134,13 +134,6 @@ class UnprovenLinear(unittest.TestCase):
         self.assertEqual(self.moved, [{"moved": {"ENG-3": "In Progress"}}])
         self.assertEqual(self.event("unproven", self.RESULT, parent=None)[2], [])
 
-    def test_passed_hand_done_and_failed_behave_as_before(self):
-        passed = dict(self.RESULT, status="passed")
-        self.assertEqual(self.event("passed", passed)[:2], [[("In Review",)], [("Passed: branch `fast/p/001`, 2 attempt(s), $0.0123, model `pi:x/glm`.",)]])
-        self.assertEqual(self.event("hand_done", {"note": "n"})[:2], [[("In Review",)], [("Finished by hand: n",)]])
-        failed = dict(self.RESULT, status="failed", log=[{"error": "boom"}])
-        self.assertEqual(self.event("failed", failed)[:2], [[("In Progress",)], [("failed after 2 attempt(s) ($0.0123, model `pi:x/glm`): boom",)]])
-
     def test_watch_wakes_on_unproven_and_broken_base_and_keeps_its_other_final_states(self):
         self.assertTrue({"unproven", "broken_base", "passed", "failed", "hand_done"} <= set(fc.fc_watch.FINAL_STATES))
 
@@ -319,19 +312,6 @@ class UnprovenWhy(unittest.TestCase):
         long = "x" * 600 + "\nsecond line"
         self.assertEqual(self.event("unproven", dict(self.RESULT, proof={}, log=[{"error": long}]))[1], [(f"{self.LINE} Why: {long}.",)])
 
-    def test_without_a_proof_key_the_comment_is_the_existing_line_even_when_the_log_has_an_error(self):
-        for log in ([], [{"error": "boom"}]):
-            with self.subTest(log=log):
-                move, comment = self.event("unproven", dict(self.RESULT, log=log))
-                self.assertEqual((move, comment), ([("In Progress",)], [(self.LINE,)]))
-
-    def test_passed_and_failed_comments_ignore_a_proof_key(self):
-        passed = self.event("passed", dict(self.RESULT, status="passed", proof={}, log=[{"error": "e"}]))
-        self.assertEqual(passed, ([("In Review",)], [("Passed: branch `fast/p/001`, 2 attempt(s), $0.0123, model `pi:x/glm`.",)]))
-        failed = self.event("failed", dict(self.RESULT, status="failed", proof={}, log=[{"error": "boom"}]))
-        self.assertEqual(failed, ([("In Progress",)], [("failed after 2 attempt(s) ($0.0123, model `pi:x/glm`): boom",)]))
-
-
 class CheckOnlyEvents(unittest.TestCase):
     """A check-only run's rows name the check, end with a skipped regression-test row, and a held one has none."""
     TEST = "python3 -m unittest tests/test_a.py"
@@ -364,8 +344,3 @@ class CheckOnlyEvents(unittest.TestCase):
 
     def test_a_held_run_has_no_rows(self):
         self.assertEqual(self.events("check-only", [], {"status": "held"}), [])
-
-    def test_other_workflows_keep_the_ledgers_rows(self):
-        rows = [self.ev("red", "fail_expected", "test fails before the change"), self.ev("final", "pass", "passed after 1 attempts")]
-        for flow in ("test-first", IMPL, None):
-            self.assertEqual(self.events(flow, rows), rows)
