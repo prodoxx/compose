@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import contextlib, importlib.machinery, importlib.util, io, json, os, tempfile, unittest, urllib.error
+import contextlib, importlib.machinery, importlib.util, io, json, os, re, tempfile, unittest, urllib.error
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -455,11 +455,24 @@ class MarkReady(unittest.TestCase):
         for mod, name, value in ((fc.fc_config, "LINEAR_KEY", "k"), (fc.fc_linear, "linear_gql", self.gql), (fc.fc_core, "say", self.said.append)):
             p = mock.patch.object(mod, name, value); p.start(); self.addCleanup(p.stop)
 
+    page = staticmethod(lambda nodes: {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": nodes})
+
+    def group(self, ident):
+        return self.children if ident == "ENG-1" else self.parent["children"]["nodes"]
+
     def gql(self, query, variables):
-        if query == fc.fc_linear.LINEAR_READY_TREE:
-            self.reads.append(variables)
-            return {"issue": {"identifier": getattr(self, "ident", None), "team": {"labels": {"nodes": self.team}}, "children": {"nodes": self.children}, "parent": self.parent,
+        """Linear with the feature ENG-1 (children: self.children) under self.parent: the root read, then a page of an issue's
+        children (ReadyNode each, no children of their own) and a page of its grandchildren (by its uuid, each naming its parent)."""
+        if query == fc.fc_linear.LINEAR_READY_ROOT:
+            self.reads.append(("root", variables["id"]))
+            return {"issue": {"id": "id-ENG-1", "identifier": "ENG-1", "team": {"labels": {"nodes": self.team}}, "parent": self.parent,
                               "inverseRelations": {"nodes": self.feature_rels}}}
+        if query == fc.fc_linear.LINEAR_READY_CHILDREN:
+            self.reads.append(("children", variables["id"]))
+            return {"issue": {"children": self.page([{k: v for k, v in n.items() if k != "children"} for n in self.group(variables["id"])])}}
+        if query == fc.fc_linear.LINEAR_READY_GRANDCHILDREN:
+            self.reads.append(("grandchildren", variables["id"]))
+            return {"issues": self.page([{**c, "parent": {"identifier": n["identifier"]}} for n in self.group(variables["id"][3:]) for c in n["children"]["nodes"]])}
         self.assertEqual(query, self.UPDATE)
         self.updates.append(variables)
         return {"issueUpdate": {"success": True}}
@@ -477,7 +490,7 @@ class MarkReady(unittest.TestCase):
 
     def mark(self, *expected):
         self.assertEqual(fc.fc_linear.linear_mark_ready("ENG-1"), [{"id": i, "title": "T " + i} for i in expected])
-        self.assertEqual(self.reads, [{"id": "ENG-1"}])
+        self.assertEqual(self.reads[:3], [("root", "ENG-1"), ("children", "ENG-1"), ("grandchildren", "id-ENG-1")])  # one group: three flat reads
 
     def test_adds_removes_and_leaves_the_label_keeping_other_labels(self):
         self.children = [self.node("ENG-2", "Todo", "Bug", "Area"), self.node("ENG-3", "Todo", "Bug", "Ready", "Area", blocked=True),
@@ -501,7 +514,6 @@ class MarkReady(unittest.TestCase):
         self.assertEqual(fc.fc_linear.task_holds(held), ["ENG-3"])
 
     def test_a_story_blocked_by_a_verified_sibling_goes_ready(self):
-        self.ident = "ENG-1"
         sibling = {"type": "blocks", "issue": {"identifier": "ENG-2", "state": {"name": "In Review"}, "labels": {"nodes": []}, "parent": {"identifier": "ENG-1"}}}
         later = self.node("ENG-3", "Todo")
         later["inverseRelations"]["nodes"] = [sibling]
@@ -531,7 +543,7 @@ class MarkReady(unittest.TestCase):
         self.children = [self.node("ENG-2", "Todo", "Ready", desc=asked), self.node("ENG-3", "Todo", desc="## Open questions\n\nNone.\n")]
         self.mark("ENG-3")
         self.assertCountEqual(self.updates, [{"id": "id-ENG-2", "labels": []}, {"id": "id-ENG-3", "labels": ["l-ready"]}])
-        self.assertRegex(fc.fc_linear.LINEAR_READY_TREE, r"fragment ReadyNode on Issue \{[^}]*\bdescription\b")
+        self.assertRegex(fc.fc_linear.READY_NODE, r"fragment ReadyNode on Issue \{[^}]*\bdescription\b")
 
     def test_a_story_without_a_live_task_is_not_ready(self):
         self.children = [self.node("ENG-2", "Todo", tasks=()), self.node("ENG-3", "Backlog", "Ready", tasks=("Canceled", "canceled")),
@@ -542,11 +554,28 @@ class MarkReady(unittest.TestCase):
     def test_the_epic_children_follow_the_feature_children(self):
         self.team = [{"id": "l-ready", "name": "READY"}]
         self.children = [self.node("ENG-9", "Todo")]
-        self.parent = {"children": {"nodes": [self.node("ENG-1", "Todo", "READY", tasks=()), self.node("ENG-5", "In Progress", "READY"), self.node("ENG-3", "Todo", tasks=())]}}  # features need no story to be ready
+        self.parent = {"id": "id-ENG-0", "identifier": "ENG-0", "children": {"nodes": [
+            self.node("ENG-1", "Todo", "READY", tasks=()), self.node("ENG-5", "In Progress", "READY"), self.node("ENG-3", "Todo", tasks=())]}}  # features need no story to be ready
         self.mark("ENG-9", "ENG-1", "ENG-3")
+        self.assertEqual(self.reads[3:], [("children", "ENG-0"), ("grandchildren", "id-ENG-0")])  # the epic's group: two more flat reads, no second root
         self.assertCountEqual(self.updates, [{"id": "id-ENG-9", "labels": ["l-ready"]}, {"id": "id-ENG-5", "labels": []},
                                              {"id": "id-ENG-3", "labels": ["l-ready"]}])
         self.assertCountEqual(self.said, ["linear ENG-9 -> Ready", "linear ENG-5 -> not Ready", "linear ENG-3 -> Ready"])
+
+    def test_a_group_marked_already_is_not_read_again(self):
+        # a reconcile marks every feature of the plan: with one shared `marked` set, each epic's children are read and marked once
+        self.children = [self.node("ENG-2", "Todo")]
+        self.parent = {"id": "id-ENG-0", "identifier": "ENG-0", "children": {"nodes": [self.node("ENG-1", "Todo", tasks=())]}}
+        marked = set()
+        self.assertEqual(fc.fc_linear.linear_mark_ready("ENG-1", marked=marked), [{"id": "ENG-2", "title": "T ENG-2"}, {"id": "ENG-1", "title": "T ENG-1"}])
+        self.assertEqual(marked, {"ENG-1", "ENG-0"})
+        self.assertEqual(self.reads, [("root", "ENG-1"), ("children", "ENG-1"), ("grandchildren", "id-ENG-1"), ("children", "ENG-0"), ("grandchildren", "id-ENG-0")])
+        self.reads.clear(); self.updates.clear()
+        self.assertEqual(fc.fc_linear.linear_mark_ready("ENG-1", marked=marked), [])
+        self.assertEqual((self.reads, self.updates), ([("root", "ENG-1")], []))
+        self.reads.clear()
+        self.assertEqual(fc.fc_linear.linear_mark_ready("ENG-1", marked={"ENG-0"}), [{"id": "ENG-2", "title": "T ENG-2"}])
+        self.assertEqual(self.reads, [("root", "ENG-1"), ("children", "ENG-1"), ("grandchildren", "id-ENG-1")])
 
     def test_no_ready_label_on_the_team_raises_before_any_update(self):
         self.team = [{"id": "l-bug", "name": "Bug"}, {"id": "l-not", "name": "Not Ready"}]
@@ -684,10 +713,40 @@ class DeliveryPlan(unittest.TestCase):
         for mod, name, value in ((fc.fc_linear, "linear_gql", self.gql), (fc_plan, "plan_sections", self.sections)):
             p = mock.patch.object(mod, name, value); p.start(); self.addCleanup(p.stop)
 
+    WRITES = ("documentCreate", "issueUpdate", "documentUpdate")
+    READS = {"LINEAR_READY_ROOT": "root", "LINEAR_READY_CHILDREN": "children", "LINEAR_READY_GRANDCHILDREN": "grandchildren", "LINEAR_PROJECT_DOCS": "documents", "LINEAR_DOCUMENT": "document"}
+
+    def nodes(self):
+        """Every issue of self.tree by identifier: the root, its parent, and their children and grandchildren (the first seen wins)."""
+        out = {}
+        def walk(n):
+            if n and n["identifier"] not in out:
+                out[n["identifier"]] = n
+                walk(n.get("parent"))
+                for c in n["children"]["nodes"]:
+                    walk(c)
+        walk(self.tree)
+        return out
+
     def gql(self, query, variables):
-        self.sent.append((next((k for k in ("documentCreate", "issueUpdate", "documentUpdate") if k in query), query), variables))
+        """Linear holding self.tree: the flat reads (a root, a page of an issue's children without their own, a page of its
+        grandchildren by its uuid, a project's documents, one document, as the tree's own object) and the writes, each recorded by kind."""
+        kind = next((k for k in DeliveryPlan.WRITES if k in query), next((v for k, v in DeliveryPlan.READS.items() if getattr(fc.fc_linear, k) == query), query))
+        self.sent.append((kind, variables))
+        nodes, page = DeliveryPlan.nodes(self), lambda items: {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": items}
+        if kind == "root":
+            return {"issue": nodes[variables["id"]]}
+        if kind == "children":
+            return {"issue": {"children": page([{k: v for k, v in n.items() if k != "children"} for n in nodes[variables["id"]]["children"]["nodes"]])}}
+        if kind == "grandchildren":
+            return {"issues": page([{**c, "parent": {"identifier": n["identifier"]}} for n in nodes[variables["id"][3:]]["children"]["nodes"] for c in n["children"]["nodes"]])}
+        if kind == "documents":
+            docs = [d for n in nodes.values() if n["project"]["id"] == variables["id"] for d in n["project"]["documents"]["nodes"]]
+            return {"project": {"documents": page([{k: d[k] for k in ("id", "title", "url")} for d in docs])}}
+        if kind == "document":
+            return {"document": next(d for n in nodes.values() for d in n["project"]["documents"]["nodes"] if d["id"] == variables["id"])}
         doc = {"id": "d-new", "title": "NEB-7: delivery plan", "url": "https://linear.app/x/document/d-new", "content": fc_plan.plan_skeleton()}
-        return {"issue": self.tree} if query == fc.fc_linear.LINEAR_PLAN_TREE else {self.sent[-1][0]: {"success": True, "document": doc}}
+        return {kind: {"success": True, "document": doc}}
 
     writes = lambda self, name: [self.flat(v) for k, v in self.sent if k == name]
 
@@ -704,7 +763,9 @@ class DeliveryPlan(unittest.TestCase):
             self.node("NEB-8", "Todo", ["Story"], [("blocks", "NEB-9", "Done", ["Design"]), ("related", "NEB-5", "Todo", [])], [self.node("NEB-20")]),
             self.node("NEB-9", "In Review", ["Design"])])
         fc.fc_linear.linear_plan("NEB-7")
-        self.assertEqual([self.sent[0]] + [k for k, _ in self.sent[1:]], [(fc.fc_linear.LINEAR_PLAN_TREE, {"id": "NEB-7"}), "documentCreate", "issueUpdate", "documentUpdate"])
+        self.assertEqual([k for k, _ in self.sent], ["root", "children", "grandchildren", "documents", "documentCreate", "issueUpdate", "documentUpdate"])
+        self.assertEqual(self.sent[:4], [("root", {"id": "NEB-7"}), ("children", {"id": "NEB-7", "after": None}), ("grandchildren", {"id": "id-NEB-7", "after": None}),
+                                         ("documents", {"id": "p-NEB-7", "after": None})])  # the map is the feature: its own flat reads, never a nested tree
         story = lambda i, s, ls, b: {"id": i, "title": "T " + i, "url": "u/" + i, "state": s, "labels": ls, "blockers": b}
         self.sections.assert_called_once_with([{"id": "NEB-7", "title": "T NEB-7", "url": "u/NEB-7", "stories": [
             story("NEB-8", "Todo", ["Story"], [{"id": "NEB-9", "state": "Done", "labels": ["Design"]}]), story("NEB-9", "In Review", ["Design"], [])]}])
@@ -722,7 +783,9 @@ class DeliveryPlan(unittest.TestCase):
         fc.fc_linear.linear_plan("NEB-7")
         self.assertEqual([(l["id"], l["url"], [s["id"] for s in l["stories"]]) for l in self.sections.call_args.args[0]], [("NEB-7", "u/NEB-7", ["NEB-8"]), ("NEB-6", "u/NEB-6", [])])
         new = fc_plan.replace_section(fc_plan.replace_section(old, "## Start today", "1. new"), "## Lanes", "lanes")
-        self.assertEqual([k for k, _ in self.sent[1:]], ["documentUpdate"]); self.assertIn(new, self.writes("documentUpdate")[0])
+        self.assertEqual([k for k, _ in self.sent], ["root", "children", "grandchildren", "documents", "document", "documentUpdate"]); self.assertIn(new, self.writes("documentUpdate")[0])
+        self.assertEqual(self.sent[1:3], [("children", {"id": "NEB-1", "after": None}), ("grandchildren", {"id": "id-NEB-1", "after": None})])  # the epic is the map: its group is read, the feature's is not
+        self.assertEqual(self.sent[4], ("document", {"id": "d-1"}))
         self.assertTrue(all(f"{h}\n\nold {h[3:]}." in new for h in fc_plan.PLAN_SECTIONS[2:]))
         doc["content"] = new; fc.fc_linear.linear_plan("NEB-7")  # nothing changed: no write
         self.assertEqual(len(self.writes("documentUpdate")), 1)
@@ -732,7 +795,7 @@ class DeliveryPlan(unittest.TestCase):
         (proj / "linear.json").write_text(json.dumps({"feature": "ENG-7"})); order, said, out = [], [], io.StringIO()
         plan = mock.Mock(side_effect=lambda f: order.append(("plan", f, stored.exists(), out.getvalue().splitlines())))
         for mod, name, value in ((fc.fc_config, "LINEAR_KEY", "k"), (fc.fc_core, "project_dir", mock.Mock(return_value=proj)), (fc.fc_core, "say", said.append), (sys, "stdout", out),
-                                 (fc.fc_linear, "linear_mark_ready", lambda f: order.append(("mark", f)) or [{"id": "ENG-3", "title": "A"}]), (fc.fc_linear, "linear_plan", plan)):
+                                 (fc.fc_linear, "linear_mark_ready", lambda f, marked=None: order.append(("mark", f)) or [{"id": "ENG-3", "title": "A"}]), (fc.fc_linear, "linear_plan", plan)):
             p = mock.patch.object(mod, name, value); p.start(); self.addCleanup(p.stop)
         ready = lambda: fc.fc_linear.cmd_ready(SimpleNamespace(repo=".", project="p"))
         ready(); stored.unlink(); fc.fc_linear.refresh_ready(proj)
@@ -755,7 +818,7 @@ class PlanStoredNewline(unittest.TestCase):
         self.tree = DeliveryPlan.node("NEB-7", labels=["Feature"], docs=[self.doc], kids=[DeliveryPlan.node("NEB-8")])
         self.sections.return_value, start = sections, len(self.sent)
         fc.fc_linear.linear_plan("NEB-7")
-        return [k for k, _ in self.sent[start + 1:]]
+        return [k for k, _ in self.sent[start:] if k in DeliveryPlan.WRITES]
 
     def stored(self, data):  # every section in place, as Linear keeps it: no final newline
         return "\n\n".join(f"{h}\n\n{data.get(h, 'Kept ' + h[3:] + '.')}" for h in fc_plan.PLAN_SECTIONS)
@@ -832,47 +895,73 @@ class FeatureAfterLink(unittest.TestCase):
             self.assertEqual(calls.mock_calls[-1:], [] if stdin else [mock.call.after(self.root.resolve(), self.proj)])  # last: after refresh_ready
 
 
-class ReadyTreeQuery(unittest.TestCase):
-    FRAGMENT = """fragment ReadyNode on Issue { id identifier title description state { name } labels { nodes { id name } }
-  children { nodes { identifier state { name } inverseRelations(first: 50) { nodes { type issue { identifier state { name } labels { nodes { name } } parent { identifier parent { identifier } } } } } } }
-  inverseRelations(first: 250) { nodes { type issue { identifier state { name } labels { nodes { name } } parent { identifier } } } } }"""
+class ReadyQueries(unittest.TestCase):
+    """The Ready and plan reads are flat and paged (a root, a page of children, a page of grandchildren, a page of documents), so
+    each costs Linear a few hundred complexity points: the nested tree they replaced cost millions, and one reconcile ran through
+    the hour's budget."""
+    QUERIES = ("LINEAR_READY_ROOT", "LINEAR_READY_CHILDREN", "LINEAR_READY_GRANDCHILDREN", "LINEAR_PROJECT_DOCS", "LINEAR_DOCUMENT")
+    PAGES = ("LINEAR_READY_CHILDREN", "LINEAR_READY_GRANDCHILDREN", "LINEAR_PROJECT_DOCS")
 
-    @staticmethod
-    def norm(text):
-        return " ".join(text.replace("{", " { ").replace("}", " } ").split())
-
-    def fields(self, body):
-        """Each top-level selection of body with its block, normalized; text left after the last block is its own item."""
-        out, depth, cur = [], 0, ""
-        for ch in body:
-            cur += ch
-            depth += {"{": 1, "}": -1}.get(ch, 0)
-            if ch == "}" and depth == 0:
-                out.append(self.norm(cur)); cur = ""
-        return out + ([self.norm(cur)] if cur.strip() else [])
-
-    def inner(self, field):
-        return field[field.index("{") + 1:field.rindex("}")]
+    def query(self, name):
+        return getattr(fc.fc_linear, name)
 
     def test_braces_balance_and_no_prefix_closes_more_than_it_opens(self):
-        depth = 0
-        for i, ch in enumerate(fc.fc_linear.LINEAR_READY_TREE):
-            depth += {"{": 1, "}": -1}.get(ch, 0)
-            self.assertGreaterEqual(depth, 0, f"closes more than it opens at {i}")
-        self.assertEqual(depth, 0)
+        for name in self.QUERIES + ("READY_NODE",):
+            depth = 0
+            for i, ch in enumerate(self.query(name)):
+                depth += {"{": 1, "}": -1}.get(ch, 0)
+                self.assertGreaterEqual(depth, 0, f"{name} closes more than it opens at {i}")
+            self.assertEqual(depth, 0, name)
 
-    def test_identifier_team_children_and_parent_sit_in_issue(self):
-        op = (self.fields(fc.fc_linear.LINEAR_READY_TREE) or [""])[0]
-        self.assertTrue(op.startswith("query($id: String!) {"), op)
-        issue, *extra = self.fields(self.inner(op))
-        self.assertEqual(extra, [])  # the operation holds only issue
-        self.assertTrue(issue.startswith("issue(id: $id) {"), issue)
-        self.assertEqual(self.fields(self.inner(issue)), ["identifier team { labels { nodes { id name } } }", "children { nodes { ...ReadyNode } }",
-                                                          "parent { identifier children { nodes { ...ReadyNode } } }",
-                                                          "inverseRelations(first: 50) { nodes { type issue { identifier state { name } labels { nodes { name } } } } }"])
+    def test_every_connection_is_bounded_and_the_pages_page(self):
+        for name in self.QUERIES:
+            text = self.query(name)
+            for m in re.finditer(r"(\w+)(\([^{]*?\))?\s*\{\s*(?:pageInfo \{[^}]*\}\s*)?nodes\b", text):
+                first = re.search(r"\bfirst: (\d+)", m.group(2) or "")
+                self.assertTrue(first and int(first.group(1)) <= 50, f"{name}: {m.group(1)} asks for an unbounded or too large page")
+            if name in self.PAGES:
+                self.assertTrue(all(x in text for x in ("$after: String", "after: $after", "pageInfo { hasNextPage endCursor }")), name)
+            else:
+                self.assertNotIn("$after", text)
 
-    def test_the_fragment_is_unchanged_and_follows_the_operation(self):
-        self.assertEqual(self.fields(fc.fc_linear.LINEAR_READY_TREE)[1:], [self.norm(self.FRAGMENT)])
+    def test_the_root_reads_the_issue_its_parent_and_the_team_label_and_no_children(self):
+        root = self.query("LINEAR_READY_ROOT")
+        self.assertNotIn("children", root)
+        self.assertNotIn("ReadyNode", root)
+        self.assertIn('team { labels(first: 5, filter: { name: { eqIgnoreCase: "Ready" } }) { nodes { id name } } }', root)
+        self.assertRegex(root, r"parent \{ id identifier title url description project \{ id \} labels\(first: 10\)")
+        self.assertTrue(self.query("LINEAR_READY_CHILDREN").endswith(fc.fc_linear.READY_NODE))
+        self.assertTrue(self.query("LINEAR_READY_GRANDCHILDREN").endswith(fc.fc_linear.READY_NODE))
+        self.assertIn("filter: { parent: { parent: { id: { eq: $id } } } }", self.query("LINEAR_READY_GRANDCHILDREN"))
+        self.assertNotIn("children", fc.fc_linear.READY_NODE)
+
+    @classmethod
+    def cost(cls, text):
+        """An upper bound on Linear's complexity for a query: a field costs 1, and a block under a field asking `first: N` counts
+        N times. Arguments (filters hold braces of their own) become a multiplier mark; a fragment spread is inlined."""
+        frag = re.search(r"fragment \w+ on \w+ \{(.*)\}\s*$", text, re.S)
+        if frag:
+            text = text[:frag.start()].replace("...ReadyNode", frag.group(1))
+        text = re.sub(r"\(([^()]*)\)", lambda m: " @%s " % (re.search(r"first: (\d+)", m.group(1)) or [None, 1])[1] if "first:" in m.group(1) else " ", text)
+        tokens = re.findall(r"\{|\}|@\d+|[^\s{}]+", text)
+        def block(i):
+            total, mult = 0, 1
+            while tokens[i] != "}":
+                if tokens[i].startswith("@"):
+                    mult, i = int(tokens[i][1:]), i + 1
+                elif tokens[i] == "{":
+                    sub, i = block(i + 1)
+                    total, mult = total + mult * sub, 1
+                else:
+                    total, i = total + 1, i + 1
+            return total, i + 1
+        return block(tokens.index("{") + 1)[0]
+
+    def test_the_estimated_cost_of_each_read_stays_far_under_a_tree(self):
+        self.assertEqual(self.cost("query { issue { id labels(first: 10) { nodes { id name } } } }"), 1 + 1 + 1 + 10 * 3)
+        ceilings = {"LINEAR_READY_ROOT": 2000, "LINEAR_READY_CHILDREN": 50000, "LINEAR_READY_GRANDCHILDREN": 50000, "LINEAR_PROJECT_DOCS": 500, "LINEAR_DOCUMENT": 10}
+        for name, ceiling in ceilings.items():
+            self.assertLessEqual(self.cost(self.query(name)), ceiling, name)
 
 
 class EvidenceBrief(unittest.TestCase):

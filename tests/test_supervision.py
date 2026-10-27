@@ -491,6 +491,7 @@ class Reenter(unittest.TestCase):
         cmds = lambda ev, m=None: [h["command"] for e in hooks.get(ev, []) if e.get("matcher") == m for h in e["hooks"]]
         self.assertTrue(any(c.endswith(" reenter") for c in cmds("SessionStart", "compact")), hooks.get("SessionStart"))
         self.assertTrue(cmds("PreToolUse", "Write|Edit|MultiEdit|NotebookEdit|Bash")[0].endswith(" guard"))
+        self.assertTrue(cmds("PreToolUse", "mcp__plugin_figma_figma__.*|mcp__claude_ai_Figma__.*")[0].endswith(" guard"))  # the Figma connector: writes only
         self.assertTrue(cmds("PostToolUse", "Skill")[0].endswith(" skillcheck"))
         self.assertTrue(cmds("UserPromptSubmit")[0].endswith(" skillcheck"))
         self.assertTrue(cmds("Stop")[0].endswith(" rewake"))

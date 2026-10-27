@@ -1,0 +1,9 @@
+LONG_WAIT
+pace_dir
+state
+claim
+hold
+learn
+about
+retry_after
+wait

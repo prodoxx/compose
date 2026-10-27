@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import importlib.machinery, importlib.util, io, json, os, shutil, subprocess, sys, tempfile, unittest
+import importlib.machinery, importlib.util, io, json, os, shutil, subprocess, sys, tempfile, time, unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -775,6 +775,48 @@ class FigmaPublish(unittest.TestCase):
         self.assertIn("HTTP 403 (the token needs the library_content:read scope)", str(e.exception))
         self.assertNotIn("figd_secret_token", str(e.exception))
         self.assertNotIn("x=1", str(e.exception))
+
+    def test_a_rate_limited_figma_call_holds_the_fleet_waits_once_as_figma_says_and_runs_again(self):
+        env = self.proj / "fl.env"; env.write_text("FIGMA_API_KEY=figd_secret_token\n")
+        api, pace = fc.fc_figma.fc_figmaplan, fc.fc_figma.fc_pace
+        limited = lambda after: api.urllib.error.HTTPError("u", 429, "Too Many Requests", {"Retry-After": str(after)}, None)
+        ok = mock.MagicMock(); ok.__enter__.return_value.read.return_value = b'{"meta": {}}'
+        with mock.patch.object(api.urllib.request, "urlopen", side_effect=[limited(3), ok]) as op, mock.patch("time.sleep") as nap, \
+                mock.patch("sys.stderr", io.StringIO()) as said:
+            self.assertEqual(api.figma_api("/files/K/components", env_file=env), {"meta": {}})
+        self.assertEqual((op.call_count, nap.call_args.args[0]), (2, 3))
+        self.assertIn("Figma rate limit: waiting 3s, then one retry", said.getvalue())
+        with pace.state("figma") as s:
+            self.assertAlmostEqual(s["hold_until"], time.time() + 3, delta=1)
+        with mock.patch.object(api.urllib.request, "urlopen", side_effect=[limited(500)]) as op, mock.patch("time.sleep") as nap, self.assertRaises(RuntimeError) as e:
+            api.figma_api("/files/K/components", env_file=env)
+        self.assertEqual((op.call_count, nap.call_count), (1, 0))
+        self.assertEqual(str(e.exception), "figma api /files/K/components failed: HTTP 429 (Figma lets calls through again in about 8m; run it again then)")
+        with pace.state("figma") as s:
+            self.assertAlmostEqual(s["hold_until"], time.time() + 500, delta=1)
+
+    def test_a_rate_limited_framelink_read_holds_the_fleet_for_a_minute(self):
+        env = self.proj / "fl.env"; env.write_text("FIGMA_API_KEY=figd_secret_token\n")
+        bad = SimpleNamespace(returncode=1, stdout="", stderr="Error: 429 Too Many Requests")
+        with mock.patch.object(subprocess, "run", return_value=bad), self.assertRaises(RuntimeError) as e:
+            fc.fc_figma.framelink_fetch("K", env_file=env)
+        self.assertTrue(str(e.exception).endswith("429 Too Many Requests (Figma lets calls through again in about 60s; run it again then)"), str(e.exception))
+        with fc.fc_figma.fc_pace.state("figma") as s:
+            self.assertAlmostEqual(s["hold_until"], time.time() + 60, delta=1)
+
+    def test_every_figma_read_takes_its_turn_at_ten_a_minute(self):
+        os.environ.pop("COMPOSE_NO_PACE")  # the suite's switch: off here
+        env = self.proj / "fl.env"; env.write_text("FIGMA_API_KEY=figd_secret_token\n")
+        ok = SimpleNamespace(returncode=0, stdout="{}", stderr="")
+        api = fc.fc_figma.fc_figmaplan
+        reply = mock.MagicMock(); reply.__enter__.return_value.read.return_value = b"{}"
+        with mock.patch.object(subprocess, "run", return_value=ok), mock.patch.object(api.urllib.request, "urlopen", return_value=reply), mock.patch("time.sleep") as nap:
+            fc.fc_figma.framelink_fetch("K", env_file=env)
+            nap.assert_not_called()
+            api.figma_api("/files/K/components", env_file=env)  # the REST reads and Framelink's share the one pace: the same token
+            self.assertAlmostEqual(nap.call_args.args[0], 60 / api.FIGMA_PER_MINUTE, delta=0.1)
+            fc.fc_figma.framelink_fetch("K", env_file=env)
+            self.assertAlmostEqual(nap.call_args.args[0], 2 * 60 / api.FIGMA_PER_MINUTE, delta=0.1)
 
 
 def png(w, h, rgb=(255, 255, 255)):

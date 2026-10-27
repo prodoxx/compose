@@ -134,6 +134,8 @@ def temp_home():
     COMPOSE_NO_AWAKE=1 keeps a test that reaches run, verify, watch or crew start from leaving a caffeinate on the suite's pid.
     COMPOSE_NO_LOAD=1 switches the load gate off: a test that reaches crew start, timed, run or verify would otherwise read this
     machine's real load and hold or wait when it is high; a test of the gate pops it or patches fc_load.off.
+    COMPOSE_NO_PACE=1 switches the fleet pace of Linear and Figma calls (fc_pace) off: a test of a call would otherwise sleep
+    its turn; a test of the pace pops it.
     GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME and GIT_COMMITTER_EMAIL give a test a git identity, because a temp
     HOME has no ~/.gitconfig, so git would refuse its commits with "Author identity unknown"."""
     home = Path(tempfile.mkdtemp(prefix="compose-home-")).resolve()
@@ -145,7 +147,7 @@ def temp_home():
         f.chmod(0o755)
     (home / ".graft").mkdir()
     (home / ".graft" / "update-check.json").write_text(json.dumps({"latest": None, "checkedAt": int(time.time() * 1000)}))
-    return {"HOME": str(home), "COMPOSE_CONFIG": str(home / ".compose" / "config.json"), "DO_NOT_TRACK": "1", "COMPOSE_NO_PREFLIGHT": "1", "COMPOSE_NO_AWAKE": "1", "COMPOSE_NO_LOAD": "1",
+    return {"HOME": str(home), "COMPOSE_CONFIG": str(home / ".compose" / "config.json"), "DO_NOT_TRACK": "1", "COMPOSE_NO_PREFLIGHT": "1", "COMPOSE_NO_AWAKE": "1", "COMPOSE_NO_LOAD": "1", "COMPOSE_NO_PACE": "1",
             "PATH": guarded_path(), "COMPOSE_TEST_GUARD": str(home / "guard"),
             "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
 

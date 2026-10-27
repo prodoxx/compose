@@ -310,7 +310,7 @@ class LinearErrors(unittest.TestCase):
             return fc.fc_linear.linear_gql("query { viewer { id } }", {})
 
     def http(self, body, code=400):
-        return urllib.error.HTTPError(fc.fc_linear.LINEAR_URL, code, "Bad Request", {}, io.BytesIO(body))
+        return urllib.error.HTTPError(fc.fc_linear.fc_linearapi.LINEAR_URL, code, "Bad Request", {}, io.BytesIO(body))
 
     def rejected(self, reply):
         with self.assertRaises(RuntimeError) as e:
@@ -350,7 +350,7 @@ class LinearErrors(unittest.TestCase):
         for headers, wait in cases:
             with self.subTest(headers=headers):
                 ok = mock.MagicMock(); ok.__enter__.return_value = io.BytesIO(b'{"data": {"viewer": {"id": "u1"}}}')
-                err = urllib.error.HTTPError(fc.fc_linear.LINEAR_URL, 400, "Bad Request", headers, io.BytesIO(limited))
+                err = urllib.error.HTTPError(fc.fc_linear.fc_linearapi.LINEAR_URL, 400, "Bad Request", headers, io.BytesIO(limited))
                 with mock.patch("urllib.request.urlopen", side_effect=[err, ok]) as call, mock.patch("time.sleep") as nap, \
                         mock.patch("sys.stderr", io.StringIO()) as said:
                     self.assertEqual(fc.fc_linear.linear_gql("query { viewer { id } }", {}), {"viewer": {"id": "u1"}})
@@ -362,7 +362,7 @@ class LinearErrors(unittest.TestCase):
         body = json.dumps({"errors": [{"message": "Rate limit exceeded", "extensions": {"code": "RATELIMITED"}}]}).encode()
         for headers, tries in (({}, 4), ({"Retry-After": "250"}, 1)):  # the doubling pauses 10, 20, 40 fit in 120s, the 80 after them does not
             with self.subTest(headers=headers):
-                errs = [urllib.error.HTTPError(fc.fc_linear.LINEAR_URL, 429, "Too Many Requests", headers, io.BytesIO(body)) for _ in range(tries)]
+                errs = [urllib.error.HTTPError(fc.fc_linear.fc_linearapi.LINEAR_URL, 429, "Too Many Requests", headers, io.BytesIO(body)) for _ in range(tries)]
                 now = [0.0]
                 nap = lambda s: now.__setitem__(0, now[0] + s)
                 with mock.patch("urllib.request.urlopen", side_effect=errs) as call, mock.patch("time.sleep", nap), mock.patch("time.monotonic", lambda: now[0]), \
@@ -370,13 +370,13 @@ class LinearErrors(unittest.TestCase):
                     with self.assertRaises(RuntimeError) as e:
                         fc.fc_linear.linear_gql("query { viewer { id } }", {})
                 self.assertEqual(call.call_count, tries)
-                self.assertLessEqual(now[0], fc.fc_linear.LINEAR_CALL_SECONDS)
+                self.assertLessEqual(now[0], fc.fc_linear.fc_linearapi.LINEAR_CALL_SECONDS)
                 self.assertIn("Rate limit exceeded", str(e.exception)); self.assertIn("run it again then", str(e.exception))
 
     def test_a_reply_that_never_ends_fails_naming_the_time_instead_of_hanging(self):
         stuck = threading.Event()
         self.addCleanup(stuck.set)
-        with mock.patch("urllib.request.urlopen", side_effect=lambda *a, **kw: stuck.wait(30)), mock.patch.object(fc.fc_linear, "LINEAR_CALL_SECONDS", 0.2):
+        with mock.patch("urllib.request.urlopen", side_effect=lambda *a, **kw: stuck.wait(30)), mock.patch.object(fc.fc_linear.fc_linearapi, "LINEAR_CALL_SECONDS", 0.2):
             with self.assertRaises(RuntimeError) as e:
                 fc.fc_linear.linear_gql("mutation { x }", {})
         self.assertIn("Linear gave no answer within 0.2s", str(e.exception))
@@ -416,7 +416,89 @@ class LinearUrl(unittest.TestCase):
             self.assertEqual(self.url(), "http://127.0.0.1:2/b")
             del os.environ["LINEAR_URL"]
             self.assertEqual(self.url(), self.DEFAULT)
-        self.assertEqual(fc.fc_linear.LINEAR_URL, self.DEFAULT)
+        self.assertEqual(fc.fc_linear.fc_linearapi.LINEAR_URL, self.DEFAULT)
+
+
+class LinearPace(unittest.TestCase):
+    """The fleet pace of Linear calls (fc_linearapi.linear_pace, learned from the reply headers): full speed while over half of
+    the hour's requests and complexity remain, the rest spread evenly over the time left, and a reserve never spent."""
+    def setUp(self):
+        self.home = Path(tempfile.mkdtemp())
+        p = mock.patch.dict(os.environ, {"COMPOSE_CONFIG": str(self.home / ".compose" / "config.json")}); p.start(); self.addCleanup(p.stop)
+        p = mock.patch.object(fc.fc_config, "LINEAR_KEY", KEY); p.start(); self.addCleanup(p.stop)
+        self.api = fc.fc_linear.fc_linearapi
+        self.pace = self.api.fc_pace
+        self.reset = time.time() + 1800
+
+    def headers(self, requests=2000, complexity=2500000, cost=150, reset=None):
+        reset = str(int((reset or self.reset) * 1000))  # Linear's reset headers are epoch milliseconds
+        return {"X-RateLimit-Requests-Limit": "2500", "X-RateLimit-Requests-Remaining": str(requests), "X-RateLimit-Requests-Reset": reset,
+                "X-RateLimit-Complexity-Limit": "3000000", "X-RateLimit-Complexity-Remaining": str(complexity), "X-RateLimit-Complexity-Reset": reset,
+                "X-Complexity": str(cost)}
+
+    def policy(self, **kw):
+        self.api._learn(self.headers(**kw))
+        with self.pace.state("linear") as s:
+            return self.api.linear_pace(dict(s), time.time())
+
+    def test_nothing_learned_or_over_half_of_both_left_is_full_speed(self):
+        self.assertEqual(self.api.linear_pace({}, time.time()), (0, self.api.LINEAR_PACE_FLOOR))
+        self.assertEqual(self.policy(), (0, self.api.LINEAR_PACE_FLOOR))
+        with self.pace.state("linear") as s:
+            self.assertEqual({k: v for k, v in s.items() if not k.endswith("_reset")},
+                             {"cost": 150, "requests_limit": 2500, "requests_left": 2000, "complexity_limit": 3000000, "complexity_left": 2500000})
+            self.assertAlmostEqual(s["requests_reset"], self.reset, delta=1); self.assertAlmostEqual(s["complexity_reset"], self.reset, delta=1)
+
+    def test_half_the_requests_spent_spreads_the_rest_over_the_time_left_above_the_reserve(self):
+        not_before, spacing = self.policy(requests=1000)
+        self.assertEqual(not_before, 0)
+        self.assertAlmostEqual(spacing, 1800 / (1000 - 50), delta=0.05)
+
+    def test_the_complexity_left_counts_in_calls_of_the_learned_cost(self):
+        not_before, spacing = self.policy(complexity=300000, cost=1000)
+        self.assertEqual(not_before, 0)
+        self.assertAlmostEqual(spacing, 1800 / ((300000 - 60000) / 1000), delta=0.1)  # 7.5s: the requests left would allow full speed
+
+    def test_only_the_reserve_left_waits_for_the_reset(self):
+        not_before, spacing = self.policy(requests=50)
+        self.assertAlmostEqual(not_before, self.reset, delta=1)
+        self.assertEqual(spacing, self.api.LINEAR_PACE_FLOOR)
+        self.assertAlmostEqual(self.policy(complexity=60000)[0], self.reset, delta=1)
+
+    def test_a_reset_that_has_passed_means_a_fresh_hour_at_full_speed(self):
+        self.assertEqual(self.policy(requests=50, reset=time.time() - 1), (0, self.api.LINEAR_PACE_FLOOR))
+
+    def test_headers_that_are_not_strings_teach_nothing(self):
+        self.api._learn(mock.MagicMock())
+        self.api._learn(None)
+        self.assertFalse((self.home / ".compose" / "pace" / "linear.json").exists())
+
+    def test_every_call_takes_its_turn_in_the_pace(self):
+        os.environ.pop("COMPOSE_NO_PACE")  # the suite's switch: off here
+        ok = mock.MagicMock(); ok.__enter__.return_value = io.BytesIO(b'{"data": {"viewer": {"id": "u1"}}}'); ok.headers = self.headers()
+        ok.__enter__.return_value.seek(0)
+        with mock.patch("urllib.request.urlopen", return_value=ok), mock.patch("time.sleep") as nap:
+            fc.fc_linear.linear_gql("query { viewer { id } }", {})
+            nap.assert_not_called()
+            ok.__enter__.return_value = io.BytesIO(b'{"data": {"viewer": {"id": "u1"}}}')
+            fc.fc_linear.linear_gql("query { viewer { id } }", {})
+        self.assertAlmostEqual(nap.call_args.args[0], self.api.LINEAR_PACE_FLOOR, delta=0.05)
+
+    def test_a_rate_limit_holds_every_process_as_long_as_linear_says(self):
+        body = json.dumps({"errors": [{"message": "Rate limit exceeded", "extensions": {"code": "RATELIMITED"}}]}).encode()
+        err = urllib.error.HTTPError(self.api.LINEAR_URL, 429, "Too Many Requests", {"Retry-After": "250"}, io.BytesIO(body))
+        with mock.patch("urllib.request.urlopen", side_effect=[err]) as call, mock.patch("time.sleep") as nap:
+            with self.assertRaises(RuntimeError) as e:
+                fc.fc_linear.linear_gql("query { viewer { id } }", {})
+        self.assertEqual(call.call_count, 1); nap.assert_not_called()
+        self.assertEqual(str(e.exception), "Rate limit exceeded (Linear lets calls through again in about 4m; run it again then)")
+        with self.pace.state("linear") as s:
+            self.assertAlmostEqual(s["hold_until"], time.time() + 250, delta=1)
+        os.environ.pop("COMPOSE_NO_PACE")
+        with mock.patch("urllib.request.urlopen") as call, self.assertRaises(RuntimeError) as e:  # the next call, from any process, does not even try
+            fc.fc_linear.linear_gql("query { viewer { id } }", {})
+        call.assert_not_called()
+        self.assertEqual(str(e.exception), "Linear lets calls through again in about 4m; run it again then")
 
 
 if __name__ == "__main__":

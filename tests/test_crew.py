@@ -1624,3 +1624,29 @@ class RefusedReports(unittest.TestCase):
         with mock.patch.object(fc.fc_crew.subprocess, "Popen", lambda args, **kw: spawned.append(args)), mock.patch.object(fc.fc_herdr, "herdr_env", lambda: False):
             self.report("shop-tests-003", "working", "test ready: abc1234")
         self.assertEqual(spawned, [])
+
+
+class FigmaReads(unittest.TestCase):
+    """fc_hooks.figma_decision: in a compose session the official Figma connector is for writes (`use_figma` and the
+    `create_session` it needs); every read on it is denied and pointed at Framelink."""
+    SERVERS = ("plugin_figma_figma", "claude_ai_Figma")
+    READS = ("get_screenshot", "get_design_context", "get_metadata", "whoami", "search_design_system", "get_libraries", "create_new_file", "get_figjam")
+
+    def test_writes_pass_and_reads_are_denied_for_every_compose_role(self):
+        for server in self.SERVERS:
+            for role in ("crew", "orchestrator", "planner-ENG-1"):
+                for name in ("use_figma", "create_session"):
+                    self.assertIsNone(fc.fc_hooks.figma_decision(f"mcp__{server}__{name}", role))
+                for name in self.READS:
+                    why = fc.fc_hooks.figma_decision(f"mcp__{server}__{name}", role)
+                    self.assertTrue(why and f"`{name}` is a read" in why, (server, role, name, why))
+                    self.assertIn("compose: the Figma connector is for writes only (`use_figma`, and the `create_session` it needs)", why)
+                    for hint in ("`mcp__framelink-figma__get_figma_data` for a node tree", "`mcp__framelink-figma__download_figma_images` for images", "`compose figma tree`"):
+                        self.assertIn(hint, why)
+
+    def test_outside_a_compose_session_and_other_servers_nothing_is_denied(self):
+        for role in (None, ""):
+            self.assertIsNone(fc.fc_hooks.figma_decision("mcp__plugin_figma_figma__get_screenshot", role))
+        for tool in ("mcp__framelink-figma__get_figma_data", "mcp__framelink-figma__download_figma_images", "mcp__claude_ai_Linear__get_issue", "Read", "Bash",
+                     "mcp__plugin_figma_figma", "mcp__plugin_figma_figmax__get_screenshot", "", None):
+            self.assertIsNone(fc.fc_hooks.figma_decision(tool, "crew"), tool)

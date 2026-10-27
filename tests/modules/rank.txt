@@ -5,6 +5,8 @@ fc_proc
 fc_started
 fc_auth
 fc_config
+fc_pace
+fc_linearapi
 fc_load
 fc_history
 fc_tiers

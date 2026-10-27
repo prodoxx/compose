@@ -213,8 +213,9 @@ def _reconcile(repo, dry_run):
         issue = fc_linear.linear_issue(blocked)
         fc_linear.linear_blocked_by(issue, want)
         fc_linear.linear_comment(issue, _blocked_comment(new, sorted(gone, key=fc_plan.issue_num), result["doc"]))
+    marked = set()  # every feature marks its own stories and, once per run, its epic's features
     for item in dict.fromkeys(e["feature"] if e["kind"] == "story" else e["id"] for e in fc_plan.order_entries(tracks, features)):
-        for r in fc_linear.linear_mark_ready(item):
+        for r in fc_linear.linear_mark_ready(item, marked=marked):
             if r["id"] not in result["ready"]:
                 result["ready"].append(r["id"])
     sections = fc_plan.product_sections(tracks, features, result["ready"], proposals)

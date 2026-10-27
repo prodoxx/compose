@@ -1,7 +1,7 @@
 import argparse, json, os, re, subprocess, sys, time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-import fc_core, fc_config, fc_steps, fc_tasks, fc_linear, fc_models, fc_herdr, fc_crew, fc_init, fc_figmaplan, fc_figmanodes, fc_figmashots
+import fc_core, fc_config, fc_pace, fc_steps, fc_tasks, fc_linear, fc_models, fc_herdr, fc_crew, fc_init, fc_figmaplan, fc_figmanodes, fc_figmashots
 
 
 FIGMA_CONNECTOR = ("Figma tools: the authenticated Figma connector, `mcp__claude_ai_Figma__*` or the Figma plugin's `mcp__plugin_figma_figma__*` (the same server; use whichever ToolSearch finds), is for WRITES ONLY: `use_figma` (and the `create_session` it needs), never a read-only script, and never `whoami`, `get_libraries`, `search_design_system`, or `create_new_file`. Load it in one ToolSearch select call.\n"
@@ -9,16 +9,20 @@ FIGMA_CONNECTOR = ("Figma tools: the authenticated Figma connector, `mcp__claude
                    "Every write script returns the facts it set (ids of nodes, variable bindings, component keys), so no read is needed to prove a binding.\n"
                    "Every READ goes through Framelink (`mcp__framelink-figma__get_figma_data` for node trees, `download_figma_images` for images): never `get_screenshot`, `get_metadata`, or `get_design_context`.\n"
                    "Framelink (REST) shows structure, names, layout, sizes, fills, text, fonts, component properties, and component keys; it has no variable bindings and no library flag, so prove a binding from the write's returned facts and library origin by component key. "
+                   "The plugin's `compose guard` hook enforces this: in a compose session every connector call but `use_figma` and `create_session` is denied and pointed at Framelink.\n"
                    "Never use another `plugin:*figma*` server, and never an authenticate call.")
 FRAMELINK_SETUP = (f"Framelink is not set up. Put a Figma personal access token in {fc_steps.FRAMELINK_ENV} as one line `FIGMA_API_KEY=<token>` (chmod 600), then run\n"
                    f"  {fc_steps.FRAMELINK_ADD}\n"
                    "The token never goes on a command line; only --env names the file.")
 
 def framelink_fetch(key, node=None, depth=None, env_file=None):
-    """Framelink's JSON for a Figma file or node via the REST API, which does not count against the MCP read cap. Never echoes the token."""
+    """Framelink's JSON for a Figma file or node via the REST API, which does not count against the MCP read cap. The fetch takes
+    its turn in the fleet's Figma pace (fc_figmaplan.figma_pace), and a fetch Figma refused for its rate holds the fleet a minute.
+    Never echoes the token."""
     env_file = Path(env_file or fc_steps.FRAMELINK_ENV)
     if not env_file.exists():
         raise RuntimeError(FRAMELINK_SETUP)
+    fc_pace.wait("figma", fc_figmaplan.figma_pace, fc_figmaplan.FIGMA_CALL_SECONDS, "Figma")
     cmd = ["npx", "-y", "figma-developer-mcp", "fetch", "--env", str(env_file), "--no-telemetry", "--file-key", key, "--format", "json"]
     if node:
         cmd += ["--node-id", node]
@@ -34,6 +38,9 @@ def framelink_fetch(key, node=None, depth=None, env_file=None):
         err = (r.stderr or r.stdout or "no output").strip()[-500:]
         for sec in secrets:
             err = err.replace(sec, "***")
+        if re.search(r"\b429\b|too many requests|rate limit", err, re.I):
+            fc_pace.hold("figma", 60)
+            err += " (Figma lets calls through again in about 60s; run it again then)"
         raise RuntimeError(f"framelink fetch failed (exit {r.returncode}): {err}")
     return r.stdout
 

@@ -130,6 +130,7 @@ The team lead starts it for a feature or story whose project it runs, and the en
 Every open design decision reaches you as a question with a recommendation, asked one at a time.
 The designer and its crew are Claude sessions, because Figma serves writes only to its allowlisted clients.
 Writes go through the official Figma connector, and every read goes through Framelink, which keeps reads off the connector's daily cap.
+The plugin's `compose guard` hook enforces it in every teammate's session: a connector call other than `use_figma` and its `create_session` is denied and pointed at Framelink.
 The designer requires Framelink; [requirements.md](requirements.md#for-the-designer) shows how to set it up, and the designer's start stops with the install steps when it is missing.
 `compose figma check --project <name> --figma <file url or key>` stores the target file and prints the Framelink setup when it cannot read the file.
 With no file stored, the designer asks you for one.

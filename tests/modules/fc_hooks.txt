@@ -15,6 +15,9 @@ SEPARATORS
 VAR
 expand
 edit_paths
+FIGMA_SERVERS
+FIGMA_WRITES
+figma_decision
 cmd_guard
 SKILL_DIR
 SKILL_SEEN
