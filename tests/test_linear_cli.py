@@ -363,8 +363,9 @@ class LinearUrl(unittest.TestCase):
 
 
 class LinearPace(unittest.TestCase):
-    """The fleet pace of Linear calls (fc_linearapi.linear_pace, learned from the reply headers): full speed while over half of
-    the hour's requests and complexity remain, the rest spread evenly over the time left, and a reserve never spent."""
+    """The fleet pace of Linear calls (fc_linearapi.linear_pace, learned from the reply headers): full speed while over a tenth of
+    the hour's requests and complexity remain, then the refill rate (Linear's bucket refills continuously, so the reset header
+    slides and is no deadline), and a reserve never spent."""
     def setUp(self):
         self.home = Path(tempfile.mkdtemp())
         p = mock.patch.dict(os.environ, {"COMPOSE_CONFIG": str(self.home / ".compose" / "config.json")}); p.start(); self.addCleanup(p.stop)
@@ -384,7 +385,7 @@ class LinearPace(unittest.TestCase):
         with self.pace.state("linear") as s:
             return self.api.linear_pace(dict(s), time.time())
 
-    def test_nothing_learned_or_over_half_of_both_left_is_full_speed(self):
+    def test_nothing_learned_or_over_a_tenth_of_both_left_is_full_speed(self):
         self.assertEqual(self.api.linear_pace({}, time.time()), (0, self.api.LINEAR_PACE_FLOOR))
         self.assertEqual(self.policy(), (0, self.api.LINEAR_PACE_FLOOR))
         with self.pace.state("linear") as s:
@@ -392,21 +393,25 @@ class LinearPace(unittest.TestCase):
                              {"cost": 150, "requests_limit": 2500, "requests_left": 2000, "complexity_limit": 3000000, "complexity_left": 2500000})
             self.assertAlmostEqual(s["requests_reset"], self.reset, delta=1); self.assertAlmostEqual(s["complexity_reset"], self.reset, delta=1)
 
-    def test_half_the_requests_spent_spreads_the_rest_over_the_time_left_above_the_reserve(self):
-        not_before, spacing = self.policy(requests=1000)
+    def test_a_reset_an_hour_away_is_no_reason_to_slow_down_while_the_budget_is_not_nearly_spent(self):
+        self.assertEqual(self.policy(requests=628, reset=time.time() + 3597), (0, self.api.LINEAR_PACE_FLOOR))  # the live headers that held a sync for 15 minutes
+        self.assertEqual(self.policy(requests=1000, complexity=400000, cost=1000), (0, self.api.LINEAR_PACE_FLOOR))
+
+    def test_a_tenth_of_the_requests_left_spaces_calls_at_the_refill_rate(self):
+        not_before, spacing = self.policy(requests=200)
         self.assertEqual(not_before, 0)
-        self.assertAlmostEqual(spacing, 1800 / (1000 - 50), delta=0.05)
+        self.assertAlmostEqual(spacing, 3600 / 2500, delta=0.01)  # the bucket gives one request back every 1.44s
 
     def test_the_complexity_left_counts_in_calls_of_the_learned_cost(self):
-        not_before, spacing = self.policy(complexity=300000, cost=1000)
+        not_before, spacing = self.policy(complexity=200000, cost=1000)
         self.assertEqual(not_before, 0)
-        self.assertAlmostEqual(spacing, 1800 / ((300000 - 60000) / 1000), delta=0.1)  # 7.5s: the requests left would allow full speed
+        self.assertAlmostEqual(spacing, 1000 * 3600 / 3000000, delta=0.01)  # 1.2s: the requests left would allow full speed
 
-    def test_only_the_reserve_left_waits_for_the_reset(self):
+    def test_only_the_reserve_left_waits_for_the_bucket_to_give_one_call_back(self):
         not_before, spacing = self.policy(requests=50)
-        self.assertAlmostEqual(not_before, self.reset, delta=1)
-        self.assertEqual(spacing, self.api.LINEAR_PACE_FLOOR)
-        self.assertAlmostEqual(self.policy(complexity=60000)[0], self.reset, delta=1)
+        self.assertAlmostEqual(not_before, time.time() + 3600 / 2500, delta=0.1)
+        self.assertAlmostEqual(spacing, 3600 / 2500, delta=0.01)
+        self.assertAlmostEqual(self.policy(complexity=60000)[0], time.time() + 150 * 3600 / 3000000, delta=0.1)
 
     def test_a_reset_that_has_passed_means_a_fresh_hour_at_full_speed(self):
         self.assertEqual(self.policy(requests=50, reset=time.time() - 1), (0, self.api.LINEAR_PACE_FLOOR))
