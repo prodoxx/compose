@@ -17,8 +17,6 @@ class SufficiencyVerify(unittest.TestCase):
     def setUp(self):
         self.repo, self.proj = Path(tempfile.mkdtemp()), Path(tempfile.mkdtemp()) / "feat"
         self.proj.mkdir()
-        git = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=self.repo, check=True, capture_output=True)
-        git("init", "-q", "-b", "main"); (self.repo / "a.py").write_text("1\n"); git("add", "-A"); git("commit", "-q", "-m", "a")
 
     def run_round(self, ok=True, cfg=None, skip_review=False, events=EVENTS):
         cfg, rounds = {"review_base": "main", **(cfg or {})}, []
@@ -27,7 +25,9 @@ class SufficiencyVerify(unittest.TestCase):
                 mock.patch.object(fc_ledger, "verify_record", parent.verify_record), \
                 mock.patch.object(fc.fc_accept, "jev_sufficiency", parent.jev_sufficiency), \
                 mock.patch.object(fc.fc_verify, "verify_failed"), mock.patch.object(fc.fc_linear, "linear_reconcile"), \
-                mock.patch.object(fc.fc_core, "say"), contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as cm:
+                mock.patch.object(fc.fc_core, "say"), mock.patch.object(fc.fc_worktree, "review_base", return_value="main"), \
+                mock.patch.object(fc.fc_worktree, "dirty_paths", return_value=set()), \
+                mock.patch.object(fc.fc_core, "sh", return_value=subprocess.CompletedProcess([], 0, "", "")), contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as cm:
             parent.jev_sufficiency.return_value = events
             fc.fc_verify.verify_rounds(self.repo, self.proj, cfg, type("A", (), {"fix": 0, "skip_review": skip_review})(), rounds, time.time())
         return cm.exception.code, rounds, json.loads((self.proj / "results" / "verify.json").read_text()), parent
@@ -78,7 +78,7 @@ class VerifyLoadWait(unittest.TestCase):
                 mock.patch.object(fc.fc_proc, "slot", slot), mock.patch.object(fc.fc_proc, "run_limited", run), \
                 mock.patch.object(fc.fc_verify, "e2e_stage", side_effect=lambda *x, **k: log.append(("e2e",)) or True), \
                 mock.patch.object(fc.fc_herdr, "herdr_verify_panes"), mock.patch.object(fc.fc_herdr, "herdr_stage"), \
-                mock.patch.object(fc.fc_herdr, "herdr_space"), mock.patch.object(fc.fc_core, "say", say), \
+                mock.patch.object(fc.fc_herdr, "herdr_space"), mock.patch.object(fc.fc_core, "say", say), mock.patch.object(fc.fc_green, "tree_of", return_value=""), \
                 contextlib.redirect_stdout(io.StringIO()):
             fc.fc_verify.run_stages(Path(tempfile.mkdtemp()), Path(tempfile.mkdtemp()), cfg, a)
         return log, say

@@ -114,9 +114,7 @@ TASK = {"title": "t", "linear": "ENG-4", "kind": "code", "body": "## Acceptance 
 class SufficiencyAsk(unittest.TestCase):
     def setUp(self):
         self.proj = Path(tempfile.mkdtemp()) / "feat"; (self.proj / "results").mkdir(parents=True)
-        self.repo = Path(tempfile.mkdtemp())
-        git = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=self.repo, check=True, capture_output=True, text=True).stdout.strip()
-        git("init", "-q", "-b", "main"); git("commit", "-q", "--allow-empty", "-m", "a"); self.sha = git("rev-parse", "HEAD")
+        self.repo, self.sha = Path(tempfile.mkdtemp()), "a" * 40
         self.said, self.asks = [], []
         answer = lambda name, q: {"choice": "proven", "probabilities": {"proven": 1}} if q["type"] == "choice" else {"noul": 1}
         def ask(env, cfg, state, questions, label):
@@ -126,7 +124,8 @@ class SufficiencyAsk(unittest.TestCase):
         self.rows[3:3] = [{"event_id": "s1", "criterion_id": [], "phase": "sufficiency", "result": "proven"}, {"event_id": "c1", "criterion_id": [], "phase": "cost", "result": "pass"}]
         for mod, name, kw in ((fc.fc_config, "ENV_FILE", {"new": self.proj / "none.env"}), (fc.fc_models, "jev_ask", {"side_effect": ask}), (fc_evidence, "task_rows", {"return_value": self.rows}),
                               (fc_ledger, "counted", {"side_effect": lambda *a: a[-1]}), (fc_ledger, "record_task", {"return_value": True}), (fc_ledger, "run_id", {"return_value": "r1"}),
-                              (fc.fc_core, "say", {"new": self.said.append})):
+                              (fc.fc_core, "say", {"new": self.said.append}),
+                              (fc.fc_core, "sh", {"return_value": subprocess.CompletedProcess([], 0, self.sha + "\n", "")})):
             p = mock.patch.object(mod, name, **kw); setattr(self, name, p.start()); self.addCleanup(p.stop)
 
     def tasks(self, *metas):

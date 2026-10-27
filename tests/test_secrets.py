@@ -17,7 +17,6 @@ TYPESAFE = "ts-test-" + "1" * 32  # TypeSafe's key in auth.json
 OTHER = "other-test-" + "2" * 32  # any *_API_KEY under `env`
 LINEAR = "lin-test-" + "3" * 32  # the Linear key in auth.json
 SECRET_NAMES = ("OPENROUTER_API_KEY", "TEXT_MODEL_API_KEY", "TYPESAFE_API_KEY", "OPENCODE_CONFIG_CONTENT", "OTHER_API_KEY")
-GIT = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
 USER_AUTH = json.dumps({"workspaces": {"default": {"openrouter": "sk-or-v1-user" + "4" * 52}}})  # the user's own ~/.compose/auth.json, under the test's HOME
 
 
@@ -35,7 +34,7 @@ class Secrets(unittest.TestCase):
                   mock.patch.object(fc.fc_config, "AUTH_PATH", cfg.parent / "auth.json"),
                   mock.patch.object(fc.fc_config, "OPENROUTER_KEY", None), mock.patch.object(fc.fc_config, "LINEAR_KEY", None),
                   mock.patch.object(fc.fc_core, "SECRET_VARS", set(fc.fc_core.SECRET_VARS)), mock.patch.object(fc.fc_core, "SECRET_VALUES", set()),
-                  mock.patch.dict(os.environ, {**GIT, "OPENCODE_CONFIG_CONTENT": "{}", "HOME": str(self.root / "user")})):
+                  mock.patch.dict(os.environ, {"OPENCODE_CONFIG_CONTENT": "{}", "HOME": str(self.root / "user")})):
             p.start()
             self.addCleanup(p.stop)
         fc.fc_config.apply_config()
@@ -52,26 +51,9 @@ class Secrets(unittest.TestCase):
         for n in SECRET_NAMES if names else ():
             self.assertNotIn(n, text)
 
-    def run_task(self, test):
-        """One task whose test is `test`: the first attempt misses, the second passes. Returns (project dir, prompts)."""
-        repo, proj = self.root / "repo", self.root / "proj"
-        repo.mkdir(); proj.mkdir()
-        git = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True)
-        git("init", "-q", "-b", "main")
-        (repo / "a.txt").write_text("no\n")
-        git("add", "-A"); git("commit", "-qm", "init")
-        task = {"id": "001", "title": "answer", "files": ["a.txt"], "protected": [], "test": test, "model": "pi:p/m",
-                "after": "", "linear": "ENG-1", "body": "## Goal\nWrite yes."}
-        prompts = []
-        def impl(cwd, model, prompt, session=None, task=None, timeout=None):
-            prompts.append(prompt)
-            (Path(cwd) / "a.txt").write_text(("a" if len(prompts) == 1 else "yes") + "\n")
-            return "s", "", 1, {"tokens_in": 1, "tokens_out": 1, "cost": 0.0}
-        with mock.patch.object(fc.fc_models, "pi_turn", impl), mock.patch.object(fc.fc_implement.fc_trailpack, "trail_pack", return_value=""), \
-                mock.patch.object(fc.fc_implement, "read_failure", return_value=("", None)), mock.patch.object(fc.fc_linear, "linear_event"):
-            r = fc.fc_implement.run_task(repo, proj, task, 3)
-        self.assertEqual(r["status"], "passed")
-        return proj, prompts
+    def run_test(self, test):
+        """A task's test command, the way run and the stack run it, in a plain folder."""
+        return fc.fc_implement.run_test({"test": test}, self.root)
 
     def results_text(self, proj):
         return "\n".join(f.read_text() for f in sorted((proj / "results").rglob("*")) if f.is_file())
@@ -79,12 +61,11 @@ class Secrets(unittest.TestCase):
     # ---------- the env half ----------
 
     def test_a_task_test_runs_without_the_secret_vars(self):
-        proj, prompts = self.run_task("python3 -c \"import os; assert open('a.txt').read().strip()=='yes', sorted(os.environ)\"")
-        log = (proj / "results" / "001.test.log").read_text()
-        self.assertIn("PLAIN", log)  # the rest of the env is there
-        self.assertIn("COMPOSE_CONFIG", log)
-        self.assertClean(log)
-        self.assertClean(prompts[1])
+        out = self.run_test("env | grep -E '^(PLAIN|COMPOSE_CONFIG)=|_API_KEY|^OPENCODE_|-test-?[0-9]'; true").stdout
+        self.assertIn("PLAIN", out)  # the rest of the env is there
+        self.assertIn("COMPOSE_CONFIG", out)
+        self.assertClean(out)
+        self.assertScratch(next(l for l in out.splitlines() if l.startswith("COMPOSE_CONFIG=")).split("=", 1)[1])
 
     def test_compose_timed_passes_the_callers_own_keys_through_and_redacts_them_in_its_output(self):
         env = {**os.environ, "OPENROUTER_API_KEY": KEY, "TYPESAFE_API_KEY": TYPESAFE}
@@ -214,7 +195,7 @@ class Secrets(unittest.TestCase):
         self.assertClean(r["stdout"])
         self.assertClean((self.root / "setup-env").read_text())
         a = SimpleNamespace(skip_e2e=True, skip_review=True)
-        with mock.patch.object(fc.fc_herdr, "herdr_verify_panes", return_value={}):
+        with mock.patch.object(fc.fc_herdr, "herdr_verify_panes", return_value={}), mock.patch.object(fc.fc_green, "tree_of", return_value=""):
             ok, report, findings = fc.fc_verify.run_stages(self.root, self.root, {"checks": [env]}, a)
         self.assertFalse(ok)
         self.assertIn("PLAIN", report["checks"][0]["output"])
@@ -223,7 +204,7 @@ class Secrets(unittest.TestCase):
         self.assertScratch(next(l for l in report["checks"][0]["output"].splitlines() if l.startswith("COMPOSE_CONFIG=")).split("=", 1)[1])
         self.assertScratch(next(l for l in r["stdout"].splitlines() if l.startswith("COMPOSE_CONFIG=")).split("=", 1)[1])
         out = io.StringIO()
-        with mock.patch.object(fc.fc_herdr, "herdr_verify_panes", return_value={}), mock.patch("sys.stdout", out):
+        with mock.patch.object(fc.fc_herdr, "herdr_verify_panes", return_value={}), mock.patch.object(fc.fc_green, "tree_of", return_value=""), mock.patch("sys.stdout", out):
             fc.fc_verify.run_stages(self.root, self.root, {"checks": ["echo x > \"$HOME/.compose/auth.json\""]}, a)
         self.assertIn("WARNING: ~/.compose changed while", out.getvalue())
         self.assertIn("auth.json", out.getvalue())
@@ -269,13 +250,11 @@ class Secrets(unittest.TestCase):
 
     # ---------- the scrub half ----------
 
-    def test_test_output_that_prints_a_key_is_scrubbed_everywhere_it_goes(self):
+    def test_test_output_that_prints_a_key_is_scrubbed(self):
         (self.root / "leak").write_text(f"{KEY} {TYPESAFE} {OTHER} {LINEAR}")
-        proj, prompts = self.run_task(f"python3 -c \"print(open('{self.root / 'leak'}').read()); assert open('a.txt').read().strip()=='yes'\"")
-        self.assertIn(fc.fc_core.REDACTED, (proj / "results" / "001.test.log").read_text())
-        self.assertClean(self.results_text(proj), names=False)
-        self.assertIn(fc.fc_core.REDACTED, prompts[1])
-        self.assertClean(prompts[1], names=False)
+        r = self.run_test(f"cat '{self.root / 'leak'}'")
+        self.assertIn(fc.fc_core.REDACTED, r.stdout)
+        self.assertClean(r.stdout, names=False)
 
     def test_model_payloads_are_scrubbed_and_the_auth_header_kept(self):
         sent = []

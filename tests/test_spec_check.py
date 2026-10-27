@@ -49,6 +49,20 @@ def check(issues, desc=SETTLED):
     return {i: (ok, level, gaps) for ok, i, level, gaps in fc.fc_spec.spec_check(data(issues, desc))}
 
 
+def show_at(rev, files):
+    """A fake `sh` that answers only `git show <rev>:<path>`, the one call that reads a file at a revision."""
+    def sh(argv, *a, **kw):
+        path = argv[2].partition(":")[2] if argv[:2] == ["git", "show"] and argv[2].startswith(rev + ":") else None
+        return subprocess.CompletedProcess(argv, 0 if path in files else 128, files.get(path, ""), "")
+    return sh
+
+
+def branches(have=(), merged=()):
+    """`compose tasks` and `spec-check` with git's answers about the project's task branches faked: these are the branches that exist and the ones merged."""
+    facts = {"prefix": "fast/p/", "have": {f"fast/p/{t}" for t in have}, "merged": {f"fast/p/{t}" for t in merged}}
+    return mock.patch.multiple(fc.fc_status, project_head=lambda *a: "head", branch_facts=lambda *a: facts)
+
+
 def has(gaps, *kws):
     return any(k in g for g in gaps for k in kws)
 
@@ -56,7 +70,7 @@ def has(gaps, *kws):
 class SpecCheck(unittest.TestCase):
     def run_cli(self, stdin=None, **kw):
         """The printed lines and the SystemExit (SystemExit(0) when it returns normally); no stdin reads the synced cache."""
-        with mock.patch.object(sys, "stdin", io.StringIO(stdin or "")), mock.patch("sys.stdout", io.StringIO()) as out:
+        with mock.patch.object(sys, "stdin", io.StringIO(stdin or "")), mock.patch("sys.stdout", io.StringIO()) as out, branches():
             try:
                 fc.fc_spec.cmd_spec_check(SimpleNamespace(**{"repo": ".", "project": None, **kw}, stdin=stdin is not None))
             except SystemExit as e:
@@ -218,16 +232,14 @@ class SpecCheck(unittest.TestCase):
 
     def test_base_scripts_are_scripts_dependencies_and_installed_bins_at_the_base(self):
         with tempfile.TemporaryDirectory() as d:
-            git = lambda *a: subprocess.run(["git", "-C", d, *a], check=True, capture_output=True)
-            git("init", "-q"); Path(d, "app").mkdir()
-            Path(d, "app", "package.json").write_text(json.dumps({"scripts": {"build": "vite build"}, "devDependencies": {"prisma": "6"}}))
-            git("add", "."); git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base")
-            Path(d, "app", "package.json").write_text(json.dumps({"scripts": {"build-storybook": "storybook build"}}))  # the worktree is not the base
+            at_base = {"app/package.json": json.dumps({"scripts": {"build": "vite build"}, "devDependencies": {"prisma": "6"}})}
+            Path(d, "app").mkdir(); Path(d, "app", "package.json").write_text(json.dumps({"scripts": {"build-storybook": "storybook build"}}))  # the worktree is not the base
             Path(d, "node_modules", ".bin").mkdir(parents=True); Path(d, "node_modules", ".bin", "tsc").write_text("")
-            has = fc.fc_spec.base_scripts(d, "HEAD")
-            self.assertEqual([n for n in ("build", "prisma", "tsc") if not has("app/package.json", n)], [])
-            self.assertFalse(has("app/package.json", "build-storybook"))
-            self.assertFalse(has("web/package.json", "build"))  # no package.json at the base defines nothing
+            with mock.patch.object(fc.fc_core, "sh", show_at("HEAD", at_base)):
+                has = fc.fc_spec.base_scripts(d, "HEAD")
+                self.assertEqual([n for n in ("build", "prisma", "tsc") if not has("app/package.json", n)], [])
+                self.assertFalse(has("app/package.json", "build-storybook"))
+                self.assertFalse(has("web/package.json", "build"))  # no package.json at the base defines nothing
 
     def test_a_check_running_a_script_the_base_lacks_needs_a_toolchain_task_that_adds_it(self):
         checks = ["bun run build", "bun run build-storybook"]
@@ -242,17 +254,13 @@ class SpecCheck(unittest.TestCase):
         self.assertEqual(fc.fc_spec.spec_check(data([task("ENG-3", "001")]), checks)[0][3], [])  # no base to read says nothing
 
     def test_the_base_is_read_from_git_at_the_given_revision(self):
-        with tempfile.TemporaryDirectory() as d:
-            git = lambda *a: subprocess.run(["git", "-C", d, *a], check=True, capture_output=True)
-            git("init", "-q"); Path(d, "m.py").write_text("import os\nX = 1\nA, (B, C) = 1, (2, 3)\nT: int = 0\n\ndef f():\n    inner = 1\n\nclass K: pass\nasync def g(): pass\n")
-            Path(d, "bad.py").write_text("def broken(:\n")
-            git("add", "."); git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base")
-            Path(d, "m.py").write_text("def later(): pass\n")  # the worktree is not the base
-            defined = fc.fc_spec.base_definitions(d, "HEAD")
+        at_base = {"m.py": "import os\nX = 1\nA, (B, C) = 1, (2, 3)\nT: int = 0\n\ndef f():\n    inner = 1\n\nclass K: pass\nasync def g(): pass\n", "bad.py": "def broken(:\n"}
+        with mock.patch.object(fc.fc_core, "sh", show_at("HEAD", at_base)):
+            defined = fc.fc_spec.base_definitions("d", "HEAD")
             self.assertEqual([n for n in ("X", "A", "B", "C", "T", "f", "K", "g") if not defined("m.py", n)], [])
             for path, name in (("m.py", "inner"), ("m.py", "os"), ("m.py", "later"), ("bad.py", "broken"), ("gone.py", "f")):
                 self.assertFalse(defined(path, name), (path, name))
-            self.assertFalse(fc.fc_spec.base_definitions(d, "")("m.py", "X"))  # no base revision defines nothing
+            self.assertFalse(fc.fc_spec.base_definitions("d", "")("m.py", "X"))  # no base revision defines nothing
 
     def test_spec_check_and_tasks_say_which_after_a_task_is_missing(self):
         brief = lambda **kv: task("ENG-4", "002", files="b.go", crit="- calls `a.go` Run", **kv)
@@ -261,16 +269,13 @@ class SpecCheck(unittest.TestCase):
         self.assertEqual(check([owner, brief(), task("ENG-5", "003", ["ENG-3"], files="c.go", crit="- calls `a.go` Run")])["ENG-5"], (True, "task", []))
         self.assertEqual(check([owner, task("ENG-4", "002", ["ENG-3"], files="b.go", crit="- calls `a.go` Run")])["ENG-4"], (True, "task", []))
         repo = Path(tempfile.mkdtemp())
-        git = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=repo, check=True, capture_output=True, text=True)
-        git("init", "-q", "-b", "main")
-        git("commit", "-q", "--allow-empty", "-m", "init")
         proj = repo / ".compose" / "p"
         (proj / "results").mkdir(parents=True)
         (proj / "linear.json").write_text('{"feature": "ENG-1"}')
         def printed(*issues):
             fc.fc_tasks.sync_tasks(proj, data(list(issues)))
             out = io.StringIO()
-            with mock.patch.object(fc.fc_core, "project_dir", return_value=proj), mock.patch("sys.stdout", out):
+            with mock.patch.object(fc.fc_core, "project_dir", return_value=proj), mock.patch("sys.stdout", out), branches():
                 fc.fc_spec.cmd_tasks(SimpleNamespace(repo=str(repo), project="p"))
             return out.getvalue()
         self.assertIn("WARNING a task names code another task owns, with no `after:` on it", printed(owner, brief()))
@@ -282,18 +287,14 @@ class SpecCheck(unittest.TestCase):
                  task("ENG-5", "003", ["ENG-4"])]
         self.assertTrue(check(chain)["ENG-1"][0], check(chain)["ENG-1"])
         repo = Path(tempfile.mkdtemp())
-        git = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
-        git("init", "-q", "-b", "main")
-        git("commit", "-q", "--allow-empty", "-m", "init")
         proj = repo / ".compose" / "p"
         (proj / "results").mkdir(parents=True)
         (proj / "linear.json").write_text('{"feature": "ENG-1"}')
         fc.fc_tasks.sync_tasks(proj, data([task("ENG-3", "001"), task("ENG-4", "002", ["ENG-3"]), task("ENG-5", "003", ["ENG-4"])]))
         for tid in ("001", "002"):  # passed layers, their branches not merged yet
-            git("branch", f"fast/p/{tid}", git("commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", tid))
             (proj / "results" / f"{tid}.json").write_text('{"status": "passed"}')
         out = io.StringIO()
-        with mock.patch.object(fc.fc_core, "project_dir", return_value=proj), mock.patch("sys.stdout", out):
+        with mock.patch.object(fc.fc_core, "project_dir", return_value=proj), mock.patch("sys.stdout", out), branches(have=("001", "002")):
             fc.fc_spec.cmd_tasks(SimpleNamespace(repo=str(repo), project="p"))
         self.assertIn("run waves (each wave in parallel): 003\n", out.getvalue())
         self.assertNotIn("SERIAL CHAIN", out.getvalue())
@@ -302,28 +303,25 @@ class SpecCheck(unittest.TestCase):
         """A re-plan made 012 and 013 wait on 025: `tasks` stacks them above it, before and after their branches exist, as the chain
         does, and a merged task is no layer."""
         repo = Path(tempfile.mkdtemp())
-        git = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
-        git("init", "-q", "-b", "main")
-        git("commit", "-q", "--allow-empty", "-m", "init")
         proj = repo / ".compose" / "p"
         (proj / "results").mkdir(parents=True)
         (proj / "linear.json").write_text('{"feature": "ENG-1"}')
+        (proj / "verify.json").write_text('{"task_prefix": "fast/p/"}')
         fc.fc_tasks.sync_tasks(proj, data([task("ENG-3", "011"), task("ENG-4", "012", ["ENG-3", "ENG-7"]), task("ENG-5", "013", ["ENG-3", "ENG-7"]),
                                            task("ENG-6", "024"), task("ENG-7", "025", ["ENG-6"]), task("ENG-8", "026", files="z.go")]))
-        def header():
+        def header(have=(), merged=()):
             out = io.StringIO()
-            with mock.patch.object(fc.fc_core, "project_dir", return_value=proj), mock.patch("sys.stdout", out), contextlib.suppress(SystemExit):  # until a layer passes, this plan is a serial chain
+            with mock.patch.object(fc.fc_core, "project_dir", return_value=proj), mock.patch("sys.stdout", out), contextlib.suppress(SystemExit), branches(have, merged):  # until a layer passes, this plan is a serial chain
                 fc.fc_spec.cmd_tasks(SimpleNamespace(repo=str(repo), project="p"))
             return out.getvalue().splitlines()[0].partition("stack order (bottom first): ")[2]
-        git("branch", "fast/p/026", git("commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "026"))
-        git("merge", "-q", "fast/p/026")
         (proj / "results" / "026.json").write_text('{"status": "passed"}')
-        self.assertEqual(header(), "011 <- 024 <- 025 <- 012 <- 013")  # no layer is built yet
-        for tid in ("011", "012", "013", "024", "025"):
-            git("branch", f"fast/p/{tid}", git("commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", tid))
+        self.assertEqual(header(("026",), ("026",)), "011 <- 024 <- 025 <- 012 <- 013")  # no layer is built yet
+        built = ("011", "012", "013", "024", "025")
+        for tid in built:
             (proj / "results" / f"{tid}.json").write_text('{"status": "passed"}')
-        chain = [b.removeprefix("fast/p/") for b in fc.fc_worktree.stack_order(repo, proj)]
-        self.assertEqual((header(), " <- ".join(chain)), ("011 <- 024 <- 025 <- 012 <- 013",) * 2)
+        with mock.patch.object(fc.fc_worktree, "task_branches", return_value={f"fast/p/{t}": None for t in built}):
+            chain = [b.removeprefix("fast/p/") for b in fc.fc_worktree.stack_order(repo, proj)]
+        self.assertEqual((header(built + ("026",), ("026",)), " <- ".join(chain)), ("011 <- 024 <- 025 <- 012 <- 013",) * 2)
 
     def clash_tasks(self, cache=None):
         """`compose tasks` of three synced tasks, two sharing a.go, 001 and 003 routed; `cache` edits tasks.json first."""
@@ -331,8 +329,6 @@ class SpecCheck(unittest.TestCase):
                  task("ENG-4", "002", files="a.go"),
                  routed(task("ENG-5", "003", ["ENG-3"], files="b.go"), "- depth: DEEP", "- decided by: fallback", "- workflow: fix-then-regression-test")]
         repo = Path(tempfile.mkdtemp())
-        for a in (["init", "-q", "-b", "main"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]):
-            subprocess.run(["git", *a], cwd=repo, check=True)
         proj = repo / ".compose" / "p"
         proj.mkdir(parents=True)
         (proj / "linear.json").write_text('{"feature": "ENG-1"}')
@@ -342,7 +338,7 @@ class SpecCheck(unittest.TestCase):
             path.write_text(json.dumps(cache(json.loads(path.read_text()))))
         out = io.StringIO()
         self.exit_code = 0
-        with mock.patch.object(fc.fc_core, "project_dir", return_value=proj), mock.patch("sys.stdout", out):
+        with mock.patch.object(fc.fc_core, "project_dir", return_value=proj), mock.patch("sys.stdout", out), branches():
             try:
                 fc.fc_spec.cmd_tasks(SimpleNamespace(repo=str(repo), project="p"))
             except SystemExit as e:
@@ -438,14 +434,12 @@ class StoryTooBig(unittest.TestCase):
 
     def tasks_out(self, issues):
         repo = Path(tempfile.mkdtemp())
-        for a in (["init", "-q", "-b", "main"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]):
-            subprocess.run(["git", *a], cwd=repo, check=True)
         proj = repo / ".compose" / "p"
         proj.mkdir(parents=True)
         (proj / "linear.json").write_text('{"feature": "ENG-1"}')
         fc.fc_tasks.sync_tasks(proj, data(issues))
         out = io.StringIO()
-        with mock.patch.object(fc.fc_core, "project_dir", return_value=proj), mock.patch("sys.stdout", out):
+        with mock.patch.object(fc.fc_core, "project_dir", return_value=proj), mock.patch("sys.stdout", out), branches():
             fc.fc_spec.cmd_tasks(SimpleNamespace(repo=str(repo), project="p"))
         return out.getvalue()
 

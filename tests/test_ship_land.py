@@ -3,69 +3,13 @@ import argparse, io, json, os, re, subprocess, tempfile, unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
-from ship_kit import Ship, fc
+import importlib.machinery, importlib.util, sys
+_spec = importlib.util.spec_from_loader("fc", importlib.machinery.SourceFileLoader("fc", str(Path(__file__).resolve().parents[1] / "bin" / "compose.py")))
+fc = importlib.util.module_from_spec(_spec)
+for _m in [m for m in sys.modules if m.startswith("fc_") and m not in ("fc_cost", "fc_mcp", "fc_sessions")]: del sys.modules[_m]
+_spec.loader.exec_module(fc)
 os.environ["COMPOSE_NO_TREEHOUSE"] = "1"
 os.environ["HERDR_ENV"] = ""
-
-
-class Land(Ship):
-    def submitted(self):
-        out, code = self.submit()
-        self.assertEqual(code, 0, out)
-        self.assertEqual(sorted(self.prs()), ["1", "2", "3"])
-
-    def test_it_merges_bottom_up_waits_for_checks_and_moves_each_next_pr_onto_the_base(self):
-        self.submitted()
-        self.set_pr(1, checks=["pending", "pending", "pass"])
-        self.set_pr(3, checks=["none"])
-        out, code = self.land()
-        self.assertEqual(code, 0, out)
-        prs = self.prs()
-        self.assertEqual([p["state"] for p in prs.values()], ["MERGED"] * 3)
-        self.assertEqual([p["base"] for p in prs.values()], ["main"] * 3)
-        log = self.log()
-        merges = [c for c in log if c.startswith("pr merge")]
-        self.assertEqual(merges, ["pr merge 1 --squash", "pr merge 2 --squash", "pr merge 3 --squash"])
-        self.assertEqual([c for c in log if c.startswith("pr ready")], ["pr ready 1", "pr ready 2", "pr ready 3"])
-        self.assertLess(log.index("pr merge 1 --squash"), log.index("pr edit 2 --base main"))
-        self.assertLess(log.index("pr edit 2 --base main"), log.index("pr merge 2 --squash"))
-        self.assertLess(log.index("pr merge 2 --squash"), log.index("pr edit 3 --base main"))
-        self.assertGreaterEqual(len([c for c in log if c.startswith("pr checks 1")]), 3)
-        top = subprocess.run(["git", "--git-dir", str(self.origin), "ls-tree", "-r", "--name-only", "main"], capture_output=True, text=True).stdout.split()
-        self.assertEqual(sorted(top), ["001.src", "002.src", "003.src", "README.md", "setup.txt", "t001.test", "t002.test", "t003.test"])
-        self.assertEqual(out[-1], "next: compose clean --project p")
-        self.assertFalse((self.proj / "results" / "land.json").exists())
-        self.assertEqual(self.git("branch", "--show-current"), "compose/p")  # the user's checkout never moved
-
-    def test_a_failing_check_stops_the_land_and_a_rerun_resumes_where_it_stopped(self):
-        self.submitted()
-        self.set_pr(2, checks=["fail"])
-        out, code = self.land()
-        self.assertEqual(code, 1)
-        self.assertEqual([p["state"] for p in self.prs().values()], ["MERGED", "OPEN", "OPEN"])
-        self.assertTrue(any("required checks on #2" in l and "re-run `compose land` to resume" in l for l in out))
-        self.assertEqual(self.prs()["2"]["base"], "main")  # moved onto the base before its checks were read
-        self.assertTrue((self.proj / "results" / "land.json").exists())
-        self.set_pr(2, checks=["pass"])
-        merges = len([c for c in self.log() if c.startswith("pr merge")])
-        out, code = self.land()
-        self.assertEqual(code, 0, out)
-        self.assertEqual([p["state"] for p in self.prs().values()], ["MERGED"] * 3)
-        self.assertEqual(len([c for c in self.log() if c.startswith("pr merge")]), merges + 2)  # PR 1 is not merged twice
-        self.assertTrue(any("#1" in l and "already merged" in l for l in out))
-
-    def test_a_next_layer_that_conflicts_with_the_base_stops_with_the_files_and_pushes_nothing(self):
-        self.submitted()
-        self.set_pr(1, extra=["002.src", "from the base\n"])
-        top = self.git("rev-parse", "compose/p-layer-02")
-        out, code = self.land()
-        self.assertEqual(code, 1)
-        self.assertEqual(self.prs()["1"]["state"], "MERGED")
-        self.assertTrue(any("compose/p-layer-02 conflicts with main in 002.src" in l and "nothing of it was pushed" in l for l in out), out)
-        self.assertEqual(self.git("rev-parse", "compose/p-layer-02"), top)
-        self.assertEqual(self.prs()["2"]["state"], "OPEN")
-        self.assertEqual(self.prs()["2"]["base"], "compose/p-layer-01")
-        self.assertEqual(self.git("-C", str(fc.fc_worktree.stack_worktree(self.repo, self.proj, "compose/p")), "status", "--porcelain"), "")  # no rebase left half done
 
 
 class FakedLand(unittest.TestCase):

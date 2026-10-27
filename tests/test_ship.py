@@ -1,122 +1,16 @@
 import hermetic  # first: no test sees the real home
-import argparse, io, json, os, subprocess, tempfile, unittest
+import argparse, io, json, os, tempfile, unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
-from ship_kit import Ship, fc
+import importlib.machinery, importlib.util, sys
+_spec = importlib.util.spec_from_loader("fc", importlib.machinery.SourceFileLoader("fc", str(Path(__file__).resolve().parents[1] / "bin" / "compose.py")))
+fc = importlib.util.module_from_spec(_spec)
+for _m in [m for m in sys.modules if m.startswith("fc_") and m not in ("fc_cost", "fc_mcp", "fc_sessions")]: del sys.modules[_m]
+_spec.loader.exec_module(fc)
 os.environ["COMPOSE_NO_TREEHOUSE"] = "1"
 os.environ["HERDR_ENV"] = ""
-
-
-class LayerChecks(Ship):
-    def test_a_failing_layer_refuses_the_submit_and_is_named_with_nothing_pushed(self):
-        self.config(checks=["! test -f 002.src"])  # layer 1 holds the setup files and passes; layer 2 has 002.src
-        out, code = self.submit()
-        self.assertEqual(code, 1)
-        stop = [l for l in out if "STOP" in l]
-        self.assertEqual(len(stop), 1)
-        self.assertIn("layer 2 of 3 (compose/p-layer-02) fails `! test -f 002.src` on its own tree", stop[0])
-        self.assertIn("Nothing was pushed", stop[0])
-        self.assertTrue(any("layers ok" in l and "compose/p-layer-01" in l for l in out))
-        self.assertFalse(any("stack submit" in c for c in self.log()))
-        self.assertFalse(self.origin_has("refs/heads/compose/p-layer-01"))
-        self.assertFalse((self.proj / "layers.json").exists())
-
-    def test_a_failing_install_in_a_layer_refuses_the_submit_with_its_output_and_nothing_pushed(self):
-        for install, said in (("echo 'error: @slack-notification not found in workspace' >&2; exit 1", "@slack-notification not found"),
-                              ("no-such-bun-xyz install", "not found")):
-            self.config(checks=["true"], install=install)
-            out, code = self.submit()
-            self.assertEqual(code, 1, out)
-            self.assertFalse(any("Traceback" in l for l in out), out)
-            stop = [l for l in out if "STOP" in l]
-            self.assertEqual(len(stop), 1, out)
-            self.assertIn("layer 1 of 3 (compose/p-layer-01): install failed", stop[0])
-            self.assertIn(said, stop[0])
-            self.assertIn("Nothing was pushed", stop[0])
-            self.assertFalse(any("stack submit" in c for c in self.log()))
-            self.assertFalse(self.origin_has("refs/heads/compose/p-layer-01"))
-            wt = fc.fc_worktree.stack_worktree(self.repo, self.proj, "compose/p")
-            at = lambda *a: subprocess.run(["git", *a], cwd=wt, capture_output=True, text=True).stdout.strip()
-            self.assertEqual(at("branch", "--show-current"), "")  # put back on the trunk, detached
-            self.assertEqual(at("rev-parse", "HEAD"), self.git("rev-parse", "compose/p"))
-
-    def test_a_failing_install_on_the_base_refuses_the_submit_and_names_the_base(self):
-        fail = "echo 'FAIL: t002.test' && exit 1"
-        self.write("bun.lock", "x\n"); self.commit("Lock the groundwork")
-        for t in ("001", "002", "003"):
-            self.git("rebase", "-q", "compose/p", f"compose/p-{t}")
-        self.git("checkout", "-q", "compose/p")
-        self.config(checks=[f"! test -f 002.src || {{ {fail}; }}"],  # the base has no bun.lock, so it installs again there, and breaks
-                    install="test -f bun.lock || { echo 'lockfile out of date' >&2; exit 1; }")
-        out, code = self.submit()
-        self.assertEqual(code, 1, out)
-        self.assertFalse(any("Traceback" in l for l in out), out)
-        stop = [l for l in out if "STOP" in l]
-        self.assertEqual(len(stop), 1, out)
-        self.assertIn("layer 2 of 3 (compose/p-layer-02): install failed on the base", stop[0])
-        self.assertIn("lockfile out of date", stop[0])
-        self.assertFalse(self.origin_has("refs/heads/compose/p-layer-01"))
-
-    def test_a_check_whose_script_a_later_layer_adds_waits_for_it_and_the_top_still_runs_every_check(self):
-        missing = """echo 'error: Script not found "build-storybook"'; exit 1"""
-        self.config(checks=[f"test -f 002.src || {{ {missing}; }}"])  # the script arrives with 002.src in layer 2
-        out, code = self.submit()
-        self.assertEqual(code, 0, out)
-        self.assertTrue(any("layers later" in l and "compose/p-layer-01" in l and "build-storybook" in l for l in out), out)
-        self.assertTrue(self.origin_has("refs/heads/compose/p-layer-01"))
-        self.config(checks=[f"test -f nowhere || {{ {missing}; }}"])  # no layer adds it: the top refuses the submit
-        out, code = self.submit()
-        self.assertEqual(code, 1)
-        stop = [l for l in out if "STOP" in l]
-        self.assertIn("layer 3 of 3 (compose/p-layer-03) fails", stop[0])
-
-    def test_a_layer_whose_tree_has_a_recorded_green_is_not_run_and_the_others_still_are(self):
-        counter = Path(tempfile.mkdtemp()) / "runs"
-        cmd = f"echo run >> {counter}"
-        self.config(checks=[cmd])
-        self.run_cmd(fc.fc_ship.cmd_stack, submit=False)
-        top = fc.fc_green.tree_of(self.repo, "compose/p-layer-03")
-        fc.fc_green.record(self.proj, top, cmd, 0)  # what verify left on the top of the stack
-        out, code = self.submit()
-        self.assertEqual(code, 0, out)
-        self.assertEqual(len(counter.read_text().splitlines()), 2)  # layers 1 and 2 hold other trees
-        taken = [l for l in out if "not rerun" in l]
-        self.assertEqual(len(taken), 1)
-        self.assertIn(f"{cmd} green on tree {top[:12]} at ", taken[0])
-        self.assertIn("compose/p-layer-03", taken[0])
-
-    def test_a_red_result_is_never_taken_and_a_green_one_is_forgotten_when_the_layer_goes_red(self):
-        counter = Path(tempfile.mkdtemp()) / "runs"
-        cmd = f"echo run >> {counter}; ! test -f 002.src"
-        self.config(checks=[cmd])
-        for _ in range(2):
-            out, code = self.submit()
-            self.assertEqual(code, 1)
-        self.assertEqual(len(counter.read_text().splitlines()), 3)  # layer 1 once, layer 2 on both submits
-        self.assertFalse(any("not rerun" in l for l in out))
-
-
-class Reword(Ship):
-    def test_set_rewords_one_commit_keeps_the_trees_and_never_pushes(self):
-        self.run_cmd(fc.fc_ship.cmd_stack, submit=False)
-        tips = {b: self.git("rev-parse", b) for b in ("compose/p-layer-01", "compose/p-layer-02", "compose/p-layer-03")}
-        sha = self.git("log", "-1", "--format=%H", "--grep=^Build 001", "compose/p-layer-02")
-        out, code = self.run_cmd(fc.fc_ship.cmd_reword, set=[f"{sha[:8]}=Add the first thing\n\nIt reads the file."], as_is=False)
-        self.assertEqual(code, 0, out)
-        self.assertIn("Add the first thing", self.subjects("compose/p-layer-02"))
-        self.assertNotIn("Build 001", self.subjects("compose/p-layer-02"))
-        for b, tip in tips.items():
-            self.assertEqual(self.git("rev-parse", f"{b}^{{tree}}"), self.git("rev-parse", f"{tip}^{{tree}}"))
-        self.assertEqual(self.git("rev-parse", "compose/p-layer-01"), tips["compose/p-layer-01"])  # a layer below the change is untouched
-        self.assertEqual(self.subjects("compose/p-layer-03")[0], "Build 003")
-        self.assertFalse(self.origin_has("refs/heads/compose/p-layer-02"))
-        self.assertFalse(any(c.startswith(("pr ", "stack submit", "stack push")) for c in self.log()))
-        self.assertTrue(any("nothing pushed" in l for l in out))
-        # the choice lives on the commit: any later rebuild applies it again
-        self.run_cmd(fc.fc_ship.cmd_stack, submit=False)
-        self.assertIn("Add the first thing", self.subjects("compose/p-layer-02"))
 
 
 class Faked(unittest.TestCase):

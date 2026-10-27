@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import contextlib, importlib.machinery, importlib.util, io, json, os, re, shlex, signal, subprocess, sys, tempfile, threading, time, unittest
+import contextlib, importlib.machinery, importlib.util, io, json, os, re, signal, subprocess, sys, tempfile, threading, time, unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -196,7 +196,7 @@ class WatchTimeout(unittest.TestCase):
         live = {"agents": [{"name": "hw-tests-001", "workspace_id": "w9", "agent_status": "working"},
                            {"name": "hw-tests-002", "workspace_id": "w1", "agent_status": "working"}]}  # same name, another space
         for answer, closed in ((live, ["hw-tests-002"]), (None, [])):  # herdr cannot say: nobody counts as closed
-            with mock.patch.object(fc.fc_herdr, "herdr", return_value=answer), mock.patch.object(fc.fc_tasks, "load_tasks", return_value=[]):
+            with mock.patch.object(fc.fc_herdr, "herdr", return_value=answer), mock.patch.object(fc.fc_status, "board", return_value={"rows": []}):
                 self.assertEqual(fc.fc_watch.watch_snapshot(Path("."), proj)["closed"], closed)
 
     def test_a_teammate_still_booting_is_closed_only_when_its_tab_is(self):
@@ -206,7 +206,7 @@ class WatchTimeout(unittest.TestCase):
             (proj / "results" / "crew" / f"{n}.json").write_text(json.dumps({"name": n, "space": "w9", "tab": tab, "booting": True}))
         tabs = lambda *a, **k: ({"tab": {"tab_id": "w9:t3"}}, None) if a == ("tab", "get", "w9:t3") else (None, "tab_not_found")
         with mock.patch.object(fc.fc_herdr, "herdr", return_value={"agents": []}), mock.patch.object(fc.fc_herdr, "herdr_error", tabs), \
-                mock.patch.object(fc.fc_tasks, "load_tasks", return_value=[]):
+                mock.patch.object(fc.fc_status, "board", return_value={"rows": []}):
             self.assertEqual(fc.fc_watch.watch_snapshot(Path("."), proj)["closed"], ["hw-tests-002"])
 
     def test_a_teammate_just_up_is_not_judged_by_a_list_from_before(self):
@@ -215,7 +215,7 @@ class WatchTimeout(unittest.TestCase):
         (proj / "results" / "crew" / "hw-tests-001.json").write_text(json.dumps({"name": "hw-tests-001", "space": "w9", "tab": "w9:t3", "booting": True}))
         agents, listed = fc.fc_watch.Agents(), {"agents": []}
         with mock.patch.object(fc.fc_herdr, "herdr", lambda *a, **k: listed), mock.patch.object(fc.fc_herdr, "herdr_error", return_value=({}, None)), \
-                mock.patch.object(fc.fc_tasks, "load_tasks", return_value=[]):
+                mock.patch.object(fc.fc_status, "board", return_value={"rows": []}):
             self.assertEqual(fc.fc_watch.watch_snapshot(Path("."), proj, agents)["closed"], [])  # booting, its tab is there
             listed = {"agents": [{"name": "hw-tests-001", "workspace_id": "w9", "agent_status": "working"}]}  # herdr lists it now
             fc.fc_crew.crew_up(proj, "hw-tests-001")
@@ -226,7 +226,7 @@ class WatchTimeout(unittest.TestCase):
         live = {"agents": [{"name": "clean-recut-branche-orchestrator", "workspace_id": "w9", "agent_status": "working"},
                            {"name": "clean-recut-branches-groundwork", "workspace_id": "w9", "agent_status": "idle"},
                            {"name": "clean-bugs-orchestrator", "workspace_id": "w9", "agent_status": "done"}]}
-        with mock.patch.object(fc.fc_herdr, "herdr", return_value=live), mock.patch.object(fc.fc_tasks, "load_tasks", return_value=[]):
+        with mock.patch.object(fc.fc_herdr, "herdr", return_value=live), mock.patch.object(fc.fc_status, "board", return_value={"rows": []}):
             snap = fc.fc_watch.watch_snapshot(Path("."), proj)
         self.assertEqual(snap["agents"], {"clean-recut-branche-orchestrator": "working", "clean-recut-branches-groundwork": "idle"})
         snap.update({"tasks": {"001": {"state": "pending"}}, "last": (NOW - 600, "teammate x reported working")})
@@ -343,27 +343,14 @@ class WatchMemory(unittest.TestCase):
         ev = fc.fc_watch.watch_events(wsnap(run=True), wsnap("unchained", run=True))
         self.assertTrue(any(e.startswith("event task=001 state=unchained") for e in ev), ev)
 
-    def test_checking_out_the_stack_top_and_back_reports_nothing(self):
-        """A task's state is measured against the project branch, not whatever the worktree has checked out: peeking at
-        the stack top (where every layer is an ancestor) and coming back must not replay passed and hand_done tasks."""
-        repo = Path(tempfile.mkdtemp())
-        git = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=repo, check=True, capture_output=True)
-        git("init", "-q", "-b", "compose/hw"); git("commit", "-q", "--allow-empty", "-m", "init")
-        for tid in ("001", "002"):
-            git("checkout", "-q", "-b", f"fast/hw/{tid}"); git("commit", "-q", "--allow-empty", "-m", tid)
-        git("checkout", "-q", "compose/hw")
-        proj = repo / ".compose" / "hw"; (proj / "results").mkdir(parents=True)
-        (proj / "verify.json").write_text("{}")
-        (proj / "results" / "tasks.json").write_text(json.dumps({"tasks": [{"id": "001", "title": "a"}, {"id": "002", "title": "b"}]}))
-        (proj / "results" / "001.json").write_text(json.dumps({"status": "passed"}))
-        (proj / "results" / "002.json").write_text(json.dumps({"status": "hand_done"}))
-        snaps = []
-        with mock.patch.object(fc.fc_herdr, "herdr", return_value={}):
-            for ref in ("compose/hw", "fast/hw/002", "compose/hw"):
-                git("checkout", "-q", ref)
-                snaps.append(fc.fc_watch.watch_snapshot(repo, proj))
-        self.assertEqual({t: v["state"] for t, v in snaps[0]["tasks"].items()}, {"001": "passed", "002": "hand_done"})
-        self.assertEqual(fc.fc_watch.watch_events(snaps[0], snaps[1]) + fc.fc_watch.watch_events(snaps[1], snaps[2]), [])
+    def test_a_tasks_state_is_measured_against_the_project_branch_not_the_checked_out_one(self):
+        """Peeking at the stack top (where every layer is an ancestor) and coming back must not replay passed and hand_done tasks."""
+        tips = {"compose/hw^{commit}": "aaa", "HEAD^{commit}": "top"}  # the worktree stands on the stack top, the project branch did not move
+        sh = lambda cmd, cwd, **k: SimpleNamespace(returncode=0 if cmd[-1] in tips else 1, stdout=tips.get(cmd[-1], "") + "\n")
+        with mock.patch.object(fc.fc_core, "project_branch", return_value="compose/hw"), mock.patch.object(fc.fc_core, "sh", sh):
+            self.assertEqual(fc.fc_status.project_head(self.proj, self.proj), "aaa")
+            tips.pop("compose/hw^{commit}")  # a project without its own branch falls back to HEAD
+            self.assertEqual(fc.fc_status.project_head(self.proj, self.proj), "top")
 
     def test_now_reports_a_crashed_run(self):
         out = self.watch(wsnap("running", ended="crashed"), now=True)
@@ -488,55 +475,6 @@ class Detach(unittest.TestCase):
             code = fc.follow([sys.executable, "-c", "print('layer 001 passed'); raise SystemExit(3)"], self.log)
         self.assertEqual(code, 3)
         self.assertIn("layer 001 passed", out.getvalue())
-
-    def test_a_compose_verify_started_by_a_detached_verify_detaches_too(self):
-        """The detach marker is the CLI's own: an e2e driver that runs compose gets a run in its own session, never one in
-        the outer verify's process group, where stopping it would stop the outer verify."""
-        cli = Path(__file__).resolve().parents[1] / "bin" / "compose.py"
-        verify = lambda repo: [sys.executable, str(cli), "verify", "--repo", str(repo), "--project", "p", "--skip-review", "--fix", "0"]
-        def repo(driver):
-            r = Path(tempfile.mkdtemp())
-            for args in (["init", "-q", "-b", "main"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]):
-                subprocess.run(["git", *args], cwd=r, check=True)
-            (r / ".compose" / "p").mkdir(parents=True)
-            (r / ".compose" / "p" / "verify.json").write_text(json.dumps({"review": False, "jev_acceptance": False, "e2e_env": {"BU_CDP_URL": "http://127.0.0.1:1", "BU_NAME": "d"},  # no browser
-                                                                             "e2e": [{"name": "d", "driver": driver}]}))
-            return r
-        outer = repo(f"{shlex.join(verify(repo('true')))} > {self.dir}/nested.out 2>&1")
-        env = {k: v for k, v in os.environ.items() if k != "COMPOSE_DETACHED"}
-        p = subprocess.run(verify(outer), env=env, capture_output=True, text=True, timeout=120)
-        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assertIn("runs in its own session", (self.dir / "nested.out").read_text())
-
-    def test_a_sigint_stops_a_detached_verify_started_with_sigint_ignored_and_its_suite(self):
-        """A background job of a non-interactive shell starts with SIGINT ignored, and so did the verify and the suite under it: a
-        `kill -INT` stopped neither. Now it ends the verify, the suite, and what the suite started, and the log says why."""
-        cli = Path(__file__).resolve().parents[1] / "bin" / "compose.py"
-        repo = Path(tempfile.mkdtemp())
-        for args in (["init", "-q", "-b", "main"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]):
-            subprocess.run(["git", *args], cwd=repo, check=True)
-        (repo / ".compose" / "p").mkdir(parents=True)
-        suite = f"echo $$ > {self.dir}/suite.pid; ps -o ppid= -p $$ > {self.dir}/verify.pid; sleep 300 & echo $! > {self.dir}/child.pid; wait"  # the stub suite: sleeps
-        (repo / ".compose" / "p" / "verify.json").write_text(json.dumps({"review": False, "jev_acceptance": False, "checks": [suite]}))
-        env = {k: v for k, v in os.environ.items() if k != "COMPOSE_DETACHED"}
-        follower = subprocess.Popen([sys.executable, str(cli), "verify", "--repo", str(repo), "--project", "p", "--skip-review", "--skip-e2e", "--fix", "0"],
-                                    env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_IGN))
-        pids = {n: self.dir / f"{n}.pid" for n in ("suite", "verify", "child")}
-        alive = lambda pid: subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip() not in ("", "Z")
-        def wait_for(until):  # generous deadline, polled: a loaded machine can take seconds to start python
-            for _ in range(300):
-                if until():
-                    return True
-                time.sleep(0.1)
-            return False
-        def pid_of(name):
-            return int(pids[name].read_text()) if pids[name].exists() and pids[name].read_text().strip() else 0
-        self.addCleanup(lambda: [os.kill(pid, 9) for pid in (pid_of(n) for n in pids) if pid and alive(pid)])
-        self.assertTrue(wait_for(lambda: all(pid_of(n) for n in pids)), "the stub suite never started")
-        os.kill(pid_of("verify"), signal.SIGINT)
-        self.assertTrue(wait_for(lambda: not any(alive(pid_of(n)) for n in pids)), "verify or its suite survived the SIGINT")
-        self.assertEqual(follower.wait(30), 130)
-        self.assertIn("verify stopped by Ctrl-C", (repo / ".compose" / "p" / "results" / "verify.log").read_text())
 
     def test_killing_the_follower_leaves_the_work_running(self):
         done = self.dir / "done"
@@ -766,31 +704,6 @@ class RunStop(unittest.TestCase):
     def test_a_second_ctrl_c_during_the_stop_changes_nothing(self):
         self.ctrl_c(stop=lambda: os.kill(os.getpid(), signal.SIGINT))
 
-    def run_one(self, effect):
-        repo, calls = Path(tempfile.mkdtemp()), []; proj = repo / "proj"
-        for c in (["init", "-q", "-b", "main"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "i"]):
-            subprocess.run(["git", *c], cwd=repo, check=True, capture_output=True)
-        task = {"id": "001", "title": "t", "files": ["a.txt"], "protected": [], "test": "false", "model": "pi:p/primary", "after": "", "linear": "", "body": "## Goal\nx"}
-        def impl(cwd, model, prompt, session=None, task=None, timeout=None):
-            calls.append(model); fc.fc_proc.STOP.set()
-            if effect: raise effect
-            return "s", "", 1, {"tokens_in": 1, "tokens_out": 1, "cost": 0.0}
-        with mock.patch.object(fc.fc_implement, "implementer", impl), mock.patch.object(fc.fc_implement.fc_trailpack, "trail_pack", return_value=""), \
-                mock.patch.object(fc.fc_config, "DEFAULT_MODEL", "pi:p/primary"), mock.patch.object(fc.fc_config, "FALLBACK_MODEL", "pi:p/backup"), \
-                mock.patch.object(fc.fc_config, "FALLBACK_AFTER", 1), mock.patch.object(fc.fc_config, "TEST_READER", None), contextlib.redirect_stdout(io.StringIO()), \
-                mock.patch.dict(os.environ, {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}), \
-                contextlib.suppress(fc.fc_proc.Stopped):
-            fc.fc_implement.run_task(repo, proj, task, 3)
-            self.assertIsNone(effect, "an implementer failure after the stop raises Stopped")
-        self.assertEqual(calls, ["pi:p/primary"])  # no further attempt, no fallback
-        return json.loads((proj / "results" / "001.json").read_text()), fc.fc_status.task_state(repo, proj, task, "")["state"]
-
-    def test_after_the_stop_an_implementer_error_or_timeout_is_no_attempt_and_no_turn_starts_another(self):
-        for effect in (RuntimeError("pi exited"), subprocess.TimeoutExpired("pi", 1), None):  # the stop lands in the turn, which then ends as `effect`
-            with self.subTest(effect=type(effect).__name__):
-                (result, state), _ = self.run_one(effect), fc.fc_proc.STOP.clear()
-                if effect: self.assertEqual((result["status"], result["log"], state), ("running", [], "interrupted"))
-
     def test_a_herdr_agent_gets_esc_then_its_pane_closed_on_the_stop(self):
         calls, hooked, root, name = [], [], Path(tempfile.mkdtemp()), fc.fc_herdr.agent_name("shop", "028")
         def prompt(*a, **k):  # the stop lands while the agent works on its prompt
@@ -825,7 +738,7 @@ class ReadyEvent(unittest.TestCase):
         proj = Path(tempfile.mkdtemp()) / "p"; (proj / "results").mkdir(parents=True)
         if text is not None:
             (proj / "results" / "ready.json").write_text(text)
-        with mock.patch.object(fc.fc_herdr, "herdr", return_value=None), mock.patch.object(fc.fc_tasks, "load_tasks", return_value=[]):
+        with mock.patch.object(fc.fc_herdr, "herdr", return_value=None), mock.patch.object(fc.fc_status, "board", return_value={"rows": []}):
             return fc.fc_watch.watch_snapshot(Path("."), proj)["ready"]
 
     def test_the_snapshot_reads_ready_json(self):
@@ -882,7 +795,7 @@ class ManagerSessions(unittest.TestCase):
         out = []
         env = {k: v for k, v in os.environ.items() if k not in ("COMPOSE_ROLE", "HERDR_PANE_ID")} | {"HERDR_PANE_ID": pane}
         with mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), mock.patch.object(fc.fc_herdr, "herdr", self.agents), \
-                mock.patch.object(fc.fc_tasks, "load_tasks", return_value=[]), mock.patch.object(fc.fc_crew, "desktop_notify"), \
+                mock.patch.object(fc.fc_status, "board", return_value={"rows": []}), mock.patch.object(fc.fc_crew, "desktop_notify"), \
                 mock.patch("builtins.print", out.append), mock.patch.dict(os.environ, env, clear=True):
             with contextlib.suppress(SystemExit):
                 fc.fc_watch.cmd_watch(a)
@@ -1299,13 +1212,13 @@ class RestoredTeammate(unittest.TestCase):
 
     def test_the_edit_guard_finds_the_role_of_a_restored_team_lead_from_the_pane(self):
         repo = self.proj.parent
-        fc.fc_core.sh(["git", "init", "-q"], repo)
         (repo / ".compose").mkdir()
         self.proj.rename(repo / ".compose" / "hw")
         (repo / ".compose" / "hw" / "verify.json").write_text("{}")
         def guard(pane):
             ev, out = {"tool_name": "Write", "cwd": str(repo), "tool_input": {"file_path": str(repo / "a.go")}}, io.StringIO()
-            with mock.patch.dict(os.environ, {"HERDR_PANE_ID": pane}, clear=True), mock.patch.object(sys, "stdin", io.StringIO(json.dumps(ev))), mock.patch.object(sys, "stdout", out):
+            with mock.patch.dict(os.environ, {"HERDR_PANE_ID": pane}, clear=True), mock.patch.object(sys, "stdin", io.StringIO(json.dumps(ev))), mock.patch.object(sys, "stdout", out), \
+                    mock.patch.object(fc.fc_core, "sh", return_value=SimpleNamespace(returncode=0, stdout="true\n")):  # the only git question: is the path inside a work tree
                 fc.fc_hooks.cmd_guard(None)
             return out.getvalue()
         self.assertIn("never edit code", guard(self.PANE))
@@ -1313,7 +1226,6 @@ class RestoredTeammate(unittest.TestCase):
 
     def test_a_restored_team_lead_gets_its_watch_at_a_turn_end_and_other_panes_get_none(self):
         repo = self.proj.parent
-        fc.fc_core.sh(["git", "init", "-q"], repo)
         (repo / ".compose").mkdir()
         self.proj = self.proj.rename(repo / ".compose" / "hw")
         (self.proj / "verify.json").write_text("{}")
@@ -1389,27 +1301,6 @@ class WatchBaseFile(unittest.TestCase):  # the memory is written only on a chang
                 self.base.unlink(missing_ok=True); self.json.unlink(missing_ok=True)
                 f.write_text(json.dumps(mem))
                 self.assertTrue(any("event task=001 state=passed" in l for l in self.watch(lambda *a, **k: wsnap("passed"))))
-
-    def test_a_quiet_loop_runs_no_git_and_writes_no_file_after_its_first_tick(self):
-        repo, runs, marks, real, run = Path(tempfile.mkdtemp()), [], [], fc.fc_watch.watch_snapshot, subprocess.run
-        env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
-        for a in (("init", "-q", "-b", "main"), ("commit", "-q", "--allow-empty", "-m", "init")):
-            run(["git", *a], cwd=repo, check=True, capture_output=True, env={**os.environ, **env})
-        self.proj = repo / ".compose" / "hw"
-        (self.proj / "results").mkdir(parents=True)
-        (self.proj / "results" / "tasks.json").write_text(json.dumps({"feature": {}, "tasks": [{"id": "001", "title": "t"}]}))
-        def snapshot(*a, **k):
-            marks.append((len(runs), {f.name: f.stat().st_mtime_ns for f in (self.proj / "results").iterdir()}))
-            if len(marks) > 5:
-                raise SystemExit  # six ticks seen
-            return real(*a, **k)
-        spy = lambda cmd, *a, **k: (runs.append(cmd) if cmd[0] == "git" else None, run(cmd, *a, **k))[1]
-        with mock.patch.object(fc.fc_herdr, "herdr", return_value={"agents": []}):
-            fc.fc_watch.watch_save(self.proj, "m", base=real(repo, self.proj))
-            with mock.patch.object(subprocess, "run", spy):
-                self.watch(snapshot, repo=str(repo), timeout=0)
-        self.assertEqual(len(marks), 6)
-        self.assertEqual(marks[-1], marks[2], "git ran or a file was written after the first ticks")  # tick 1 may write once, which the board stamp sees in tick 2
 
 
 class WatchLoadEvents(unittest.TestCase):  # the load log reaches each watcher once, as event lines

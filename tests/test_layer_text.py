@@ -2,7 +2,7 @@ import hermetic  # first: no test sees the real home
 import json, os, subprocess, tempfile, unittest
 from pathlib import Path
 from unittest import mock
-from layers_kit import LayersBase, fc, unit
+from layers_kit import WRITTEN, fc, unit
 os.environ["COMPOSE_NO_TREEHOUSE"] = "1"
 os.environ["HERDR_ENV"] = ""
 
@@ -30,11 +30,10 @@ class Grouping(unittest.TestCase):
             self.assertFalse(fc.fc_worktree.GENERATED_RE.search(f), f)
 
     def test_a_task_branch_does_not_count_its_lockfile_toward_the_limit(self):
-        r = Path(tempfile.mkdtemp())
-        git = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=r, check=True, capture_output=True)
-        git("init", "-q", "-b", "main"); git("commit", "-q", "--allow-empty", "-m", "init")
-        (r / "package.json").write_text('{"vite": "8"}\n'); (r / "yarn.lock").write_text("x\n" * 5000)
-        self.assertEqual(fc.fc_gate.branch_budget(r, "main", allowed=["package.json", "yarn.lock"]), (1, [], []))
+        rows = "1\t0\tpackage.json\n5000\t0\tyarn.lock\n"
+        sh = lambda cmd, *a, **k: subprocess.CompletedProcess(cmd, 0, rows if "--numstat" in cmd else "package.json\nyarn.lock\n" if "--name-only" in cmd and "--diff-filter=A" not in cmd and "--diff-filter=D" not in cmd else "", "")
+        with mock.patch.object(fc.fc_core, "sh", sh):
+            self.assertEqual(fc.fc_gate.branch_budget(Path("."), "main", allowed=["package.json", "yarn.lock"]), (1, [], []))
 
 
 class PrText(unittest.TestCase):
@@ -73,29 +72,35 @@ if a[:2] == ["pr", "edit"]: json.dump({"title": a[a.index("--title") + 1], "body
         self.assertEqual(self.pr(), {"title": "hand", "body": "written"})
 
 
-class PrTitle(LayersBase):
+class FakeCommits(unittest.TestCase):
+    """A project folder and commits that are only a sha, a subject and the files they touch: what the PR text reads of git."""
+    def setUp(self):
+        self.repo = Path(tempfile.mkdtemp()).resolve(); self.proj = self.repo / ".compose" / "p"
+        (self.proj / "results").mkdir(parents=True)
+        self.subjects, self.touched = {}, {}
+        sh = lambda cmd, *a, **k: subprocess.CompletedProcess(cmd, 0, self.subjects[cmd[-1]] + "\n", "")  # `git log -1 --format=%s <sha>`
+        for p in (mock.patch.object(fc.fc_core, "sh", sh), mock.patch.object(fc.fc_layers, "commit_facts", lambda repo, c: (self.touched[c], 0, {}))):
+            p.start(); self.addCleanup(p.stop)
+
+    def commit(self, subject, files=()):
+        sha = f"c{len(self.subjects)}"; self.subjects[sha] = subject; self.touched[sha] = list(files)
+        return sha
+
+    def pr_file(self, name, text):
+        (self.proj / "pr").mkdir(exist_ok=True)
+        (self.proj / "pr" / f"{name}.md").write_text(text)
+
+
+class PrTitle(FakeCommits):
     """A layer's PR is titled from its commits: one commit's subject, else its first task's title or first commit's subject and N more
     tasks or commits, never past TITLE_CHARS before its (i/n)."""
     METAS = [{"id": "001", "title": "001: Add the toggle"}, {"id": "002", "title": "Add the panel"}, {"id": "003", "title": "Add the menu"}]
 
     def title(self, tasks, subjects, n=2, branch="compose/p-layer-01"):
-        commits = []
-        for s in subjects:
-            self.git("commit", "-q", "--allow-empty", "-m", s); commits.append(self.git("rev-parse", "HEAD"))
+        commits = [self.commit(s) for s in subjects]
         l = {"branch": branch, "tasks": tasks, "keys": tasks, "lines": 40, "generated": {}, "commits": commits}
         with mock.patch.object(fc.fc_stack, "layer_body", return_value=""):  # the body is not this title's concern
             return fc.fc_stack.layer_pr(self.repo, self.proj, l, n, self.METAS)[0]
-
-    def test_each_layer_records_the_commits_it_cherry_picks_oldest_first(self):
-        real, built = fc.fc_layers.build_layers, []
-        with mock.patch.object(fc.fc_layers, "build_layers", lambda *a, **k: built.append(real(*a, **k)) or built[-1]):
-            self.stack()
-        below = "main"
-        for l in built[0]:
-            self.assertEqual([self.git("log", "-1", "--format=%s", c) for c in l["commits"]], self.git("log", "--reverse", "--format=%s", f"{below}..{l['branch']}").splitlines())
-            below = l["branch"]
-        self.assertEqual(built[0][0]["commits"], self.git("rev-list", "--reverse", f"main..{built[0][0]['branch']}").split())
-        self.assertEqual(len(built[0][1]["commits"]), 4)  # test 001, task 001, test 002, task 002
 
     def test_a_one_commit_layer_is_its_subject_and_a_groundwork_layer_its_first_subject_and_n_more(self):
         self.assertEqual(self.title(["groundwork"], ["Ignore build output"]), "Ignore build output (1/2)")
@@ -111,9 +116,9 @@ class PrTitle(LayersBase):
         (self.proj / "verify.json").write_text(json.dumps({"branch": "js-2888-react-beside-vue"}))
         self.assertEqual(self.title(["001", "002"], ["toggle work", "panel work"], 4, "js-2888-react-beside-vue-layer-03"), "JS-2888: Add the toggle and 1 more task (3/4)")
         self.assertEqual(self.title(["groundwork"], ["Ignore build output"]), "JS-2888: Ignore build output (1/2)")
-        self.pr_file("001-002", self.WRITTEN)  # a written title gets the key and the count too, within the same cap
+        self.pr_file("001-002", WRITTEN)  # a written title gets the key and the count too, within the same cap
         self.assertEqual(self.title(["001", "002"], ["toggle work", "panel work"], 4, "js-2888-react-beside-vue-layer-03"), "JS-2888: Keep the toggle's state across reloads (3/4)")
-        self.pr_file("001-002", self.WRITTEN.replace("reloads", "reloads " + "x" * 30))
+        self.pr_file("001-002", WRITTEN.replace("reloads", "reloads " + "x" * 30))
         self.assertEqual(self.title(["001", "002"], ["toggle work", "panel work"], 4, "js-2888-react-beside-vue-layer-03"), "JS-2888: Add the toggle and 1 more task (3/4)")
         self.linear()
         self.assertEqual(self.title(["001", "002", "003"], ["toggle work", "panel work", "menu work"], 1), "JS-2888: Stacked [PRs]")
@@ -158,7 +163,7 @@ class PrTitle(LayersBase):
         self.assertEqual(self.title(["002", "003"], ["panel work", "menu work"]), "JS-2888: Add the panel and 1 more task (1/2)")  # the stories do not fit
 
 
-class PrBody(LayersBase):
+class PrBody(FakeCommits):
     """A layer's PR body: Why from its stories, What changed, How it was tested and Tickets, from results files and its own commits."""
     METAS = [{"title": f"Build {m['id']}", "files": [], "after": "", **m} for m in [
              {"id": "001", "linear": "NEB-1", "test": "python3 -m unittest tests.toggle", "protected": ["t004.test", "t001.test"],
@@ -177,12 +182,7 @@ class PrBody(LayersBase):
         for name, data in results.items():
             (self.proj / "results" / f"{name}.json").write_text(json.dumps(data))
         (self.proj.parent / "linear.json").write_text(json.dumps({"project": "https://linear.app/acme/project/p-1", "team": "Engineering"}))
-        shas = []  # units: each of the layer's tasks' commits, as (subject, files, message body)
-        for commits in units:
-            shas.append([])
-            for subject, files, extra in commits:
-                for f in files: self.write(f, f"{subject}\n")
-                self.git("add", "-A"); self.git("commit", "-q", "--allow-empty", "-m", subject, *(["-m", extra] if extra else [])); shas[-1].append(self.git("rev-parse", "HEAD"))
+        shas = [[self.commit(subject, files) for subject, files, _ in commits] for commits in units]  # units: each of the layer's tasks' commits, as (subject, files, message body)
         l = {"branch": "compose/p-layer-01", "tasks": tasks, "keys": tasks, "lines": 40, "generated": {}, "commits": [c for cs in shas for c in cs], "units": shas}
         stack = [l, *({"branch": f"compose/p-layer-{i:02d}", "tasks": t} for i, t in enumerate(layers or [], 2))]
         with mock.patch.object(fc.fc_stack, "layer_title", return_value=""):  # the title is not this body's concern

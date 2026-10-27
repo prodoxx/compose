@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import importlib.machinery, importlib.util, io, json, os, subprocess, tempfile, unittest
+import importlib.machinery, importlib.util, io, json, os, tempfile, unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,13 +14,22 @@ _spec.loader.exec_module(fc)
 import fc_ledger, fc_tierspend, fc_load, fc_shed  # noqa: E402
 
 
+def board_git(case, have=(), order=(), layers=(), trunk="main"):
+    """What the board asks git, answered: the task branches that exist, the stack's task branches bottom first, the layer branches."""
+    for name, fake in (("project_head", lambda repo, proj: "head"), ("branch_facts", lambda repo, proj, head: {"prefix": fc.fc_worktree.task_prefix(repo, proj), "have": set(have), "merged": set()})):
+        patch = mock.patch.object(fc.fc_status, name, fake); patch.start(); case.addCleanup(patch.stop)
+    for mod, name, fake in ((fc.fc_core, "current_branch", lambda repo: trunk), (fc.fc_worktree, "stack_order", lambda repo, proj, tasks=None: list(order)),
+                            (fc.fc_layers, "layer_branches", lambda repo, proj: list(layers))):
+        patch = mock.patch.object(mod, name, fake); patch.start(); case.addCleanup(patch.stop)
+
+
 class DoneEvidence(unittest.TestCase):
     def setUp(self):
         self.proj, self.repo = Path(tempfile.mkdtemp()) / "feat", Path(tempfile.mkdtemp())
         (self.proj / "results").mkdir(parents=True)
-        git = lambda *args: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=self.repo, check=True, capture_output=True, text=True).stdout.strip()
-        git("init", "-q", "-b", "main"); (self.repo / "a.py").write_text("1\n"); git("add", "-A"); git("commit", "-q", "-m", "a")
-        git("branch", "task-021"); self.tip = git("rev-parse", "task-021")
+        self.tip = "9f2c1e7"
+        sh = lambda cmd, cwd=None, **k: SimpleNamespace(returncode=0, stderr="", stdout=self.tip if cmd[-1] == "task-021^{commit}" else "")
+        patch = mock.patch.object(fc.fc_core, "sh", sh); patch.start(); self.addCleanup(patch.stop)
         (self.proj / "verify.json").write_text('{"task_prefix": "task-"}')
         (self.proj / "results" / "tasks.json").write_text(json.dumps({"tasks": [{"id": "021", "title": "a", "linear": "ENG-4"}, {"id": "022", "title": "b", "linear": "ENG-5"}, {"id": "023", "title": "c"}]}))
         self.calls = mock.Mock()
@@ -49,7 +58,6 @@ class DoneEvidence(unittest.TestCase):
         """A design task's result has a figma: route for a branch and no worktree: the empty worktree read as the cwd, a git
         checkout, and `git fetch . figma:KEY:figma:KEY` failed with an invalid refspec."""
         (self.proj / "results" / "021.json").write_text('{"branch": "figma:wUa6g7vNP1il73eflFGXU0"}')
-        cwd = os.getcwd(); os.chdir(self.repo); self.addCleanup(os.chdir, cwd)
         with mock.patch.object(fc.fc_core, "sh", wraps=fc.fc_core.sh) as sh:
             self.assertNotIn("not brought in", self.done("021"))
         self.assertEqual([c for c in sh.call_args_list if "fetch" in c.args[0]], [])
@@ -92,15 +100,11 @@ class TestTiers(unittest.TestCase):
     """`status` prints the tier pins and the spend per tier right after the route cost lines."""
 
     def setUp(self):
-        env = mock.patch.dict(os.environ, {"HERDR_ENV": "", "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"})
-        env.start(); self.addCleanup(env.stop)
         self.repo = Path(tempfile.mkdtemp())
-        for a in (("init", "-q", "-b", "main"), ("commit", "-q", "--allow-empty", "-m", "init"), ("checkout", "-q", "-b", "compose/p")):
-            subprocess.run(["git", *a], cwd=self.repo, check=True, capture_output=True)
+        board_git(self, trunk="compose/p")
         self.proj = self.repo / ".compose" / "p"
         (self.proj / "results").mkdir(parents=True)
         (self.proj / "verify.json").write_text(json.dumps({"task_prefix": "compose/p-"}))
-        (self.repo / ".git" / "info" / "exclude").write_text("/.compose/\n")
         (self.proj / "results" / "tasks.json").write_text(json.dumps({"feature": {}, "tasks": [{"id": "001", "title": "a"}]}))
 
     def status(self):
@@ -129,23 +133,16 @@ class TestTiers(unittest.TestCase):
 class StackNote(unittest.TestCase):
     def setUp(self):
         self.repo = Path(tempfile.mkdtemp()).resolve()
-        self.git("init", "-q", "-b", "main"); (self.repo / "a").write_text("1\n"); self.git("add", "-A"); self.git("commit", "-qm", "a")
-        self.git("checkout", "-q", "-b", "compose/p")
         self.proj = self.repo / ".compose" / "p"; (self.proj / "results").mkdir(parents=True)
-        (self.repo / ".git" / "info" / "exclude").write_text("/.compose/\n")
-        (self.proj / "verify.json").write_text(json.dumps({"review_base": "main"}))
+        self.layers = [f"compose/p-layer-{n}" for n in ("01", "02", "03")]
+        board_git(self, have=[f"compose/p-{t}" for t in ("001", "002", "003")], order=[f"compose/p-{t}" for t in ("001", "002", "003")], layers=self.layers, trunk="compose/p")
+        (self.proj / "verify.json").write_text(json.dumps({"review_base": "main", "task_prefix": "compose/p-"}))
         (self.proj / "results" / "verify.json").write_text(json.dumps({"passed": True}))
         (self.proj / "results" / "tasks.json").write_text(json.dumps({"feature": {}, "tasks": [{"id": t, "title": f"Build {t}", "after": ""} for t in ("001", "002", "003")]}))
         for t in ("001", "002", "003"):
-            self.git("checkout", "-q", "-b", f"compose/p-{t}", "compose/p"); (self.repo / f"{t}.src").write_text("c\n"); self.git("add", "-A"); self.git("commit", "-qm", t); self.git("checkout", "-q", "compose/p")
             (self.proj / "results" / f"{t}.json").write_text(json.dumps({"status": "passed", "model": "pi:p/m"}))
-        for n in ("01", "02", "03"):
-            self.git("branch", f"compose/p-layer-{n}", "compose/p-003")
         (self.proj / "layers.json").write_text(json.dumps({"compose/p-layer-01": ["groundwork"], "compose/p-layer-02": ["001", "002"], "compose/p-layer-03": ["003"]}))
         (self.proj / "results" / "prs.json").write_text(json.dumps({"compose/p-layer-01": 1, "compose/p-layer-02": 2}))
-
-    def git(self, *a):
-        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=self.repo, check=True, capture_output=True, text=True).stdout.strip()
 
     def render(self):
         lines = fc.fc_status.render_status(self.repo, [self.proj]).splitlines()
@@ -158,7 +155,8 @@ class StackNote(unittest.TestCase):
         self.assertRegex(head, r"verify PASS .* at \d\d:\d\d  stack 2/3 submitted")
 
     def test_a_submitted_task_without_a_branch_keeps_its_layer_and_pr(self):
-        self.git("branch", "-D", "compose/p-002")
+        fc.fc_status._board.clear()
+        board_git(self, have=["compose/p-001", "compose/p-003"], order=["compose/p-001", "compose/p-003"], layers=self.layers, trunk="compose/p")
         self.assertTrue(self.render()[0]["002"].endswith("layer 2  PR #2"))
 
     def test_missing_records_leave_the_notes_and_no_layer_branches_leave_no_stack_text(self):
@@ -168,7 +166,7 @@ class StackNote(unittest.TestCase):
             rows, head = self.render()
             self.assertTrue(rows["001"].endswith("compose/p-001  layer 1") and rows["003"].endswith("compose/p-003  layer 3") and stack in head, gone)
             for p in list(self.proj.glob("*.bak")) + list((self.proj / "results").glob("*.bak")): p.rename(p.with_suffix(".json"))
-        for n in ("01", "02", "03"): self.git("branch", "-D", f"compose/p-layer-{n}")
+        self.layers.clear()
         self.assertNotIn("stack", self.render()[1])
 
 

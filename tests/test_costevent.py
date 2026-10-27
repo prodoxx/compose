@@ -85,6 +85,7 @@ class RunBatch(unittest.TestCase):
         (self.proj / "results").mkdir(parents=True)
         (self.proj / "results" / "tasks.json").write_text(json.dumps({"feature": {}, "tasks": [], "issues": {"XX-1": {"description": self.ROUTE}}}))
         self.addCleanup(fc_ledger.UNSAVED.clear)
+        mock.patch.object(fc.fc_core, "sh", return_value=subprocess.CompletedProcess([], 0, "a" * 40, "")).start(); self.addCleanup(mock.patch.stopall)  # every sha is the same one
 
     def run_tasks(self, tasks, results, hold=None, saved=True):
         """The (repo, proj, meta, events) of each record_task call, and what the run said."""
@@ -135,9 +136,7 @@ class VerifyBatch(unittest.TestCase):
     def setUp(self):
         self.proj, self.repo = Path(tempfile.mkdtemp()) / "feat", Path(tempfile.mkdtemp())
         (self.proj / "results").mkdir(parents=True)
-        git = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=self.repo, check=True, capture_output=True, text=True).stdout.strip()
-        git("init", "-q", "-b", "main"); git("commit", "-q", "--allow-empty", "-m", "one")
-        self.sha = git("rev-parse", "HEAD")
+        self.sha = "a" * 40
         (self.proj / "linear.json").write_text('{"feature": "ENG-1"}')
         (self.proj / "results" / "verify.json").write_text('{"rounds": []}')  # the last verify's, to be replaced
 
@@ -154,7 +153,8 @@ class VerifyBatch(unittest.TestCase):
                 mock.patch.object(fc_ledger, "UNSAVED", unsaved), mock.patch.object(fc_ledger, "add_row", add), mock.patch.object(fc_ledger, "record", record), \
                 mock.patch.object(fc_costevent, "verify_events", events), mock.patch.object(fc.fc_tasks, "load_tasks", return_value=self.TASKS), \
                 mock.patch.object(fc.fc_core.LEDGER, "snapshot", return_value={"total": 0.37}), mock.patch.object(fc.fc_verify, "verify_failed"), mock.patch.object(fc.fc_linear, "linear_reconcile"), \
-                mock.patch.object(fc.fc_core, "say", said.append), contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as cm:
+                mock.patch.object(fc.fc_core, "say", said.append), mock.patch.object(fc.fc_worktree, "review_base", return_value="main"), mock.patch.object(fc.fc_worktree, "dirty_paths", return_value=set()), \
+                mock.patch.object(fc.fc_core, "sh", return_value=subprocess.CompletedProcess([], 0, self.sha, "")), contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as cm:
             fc.fc_verify.verify_rounds(self.repo, self.proj, {"review_base": "main"}, SimpleNamespace(fix=0, skip_review=True, review_only=kw.pop("review_only", False)), [{"stage": "earlier"}], 0, **kw)
         return cm.exception.code, said, calls
 

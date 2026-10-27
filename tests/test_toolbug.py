@@ -32,9 +32,11 @@ class Text(unittest.TestCase):
         d = Path(tempfile.mkdtemp()).resolve()
         for name, out in (("claude", "2.1.302 (Claude Code)"), ("herdr", "herdr 0.9.1\nbuilt today"), ("gh", "gh version 2.94.0 (2026-09-01)")):
             (d / name).write_text(f"#!/bin/sh\necho '{out}'\n"); (d / name).chmod(0o755)
-        with mock.patch.dict(os.environ, {"PATH": f"{d}:/usr/bin:/bin"}):
+        real = subprocess.run
+        run = lambda cmd, *a, **kw: subprocess.CompletedProcess(cmd, 0, "abc1234\n", "") if cmd[0] == "git" else real(cmd, *a, **kw)  # the commit is git's to name
+        with mock.patch.dict(os.environ, {"PATH": f"{d}:/usr/bin:/bin"}), mock.patch("subprocess.run", run):
             env = fc.fc_toolbug.environment()
-        commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=fc.fc_crew.CLI_REPO, capture_output=True, text=True).stdout.strip()
+        commit = "abc1234"
         self.assertEqual(env.strip().splitlines(), [f"- compose: {commit}", f"- OS: {platform.platform()}", f"- Python: {platform.python_version()}",
                          "- claude: 2.1.302 (Claude Code)", "- herdr: herdr 0.9.1", "- trail: not installed", "- gh: gh version 2.94.0 (2026-09-01)"])
         self.assertNotIn("/", env)
@@ -291,31 +293,46 @@ class FileCommand(unittest.TestCase):
         self.assertEqual(self.run_cmd("maintainer", raw="no title\n")[0], 1); self.m["post"].assert_not_called()
 
 
-GIT = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
-
 class OwnWorktree(unittest.TestCase):
-    """The toolsmith fixes on its own branch in its own worktree of the compose repo: never a main checkout, never the installed copy."""
+    """The toolsmith fixes on its own branch in its own worktree of the compose repo: never a main checkout, never the installed copy.
+    Git's answers are faked: where each checkout lives (fc_core.checkout), its branch, its changes, its commits past origin."""
     URL, PR = "https://github.com/prodoxx/compose/issues/2", "https://github.com/prodoxx/compose/pull/5"
     AT = "2026-10-17 15:30:00"
 
-    def git(self, cwd, *args):
-        return subprocess.run([*GIT, "-C", str(cwd), *args], check=True, capture_output=True, text=True).stdout
-
     def commit(self, repo, name):
-        (repo / name).write_text(name); self.git(repo, "add", name); self.git(repo, "commit", "-qm", f"Fix {name}")
+        self.subjects = [f"Fix {name}"]
+
+    def where(self, path):
+        here = Path(path).resolve()
+        return next((self.sites[d] for d in (here, *here.parents) if d in self.sites), None)
+
+    def sh(self, argv, cwd=None, *a, **kw):
+        """Git as `pr` and `shared_checkout` ask it, answered by subcommand: the branch, the changes, the fetch, the log, the push."""
+        sub, out, code = argv[1], "", 0
+        if sub == "branch": out = self.branches.get(self.where(cwd)[0], "") + "\n"
+        elif sub == "status": out = "M x\n" if self.dirty else ""
+        elif sub == "fetch": code = self.fetch_code
+        elif sub == "log": out = "\n".join(self.subjects)
+        elif sub == "push": self.pushed.append(argv[-1])
+        return subprocess.CompletedProcess(argv, code, out, "")
 
     def setUp(self):
         t = tempfile.TemporaryDirectory(); self.addCleanup(t.cleanup); self.root = root = Path(os.path.realpath(t.name))
-        self.main, self.remote, self.wt, self.home = root / "compose", root / "remote.git", root / "fix", root / "home"
-        self.git(root, "init", "-q", "-b", "main", str(self.main)); self.commit(self.main, "a")
-        self.git(root, "clone", "-q", "--bare", str(self.main), str(self.remote))
-        self.git(self.main, "remote", "add", "origin", str(self.remote)); self.git(self.main, "fetch", "-q", "origin")
-        self.git(self.main, "branch", "-u", "origin/main")
-        self.git(self.main, "worktree", "add", "-q", "-b", "toolsmith-fix", str(self.wt))
+        self.main, self.wt, self.other, self.home = root / "compose", root / "fix", root / "other", root / "home"
+        self.src, self.side = self.home / ".compose" / "src", root / "side"
+        for d in (self.main, self.wt, self.other, self.src, self.side, root / "elsewhere"): d.mkdir(parents=True)
+        git_dir = lambda top, name: self.main / ".git" / "worktrees" / name if top in (self.wt, self.other) else top / ".git"
+        self.sites = {d: fc.fc_core.Checkout((d, git_dir(d, d.name), self.main / ".git" if d in (self.main, self.wt, self.other) else d / ".git"))
+                      for d in (self.main, self.wt, self.other, self.src, self.side)}
+        self.branches = {self.main: "main", self.wt: "toolsmith-fix", self.other: "master", self.src: "feature", self.side: "side"}
+        self.branches = {self.sites[d][0]: b for d, b in self.branches.items()}
+        self.dirty, self.fetch_code, self.subjects, self.pushed = False, 0, [], []
         self.log = root / ".compose" / "tool-bugs.jsonl"; self.log.parent.mkdir()
         self.log.write_text(json.dumps({"at": self.AT, "project": "shop", "message": "boom", "issue": self.URL}) + "\n")
         for p in (mock.patch.dict(os.environ, {"HOME": str(self.home)}), mock.patch.object(fc.fc_crew, "CLI_REPO", self.main), mock.patch.object(fc.fc_core, "CLI_CHECKOUT", self.main),
-                  mock.patch.object(fc.fc_crew, "TOOL_BUGS", self.log), mock.patch.object(fc.fc_config, "CONFIG_PATH", root / ".compose" / "config.json")):
+                  mock.patch.object(fc.fc_crew, "TOOL_BUGS", self.log), mock.patch.object(fc.fc_config, "CONFIG_PATH", root / ".compose" / "config.json"),
+                  mock.patch.object(fc.fc_core, "checkout", self.where), mock.patch.object(fc.fc_core, "sh", self.sh),
+                  mock.patch.object(fc.fc_worktree, "default_branch", return_value="main")):
             p.start(); self.addCleanup(p.stop)
         self.gh_calls = []
 
@@ -344,14 +361,12 @@ class OwnWorktree(unittest.TestCase):
         self.assertIn("a main checkout of the compose repo", sc(self.main))
         self.assertIsNone(sc(self.wt))  # its own worktree on its own branch
         (self.wt / "sub").mkdir(); self.assertIsNone(sc(self.wt / "sub"))
-        other = self.root / "other"; self.git(self.main, "worktree", "add", "-q", "-b", "master", str(other))
-        self.assertIn("on master", sc(other))
-        self.git(self.wt, "switch", "-q", "--detach"); self.assertIn("on no branch", sc(self.wt))
-        elsewhere = self.root / "elsewhere"; elsewhere.mkdir(); self.assertIsNone(sc(elsewhere))  # not the compose repo: none of this
-        self.git(self.root, "init", "-q", "-b", "side", str(self.root / "side")); self.assertIsNone(sc(self.root / "side"))
-        src = self.home / ".compose" / "src"; src.mkdir(parents=True); self.git(self.root, "init", "-q", "-b", "feature", str(src))
-        (src / "bin").mkdir()
-        for p in (src, src / "bin"):
+        self.assertIn("on master", sc(self.other))
+        self.branches[self.wt] = ""; self.assertIn("on no branch", sc(self.wt))
+        self.assertIsNone(sc(self.root / "elsewhere"))  # not the compose repo: none of this
+        self.assertIsNone(sc(self.side))
+        (self.src / "bin").mkdir()
+        for p in (self.src, self.src / "bin"):
             self.assertIn("the installed copy of compose", sc(p))
 
     def test_the_edit_guard_lets_a_toolsmith_edit_only_its_own_worktree(self):
@@ -363,13 +378,13 @@ class OwnWorktree(unittest.TestCase):
         self.assertIsNone(gd("Read", str(self.main / "a"), "toolsmith"))
         self.assertIsNone(gd("Write", str(self.root / "elsewhere" / "brief.md"), "toolsmith"))
         self.assertIsNone(gd("Edit", str(self.main / "a"), "crew"))  # other roles are not this guard's business
-        src = self.home / ".compose" / "src"; src.mkdir(parents=True); self.git(self.root, "init", "-q", "-b", "feature", str(src))
-        self.assertIn("installed copy", gd("Write", str(src / "bin" / "compose.py"), "toolsmith"))
+        self.assertIn("installed copy", gd("Write", str(self.src / "bin" / "compose.py"), "toolsmith"))
 
     def test_tool_bug_file_from_a_toolsmith_is_refused_in_a_shared_checkout_and_goes_through_in_its_own_worktree(self):
         (self.root / "b.md").write_text("# crew start: hangs\n## Summary\n\nIt hangs.\n")
         a = SimpleNamespace(project="shop", action="file", body=str(self.root / "b.md"), comment=None, new=False, approved=False, entry=None)
         self.gh("no-gh")
+        mock.patch.object(fc.fc_toolbug, "environment", return_value="- OS: test").start(); self.addCleanup(mock.patch.stopall)
         for cwd, refused in ((self.main, True), (self.wt, False)):
             with self.subTest(cwd=cwd.name), mock.patch.dict(os.environ, {"COMPOSE_ROLE": "toolsmith"}), \
                     mock.patch.object(Path, "cwd", return_value=cwd), mock.patch("sys.stdout", io.StringIO()) as out:
@@ -385,13 +400,12 @@ class OwnWorktree(unittest.TestCase):
         self.commit(self.wt, "fix.py"); self.gh()
         status, out = self.pr()
         self.assertEqual((status, out.strip()), (0, self.PR))
-        self.assertIn("toolsmith-fix", self.git(self.remote, "branch", "--list"))
+        self.assertEqual(self.pushed, ["toolsmith-fix"])
         [call] = self.gh_calls
         self.assertEqual(call[:3], ["gh", "pr", "create"]); self.assertEqual(call[call.index("--repo") + 1], "prodoxx/compose")
         self.assertEqual(call[call.index("--head") + 1], "toolsmith-fix"); self.assertEqual(call[call.index("--base") + 1], "main")
         self.assertEqual(call[call.index("--title") + 1], "Fix fix.py"); self.assertIn("Fixes #2", call[call.index("--body") + 1])
         self.assertEqual(json.loads(self.log.read_text())["pr"], self.PR)
-        self.assertEqual(self.git(self.main, "rev-parse", "main"), self.git(self.remote, "rev-parse", "main"))  # main moved nowhere
         status, out = self.pr(title="Better title"); self.assertEqual(status, 0)
         self.assertEqual(json.loads(self.log.read_text())["pr"], self.PR); self.assertEqual(self.gh_calls[-1][self.gh_calls[-1].index("--title") + 1], "Better title")
 
@@ -421,7 +435,7 @@ class OwnWorktree(unittest.TestCase):
         self.log.write_text(self.log.read_text() + json.dumps(other) + "\n")
         status, out = self.pr(project="toolsmith", entry="2026-10-17 15:30:01")  # shop and blog are a second away each
         self.assertEqual(status, 1); self.assertIn("shop at 2026-10-17 15:30:00", out); self.assertIn("blog at 2026-10-17 15:30:02", out)
-        self.assertEqual(self.gh_calls, []); self.assertEqual(self.git(self.remote, "branch", "--list"), "* main\n")
+        self.assertEqual(self.gh_calls, []); self.assertEqual(self.pushed, [])
         self.log.write_text(json.dumps({"at": "2026-10-17 15:30:00", "project": "evidence", "message": "m"}) + "\n")
         status, out = self.pr(project="toolsmith", entry="2026-10-17 15:30:01"); self.assertEqual(status, 0)
         self.assertEqual(out.splitlines()[0], self.PR); self.assertIn("evidence at 2026-10-17 15:30:00", out); self.assertNotIn("not recorded", out)
@@ -430,13 +444,11 @@ class OwnWorktree(unittest.TestCase):
     def test_pr_refuses_what_a_toolsmith_may_not_do_and_pushes_nothing(self):
         self.commit(self.wt, "fix.py"); self.gh()
         status, out = self.pr(self.main); self.assertEqual(status, 1); self.assertIn("a main checkout of the compose repo", out)
-        elsewhere = self.root / "elsewhere"; elsewhere.mkdir(); self.git(self.root, "init", "-q", str(elsewhere))
-        status, out = self.pr(elsewhere); self.assertEqual(status, 1); self.assertIn("no worktree of the compose repo", out)
-        (self.wt / "dirty").write_text("x"); status, out = self.pr(); self.assertEqual(status, 1); self.assertIn("uncommitted", out)
-        (self.wt / "dirty").unlink()
-        self.git(self.wt, "reset", "-q", "--hard", "origin/main"); status, out = self.pr(); self.assertEqual(status, 1); self.assertIn("no commit past origin/main", out)
-        self.commit(self.wt, "fix.py")
-        self.assertEqual(self.git(self.remote, "branch", "--list"), "* main\n"); self.assertEqual(self.gh_calls, [])
+        status, out = self.pr(self.root / "elsewhere"); self.assertEqual(status, 1); self.assertIn("no worktree of the compose repo", out)
+        self.dirty = True; status, out = self.pr(); self.assertEqual(status, 1); self.assertIn("uncommitted", out)
+        self.dirty, self.subjects = False, []; status, out = self.pr(); self.assertEqual(status, 1); self.assertIn("no commit past origin/main", out)
+        self.fetch_code = 1; self.commit(self.wt, "fix.py"); status, out = self.pr(); self.assertEqual(status, 1); self.assertIn("cannot reach", out)
+        self.assertEqual(self.pushed, []); self.assertEqual(self.gh_calls, [])
 
     def test_pr_needs_a_maintainer_and_says_when_gh_cannot_open_it(self):
         self.commit(self.wt, "fix.py")

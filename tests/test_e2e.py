@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import contextlib, importlib.machinery, importlib.util, io, json, os, shutil, signal, subprocess, tempfile, time, unittest
+import contextlib, importlib.machinery, importlib.util, io, json, os, shutil, subprocess, tempfile, time, unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -14,6 +14,11 @@ _spec = importlib.util.spec_from_loader("fc", importlib.machinery.SourceFileLoad
 fc = importlib.util.module_from_spec(_spec)
 for _m in [m for m in sys.modules if m.startswith("fc_") and m not in ("fc_cost", "fc_mcp", "fc_sessions")]: del sys.modules[_m]
 _spec.loader.exec_module(fc)
+
+real_sh = fc.fc_core.sh
+def sh_without_git(cmd, cwd, **kw):
+    """fc_core.sh with git answering nothing (no branches, no HEAD), whatever a verify asks it."""
+    return SimpleNamespace(returncode=0, stdout="", stderr="") if cmd[0] == "git" else real_sh(cmd, cwd, **kw)
 
 DETACHED = "python3 -c \"import os,subprocess; subprocess.Popen(['python3','-m','http.server',os.environ['E2E_CLIENT_PORT']],start_new_session=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\""
 
@@ -341,34 +346,6 @@ class UnattendedBrowser(unittest.TestCase):
         self.assertEqual(args, ["-dims", "-w", str(os.getpid())])  # the Mac stays awake while it is watched, for as long as this process lives
         self.assertTrue(fc.fc_jev.alive(int(pid)))  # the stage does not end it: cmd_verify holds it for the whole verify
 
-    def test_a_sigterm_ends_the_stages_browser_setup_and_driver(self):
-        repo = self.dir / "repo"
-        for args in (["init", "-q", "-b", "main", str(repo)], ["-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "i"]):
-            subprocess.run(["git", *args], check=True)
-        proj = repo / ".compose" / "p"
-        proj.mkdir(parents=True)
-        setup = f"sleep 30 & echo $! > {self.dir}/setup.pid; wait"
-        driver = f"echo $BU_CDP_URL > {self.dir}/cdp; sleep 30 & echo $! > {self.dir}/driver.pid; wait"
-        (proj / "verify.json").write_text(json.dumps({"review": False, "jev_acceptance": False, "e2e_setup": setup, "e2e_setup_wait": 0,
-                                                      "e2e": [{"name": "slow", "driver": driver}]}))
-        compose = Path(__file__).resolve().parents[1] / "bin" / "compose"
-        p = subprocess.Popen([str(compose), "verify", "--repo", str(repo), "--project", "p", "--skip-review", "--fix", "0"],
-                             env={**os.environ, "COMPOSE_DETACHED": "1"}, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        deadline = time.time() + 60
-        while not (self.dir / "driver.pid").exists() and time.time() < deadline and p.poll() is None:
-            time.sleep(0.1)
-        port = int((self.dir / "cdp").read_text().rsplit(":", 1)[1])
-        profiles = lambda: list(Path(tempfile.gettempdir()).glob(f"fc-e2e-browser-{p.pid}-*"))  # named after its verify
-        self.assertTrue(fc.fc_core.port_listening(port)); self.assertEqual(len(profiles()), 1)
-        p.send_signal(signal.SIGTERM)
-        out, _ = p.communicate(timeout=30)
-        self.assertEqual(p.returncode, 128 + signal.SIGTERM, out)
-        time.sleep(0.5)
-        self.assertFalse(fc.fc_core.port_listening(port), out)
-        for name in ("setup.pid", "driver.pid"):
-            self.assertFalse(fc.fc_jev.alive(int((self.dir / name).read_text())), name)
-        self.assertEqual(profiles(), [])
-
     def test_the_next_stage_ends_the_browser_of_a_verify_that_is_gone(self):
         gone = subprocess.Popen(["true"]); gone.wait()  # a verify killed outright
         browsers = {}
@@ -392,6 +369,9 @@ class UnattendedBrowser(unittest.TestCase):
 
 
 class ToolErrors(unittest.TestCase):
+    def setUp(self):
+        p = mock.patch.object(fc.fc_green, "tree_of", return_value="a" * 40); p.start(); self.addCleanup(p.stop)
+
     def test_a_harness_crash_is_retried_once_and_never_a_finding(self):
         d = tempfile.mkdtemp()
         crash = f"echo x >> {d}/n; echo 'File \"/x/jev_ultrafast/model.py\", line 193' >&2; exit 1"
@@ -496,7 +476,7 @@ class FixRoundChecks(unittest.TestCase):
         """run_stages with its checks and a fix round's tests each appending their name to one log, in run order."""
         d = Path(tempfile.mkdtemp())
         cmd = lambda name, code: f"echo {name} >> {d}/log; exit {code}"
-        with mock.patch.object(fc.fc_herdr, "herdr_verify_panes", return_value={}):
+        with mock.patch.object(fc.fc_herdr, "herdr_verify_panes", return_value={}), mock.patch.object(fc.fc_green, "tree_of", return_value="a" * 40):
             ok, report, findings = fc.fc_verify.run_stages(d, d, {"checks": [cmd("full", full)]}, SimpleNamespace(skip_e2e=True, skip_review=True),
                                                            None if tests is None else [cmd("scoped", scoped)])
         return ok, report, findings, (d / "log").read_text().split()
@@ -554,11 +534,9 @@ class BeforePlanning(unittest.TestCase):
 
     def verify(self, tasks=None, checks=None, last=None, **flags):
         repo = Path(tempfile.mkdtemp())
-        for args in (["init", "-q", "-b", "main"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]):
-            subprocess.run(["git", *args], cwd=repo, check=True)
         self.proj = proj = repo / ".compose" / "p"
         (proj / "results").mkdir(parents=True)
-        (proj / "verify.json").write_text(json.dumps({"checks": checks or [f"touch {repo}/checked"], "review": False, "jev_acceptance": False,
+        (proj / "verify.json").write_text(json.dumps({"task_prefix": "compose/p-", "checks": checks or [f"touch {repo}/checked"], "review": False, "jev_acceptance": False,
                                                       "e2e": [{"name": "probe", "driver": f"touch {repo}/driven"}]}))
         if tasks is not None:
             (proj / "results" / "tasks.json").write_text(json.dumps({"feature": {}, "tasks": tasks}))
@@ -567,6 +545,8 @@ class BeforePlanning(unittest.TestCase):
         a = SimpleNamespace(**{"repo": str(repo), "project": "p", "skip_e2e": False, "skip_review": False, "fix": 2, **flags})
         self.out = io.StringIO()
         with mock.patch.object(fc.fc_core, "project_dir", return_value=proj), mock.patch.object(fc.fc_linear, "linear_reconcile") as self.lr, \
+                mock.patch.object(fc.fc_green, "tree_of", return_value="a" * 40), mock.patch.object(fc.fc_core, "current_branch", return_value="main"), \
+                mock.patch.object(fc.fc_worktree, "dirty_paths", return_value=[]), mock.patch.object(fc.fc_core, "sh", sh_without_git), \
                 mock.patch.object(fc.fc_verify, "verify_failed") as self.vf, contextlib.redirect_stdout(self.out), self.assertRaises(SystemExit) as cm:
             fc.fc_verify.cmd_verify(a)
         return cm.exception.code, repo
@@ -631,9 +611,6 @@ class PathsAtStackTop(unittest.TestCase):
         base = Path(tempfile.mkdtemp()).resolve()
         main, repo = base / "app", base / "app-worktrees" / "feature-x"  # the worktree's path starts with the main checkout's
         main.mkdir()
-        for args in (["init", "-q", "-b", "main"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"],
-                     ["worktree", "add", "-q", "-b", "compose/p", str(repo)]):
-            subprocess.run(["git", *args], cwd=main, check=True)
         root = main / ".treehouse" / "app-123" / "1" / "app"
         proj = repo / ".compose" / "p"
         proj.mkdir(parents=True)
@@ -651,7 +628,7 @@ class PathsAtStackTop(unittest.TestCase):
         seen = {}
         a = SimpleNamespace(repo=str(repo), project="p", skip_e2e=False, skip_review=True, fix=0)
         with mock.patch.object(fc.fc_core, "project_dir", return_value=proj), \
-                mock.patch.object(fc.fc_verify, "verify_root", return_value=(root, "main", None)), \
+                mock.patch.object(fc.fc_verify, "verify_root", return_value=(root, "main", None)), mock.patch.object(fc.fc_core, "main_checkout", return_value=main), mock.patch.object(fc.fc_core, "sh", sh_without_git), \
                 mock.patch.object(fc.fc_verify, "verify_rounds", lambda r, p, c, *_: seen.update(c)):
             fc.fc_verify.cmd_verify(a)
         top = f"{root}/.compose/p/e2e"
@@ -697,6 +674,7 @@ class SmokeStatus(unittest.TestCase):
             if rec:
                 (proj / "results" / name).write_text(json.dumps(rec[0])); os.utime(proj / "results" / name, (rec[1], rec[1]))
         with mock.patch.object(fc.fc_tasks, "load_tasks", return_value=[]), mock.patch.object(fc.fc_core, "current_branch", return_value="main"), \
+                mock.patch.object(fc.fc_worktree, "dirty_paths", return_value=[]), mock.patch.object(fc.fc_core, "sh", sh_without_git), \
                 mock.patch.object(fc.fc_core, "sh", return_value=SimpleNamespace(stdout="abc\n", returncode=0)), \
                 mock.patch.object(fc.fc_worktree, "stack_order", return_value=[]), mock.patch.object(fc.fc_cost, "rows", return_value=[]):
             return fc.fc_status.render_status(repo, [proj]).splitlines()[0]

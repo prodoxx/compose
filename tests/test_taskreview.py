@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import contextlib, importlib.machinery, importlib.util, io, json, os, subprocess, sys, tempfile, unittest
+import contextlib, importlib.machinery, importlib.util, io, json, os, sys, tempfile, unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -16,8 +16,8 @@ HIGH = {"severity": "high", "perspective": "correctness", "file": "b.py", "line"
         "evidence": "print('hi')", "fix": "print('hello')"}
 
 
-def git(repo, *args):
-    return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+SHAS = {"main": "a" * 40, "t/001": "b" * 40, "t/002": "c" * 40}
+DIFFS = {"main...t/001": "+++ b/b001.py\n+print('hi')\n", "t/001...t/002": "+++ b/b002.py\n+print('two')\n", "main..t/001": "+++ b/b001.py\n+print('hi')\n"}
 
 
 class ReviewCommand(unittest.TestCase):
@@ -25,15 +25,9 @@ class ReviewCommand(unittest.TestCase):
         self.repo = Path(tempfile.mkdtemp())
         self.proj = self.repo / ".compose" / "feat"
         (self.proj / "results").mkdir(parents=True)
-        git(self.repo, "init", "-q", "-b", "main")
-        (self.repo / "a.py").write_text("a = 1\n")
-        git(self.repo, "add", "."); git(self.repo, "commit", "-qm", "base")
-        for tid, base, line in (("001", "main", "print('hi')"), ("002", "t/001", "print('two')")):
-            git(self.repo, "checkout", "-q", "-b", f"t/{tid}", base)
-            (self.repo / f"b{tid}.py").write_text(line + "\n")
-            git(self.repo, "add", "."); git(self.repo, "commit", "-qm", f"task {tid}")
-            (self.proj / "results" / f"{tid}.json").write_text(json.dumps({"base": base if base != "main" else "HEAD"}))
-        git(self.repo, "checkout", "-q", "main")
+        for tid, base in (("001", "HEAD"), ("002", "t/001")):
+            (self.proj / "results" / f"{tid}.json").write_text(json.dumps({"base": base}))
+        self.refs = dict(SHAS)
         (self.proj / "verify.json").write_text(json.dumps({"task_prefix": "t/", "review_base": "main"}))
         (self.proj / "linear.json").write_text(json.dumps({"feature": "NEB-9"}))
         tasks = [{"id": t, "title": f"task {t}", "body": BODY, "files": [], "protected": [], "linear": f"NEB-{t}"} for t in ("001", "002")]
@@ -43,7 +37,10 @@ class ReviewCommand(unittest.TestCase):
         a = SimpleNamespace(repo=str(self.repo), project="feat", only=only, range=range)
         rv = rv or {"pass": True, "issues": [], "confirmed": [], "malformed": 0}
         out = io.StringIO()
+        diff = lambda argv, *x, **kw: SimpleNamespace(stdout=DIFFS.get(argv[-1], ""), returncode=0)  # the one git call a review makes
         with mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), mock.patch.object(fc.fc_core, "say"), \
+                mock.patch.object(fc_taskreview, "resolve", lambda repo, ref: self.refs.get(ref)), mock.patch.object(fc.fc_core, "sh", diff), \
+                mock.patch.object(fc_taskreview.fc_worktree, "review_base", return_value="main"), \
                 mock.patch.object(fc_taskreview.fc_review, "llm_review", return_value=rv) as llm, \
                 mock.patch.object(fc_taskreview.fc_ledger, "record_task", return_value=True) as task, \
                 mock.patch.object(fc_taskreview.fc_ledger, "record", return_value=True) as feature, \
@@ -56,7 +53,7 @@ class ReviewCommand(unittest.TestCase):
         code, out, llm, task, feature = self.run_review(only="001", rv=bad)
         diff, plan = llm.call_args.args[1:3]
         self.assertIn("+print('hi')", diff)
-        self.assertNotIn("a.py", diff)
+        self.assertNotIn("b002.py", diff)
         self.assertIn("The feature plan", plan)
         self.assertIn("# Task 001: task 001", plan)
         self.assertNotIn("Task 002", plan)
@@ -65,7 +62,7 @@ class ReviewCommand(unittest.TestCase):
         self.assertIn("print('hello')", out)
         (_, _, meta, events), _ = task.call_args
         e = events[0]
-        self.assertEqual((meta["id"], e["phase"], e["source"], e["result"], e["task_ids"], e["commit_sha"]), ("001", "review", "review", "fail", ["001"], git(self.repo, "rev-parse", "t/001")))
+        self.assertEqual((meta["id"], e["phase"], e["source"], e["result"], e["task_ids"], e["commit_sha"]), ("001", "review", "review", "fail", ["001"], SHAS["t/001"]))
         self.assertTrue(e["criterion_id"])
         feature.assert_not_called()
         self.assertEqual(json.loads((self.proj / "results" / "review-001.json").read_text())["review"]["confirmed"], [HIGH])
@@ -84,7 +81,7 @@ class ReviewCommand(unittest.TestCase):
         self.assertIn("b001.py", llm.call_args.args[1])
         task.assert_not_called()
         issue, events = feature.call_args.args
-        self.assertEqual((issue, events[0]["task_ids"], events[0]["source"], events[0]["commit_sha"]), ("NEB-9", [], "review", git(self.repo, "rev-parse", "t/001")))
+        self.assertEqual((issue, events[0]["task_ids"], events[0]["source"], events[0]["commit_sha"]), ("NEB-9", [], "review", SHAS["t/001"]))
         self.assertEqual(len(list((self.proj / "results").glob("review-range-*.json"))), 1)
 
     def test_a_range_with_only_is_briefed_by_and_recorded_on_those_tasks(self):
@@ -100,9 +97,10 @@ class ReviewCommand(unittest.TestCase):
         self.assertIn("boom", out)
 
     def test_a_merged_task_with_no_branch_points_to_range(self):
-        git(self.repo, "branch", "-D", "t/002")
+        del self.refs["t/002"]
         a = SimpleNamespace(repo=str(self.repo), project="feat", only="002", range=None)
-        with mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), self.assertRaises(SystemExit) as ex:
+        with mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), mock.patch.object(fc_taskreview, "resolve", lambda repo, ref: self.refs.get(ref)), \
+                self.assertRaises(SystemExit) as ex:
             fc_taskreview.cmd_review(a)
         self.assertIn("--range <base>..<tip>", str(ex.exception))
 

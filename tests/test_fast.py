@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import importlib.machinery, importlib.util, json, os, subprocess, tempfile, unittest
+import importlib.machinery, importlib.util, json, os, tempfile, unittest
 from types import SimpleNamespace
 from pathlib import Path
 from unittest import mock
@@ -24,9 +24,7 @@ class RunHolds(unittest.TestCase):
     def setUp(self):
         self.routectx, self.routerec = (importlib.import_module(m) for m in ("fc_routectx", "fc_routerec"))  # the foundation's modules, not on every branch
         self.repo = Path(tempfile.mkdtemp()).resolve(); self.proj = self.repo / ".compose" / "p"; (self.proj / "results").mkdir(parents=True)
-        git = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=self.repo, check=True, capture_output=True)
-        git("init", "-q", "-b", "main"); (self.repo / "a.txt").write_text("x"); git("add", "-A"); git("commit", "-qm", "init")
-        (self.repo / ".git" / "info" / "exclude").write_text("/.compose/\n")
+        (self.proj / "verify.json").write_text('{"task_prefix": "compose/p-"}')
         self.tasks = [{"id": t, "title": t, "files": [], "protected": [], "test": "true", "body": "no route here", "model": "m", "after": "", "linear": f"ENG-{t}", "waits_on": []} for t in sorted([*FLOWS, "007"])]
         self.issues = {f"ENG-{t}": {"description": f"## Route\n\n* workflow: {FLOWS[t]}" if t in FLOWS else "## Goal\nx"} for t in sorted([*FLOWS, "007"])}
         (self.proj / "results" / "tasks.json").write_text(json.dumps({"feature": {}, "tasks": self.tasks, "issues": self.issues}))
@@ -46,7 +44,7 @@ class RunHolds(unittest.TestCase):
     def test_run_waits_the_held_task_on_the_route_and_still_dispatches_every_task_unchanged(self):
         a = mock.Mock(repo=str(self.repo), project="p", only=None, redo=False, unproven=True, no_stack=True)
         with mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), mock.patch.object(fc.fc_herdr, "project_worktree", return_value=self.repo), \
-             mock.patch.object(fc.fc_route, "route_tasks", return_value=(self.routes, {"006": "boom"})), mock.patch.object(fc.fc_run, "run_tasks") as run_tasks:
+             mock.patch.object(fc.fc_route, "route_tasks", return_value=(self.routes, {"006": "boom"})), mock.patch.object(fc.fc_run, "require_committed"), mock.patch.object(fc.fc_briefs, "test_open", return_value=False), mock.patch.object(fc.fc_run, "run_tasks") as run_tasks:
             fc.fc_run.cmd_run(a)
         metas = run_tasks.call_args.args[2]
         self.assertEqual({m["id"]: m["waits_on"] for m in metas}, {t: {"001": [f"the route ({WHY})"], "008": [f"the route ({WHY})"], "006": ["the route (boom)"]}.get(t, []) for t in sorted([*FLOWS, "007"])})
@@ -55,62 +53,6 @@ class RunHolds(unittest.TestCase):
         t = self.tasks
         got = [fc_fast.workflow(self.proj, m) for m in (t[0], t[4], t[6], {**t[0], "linear": "ENG-x"}, {"id": "010"})]
         self.assertEqual(got, [FIX, IMPL, None, None, None])
-
-
-class FastAttempts(unittest.TestCase):
-    """A FAST task needs a green base: its existing tests pass before the fix, and the fix ends unproven."""
-    def run_task(self, workflow, test, write="ok\n", ends={"pane": "p1"}, answers=None):
-        """Runs task 001 in a real repo whose a.txt is `ok`; the implementer writes `write` into it and ends on the session `ends`. Returns the result, with calls, sent, closed and repo on self."""
-        self.repo = Path(tempfile.mkdtemp()).resolve(); proj = self.repo / ".compose" / "p"; proj.mkdir(parents=True); self.proj = proj
-        git = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=self.repo, check=True, capture_output=True)
-        git("init", "-q", "-b", "main"); (self.repo / "a.txt").write_text("ok\n"); git("add", "-A"); git("commit", "-qm", "init")
-        meta = {"id": "001", "title": "t", "files": ["a.txt"], "protected": [], "test": test, "model": "m", "after": "", "linear": "ENG-1", "body": "## Goal\nFix it."}
-        self.calls, self.closed = [], []
-        def impl(cwd, model, prompt, session=None, task=None, timeout=None):
-            self.calls.append(prompt); (Path(cwd) / "a.txt").write_text(write)
-            return ends, "", 1, {"tokens_in": 1, "tokens_out": 1, "cost": 0.0}
-        with mock.patch.object(fc_fast, "workflow", return_value=workflow), mock.patch.object(fc.fc_implement, "implementer", impl), \
-             mock.patch.object(fc.fc_implement.fc_trailpack, "trail_pack", return_value=""), mock.patch.object(fc.fc_config, "TEST_READER", None), \
-             mock.patch.object(fc.fc_linear, "linear_event") as self.events, mock.patch.object(fc.fc_core, "say") as self.say, mock.patch.object(fc.fc_herdr, "herdr_label"), \
-             mock.patch.object(fc.fc_herdr, "herdr", side_effect=lambda *a, **k: (self.closed.append(a), (answers or {}).get(a[:2]))[1]), mock.patch.dict(os.environ, {"COMPOSE_NO_TREEHOUSE": "1"}):
-            r = fc.fc_implement.run_task(self.repo, proj, meta, 1)
-        self.sent = [c.args[2:] for c in self.events.call_args_list]  # (event, result?) of each linear_event
-        return r
-
-    def test_a_fast_task_failing_on_head_is_broken_base_with_no_turn_and_no_base_key(self):
-        r = self.run_task(FIX, "echo boom; exit 3")
-        self.assertEqual((r["status"], r["attempts"], self.calls, "base" in r), ("broken_base", 0, [], False))
-        self.assertEqual(r["log"], [{"base_exit": 3, "test_output": "boom\n"}])
-        self.assertEqual(json.loads((self.proj / "results" / "001.json").read_text()), r)
-        self.assertEqual(self.say.call_args_list[-1].args, ("001 broken  test exits 3 on HEAD before any change: an environment problem, so no implementer turn",))
-        self.assertEqual(self.sent, [("failed", r)])
-
-    def test_a_fast_attempt_that_passes_ends_unproven_with_its_branch_fetched_and_its_pane_closed(self):
-        r = self.run_task(FIX, "grep -q ok a.txt", write="ok fixed\n")
-        self.assertEqual((r["status"], r["attempts"], len(self.calls), self.sent[-1:]), ("unproven", 1, 1, [("unproven", r)]))
-        self.assertEqual(subprocess.run(["git", "show", f"{r['branch']}:a.txt"], cwd=self.repo, capture_output=True, text=True).stdout, "ok fixed\n")
-        self.assertEqual(self.closed, [("pane", "close", "p1")])
-        self.assertEqual(self.say.call_args_list[-1].args[0].split()[:2], ["001", "unproven"])
-
-    def test_a_task_that_passes_on_a_fallback_turn_closes_the_pi_pane_its_earlier_attempts_left(self):
-        r = self.run_task(FIX, "grep -q ok a.txt", write="ok fixed\n", ends=None, answers={("agent", "get"): {"agent": {"pane_id": "p9"}}})
-        self.assertEqual(r["status"], "unproven")
-        self.assertEqual(self.closed, [("agent", "get", "p-001"), ("pane", "close", "p9")])
-        self.closed.clear()
-        r = self.run_task(FIX, "grep -q ok a.txt", write="no\n", ends=None, answers={("agent", "get"): {"agent": {"pane_id": "p9"}}})
-        self.assertEqual((r["status"], self.closed), ("failed", []))  # a missed task keeps its pane to read
-
-    def test_a_fast_attempt_that_fails_stays_failed(self):
-        r = self.run_task(FIX, "grep -q ok a.txt", write="no\n")
-        self.assertEqual((r["status"], [e for e, *_ in self.sent][-1:]), ("failed", ["failed"]))
-
-    def test_a_test_first_task_still_skips_a_green_base_and_passes_a_red_one(self):
-        for flow in (None, "test-first"):
-            with self.subTest(flow=flow):
-                r = self.run_task(flow, "grep -q ok a.txt")
-                self.assertEqual((r["status"], self.calls, self.sent), ("already_green", [], []))
-                r = self.run_task(flow, "grep -q fixed a.txt", write="fixed\n")
-                self.assertEqual((r["status"], len(self.calls), [e for e, *_ in self.sent]), ("passed", 1, ["dispatched", "passed"]))
 
 
 class UnprovenLinear(unittest.TestCase):

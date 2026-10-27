@@ -1,6 +1,7 @@
 import hermetic  # first: no test sees the real home
-import hashlib, importlib.machinery, importlib.util, json, os, subprocess, sys, tempfile, unittest
+import hashlib, importlib.machinery, importlib.util, json, os, sys, tempfile, unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 os.environ["COMPOSE_NO_TREEHOUSE"] = "1"
 os.environ["HERDR_ENV"] = ""
@@ -145,34 +146,30 @@ def sha16(blob_list, body="## Goal\nGrüße", files=("a.py", "src/b.py", "new.py
 class Hash(unittest.TestCase):
     def setUp(self):
         self.repo = Path(tempfile.mkdtemp())
-        self.git("init", "-q", "-b", "main")
-        (self.repo / "src").mkdir()
-        self.commit({"a.py": "a\n", "src/b.py": "b\n"})
+        self.blobs = {}  # path -> blob id at HEAD, what `git rev-parse HEAD:<path>` answers
+        self.commit({"a.py": "a1", "src/b.py": "b1"})
         self.meta = {"id": "001", "title": "T", "body": "## Goal\nGrüße", "files": ["a.py", "src/b.py", "new.py"], "route": "test-first"}
         self.pols = [{"name": "Gate", "statement": "s", "globs": ["a.py"], "checks": ["c"]}]
+        p = mock.patch.object(fc_routectx.subprocess, "run", side_effect=self.rev_parse); p.start(); self.addCleanup(p.stop)
 
-    def git(self, *args):
-        run = subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=t", "-c", "user.email=t@t", *args], capture_output=True, text=True, check=True)
-        return run.stdout.strip()
+    def rev_parse(self, cmd, **kw):
+        blob = self.blobs.get(cmd[-1].removeprefix("HEAD:"))
+        return SimpleNamespace(returncode=0 if blob else 128, stdout=(blob or "") + "\n")
 
-    def commit(self, files):
-        for path, text in files.items(): (self.repo / path).write_text(text)
-        self.git("add", "-A")
-        self.git("commit", "-qm", "c")
+    def commit(self, blobs): self.blobs.update(blobs)
 
     def h(self, meta=None, pols=None):
         return fc_routectx.context_hash(self.repo, meta or self.meta, self.pols if pols is None else pols)
 
     def test_changes_with_each_input(self):
         base = self.h()
+        self.assertEqual(base, sha16(["a1", "b1", "-"], policies=self.pols))  # a file HEAD does not have counts as "-"
         self.assertEqual(self.h({**self.meta, "id": "002", "title": "U", "route": None}), base)  # only body and files count
         changed = [self.h({**self.meta, "body": "## Goal\nother"}), self.h({**self.meta, "files": ["a.py", "src/b.py"]}),
                    self.h({**self.meta, "files": ["src/b.py", "a.py", "new.py"]}), self.h(pols=[]), self.h(pols=[{**self.pols[0], "checks": ["d"]}])]
-        (self.repo / "a.py").write_text("edited\n")
-        (self.repo / "new.py").write_text("n\n")
-        self.assertEqual(self.h(), base)  # uncommitted edits are not HEAD
-        self.commit({})
+        self.commit({"a.py": "a2"})
         changed.append(self.h())
-        self.commit({"new.py": "n\n", "a.py": "a\n"})  # only new.py differs from base now
+        self.commit({"a.py": "a1", "new.py": "n1"})  # only new.py differs from base now
         changed.append(self.h())
         self.assertNotIn(base, changed)
+        self.assertEqual(len(set(changed)), len(changed))

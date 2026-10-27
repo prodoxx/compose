@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import importlib.machinery, importlib.util, json, os, sys, tempfile, unittest
+import importlib.machinery, importlib.util, json, os, subprocess, sys, tempfile, unittest
 from pathlib import Path
 from unittest import mock
 os.environ["HERDR_ENV"] = ""
@@ -118,10 +118,10 @@ class Silent(unittest.TestCase):
 
     def test_the_last_commit_is_read_from_the_teammates_worktree(self):
         repo = Path(tempfile.mkdtemp())
-        git = lambda *a: fc.fc_core.sh(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], repo)
-        git("init", "-q"); git("commit", "-q", "--allow-empty", "-m", "x")
         (self.proj / "results" / "crew" / f"{WORKER}.json").write_text(json.dumps({"name": WORKER, "worktree": str(repo)}))
-        self.assertAlmostEqual(S.last_commit(self.proj, WORKER), time.time(), delta=60)
+        with mock.patch.object(fc.fc_core, "sh", return_value=subprocess.CompletedProcess([], 0, "1700000000\n", "")) as sh:
+            self.assertEqual(S.last_commit(self.proj, WORKER), 1700000000)
+        self.assertEqual(sh.call_args.args[1], str(repo))
         self.assertEqual(S.last_commit(self.proj, "hw-nobody"), 0)
 
 if __name__ == "__main__":

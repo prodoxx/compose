@@ -27,7 +27,7 @@ class Credit(unittest.TestCase):
     """A run whose OpenRouter key cannot pay for the tasks that start at once stops before it clones anything."""
     def setUp(self):
         self.repo = Path(tempfile.mkdtemp()).resolve()
-        subprocess.run(["git", "init", "-q", "-b", "main", str(self.repo)], check=True)
+        mock.patch.object(fc.fc_core, "worktree_branches", return_value=[(self.repo, "main")]).start(); self.addCleanup(mock.patch.stopall)
         self.proj = self.repo / ".compose" / "p"
         (self.proj / "results").mkdir(parents=True)
         (self.proj / "verify.json").write_text("{}")
@@ -137,7 +137,7 @@ class PaymentHalt(unittest.TestCase):
                 paid.wait(5); time.sleep(0.3); status, log = "passed", []
             return {"id": meta["id"], "title": meta["id"], "status": status, "attempts": 1, "seconds": 1.0, "cost": 0.0, "branch": "b/" + meta["id"], "log": log}
         halted = []
-        with mock.patch.object(fc.fc_proc, "keep_awake"), mock.patch.object(fc.fc_run, "preflight"), mock.patch.object(fc.fc_herdr, "herdr_space"), mock.patch.object(fc.fc_core, "say"), \
+        with mock.patch.object(fc.fc_proc, "keep_awake"), mock.patch.object(fc.fc_run, "preflight"), mock.patch.object(fc.fc_herdr, "herdr_space"), mock.patch.object(fc.fc_core, "say"), mock.patch.object(fc.fc_core, "sh", return_value=subprocess.CompletedProcess([], 0, "a" * 40, "")), \
              mock.patch.object(fc.fc_implement, "run_task", run_task), mock.patch.object(fc.fc_models, "payment_halt", lambda *a: halted.append(a[3]) or sys.exit(3)), \
              mock.patch("builtins.print"), self.assertRaises(SystemExit):
             fc.fc_run.run_tasks(repo, proj, tasks, mock.Mock(trunk="main", attempts=1, parallel=2, no_stack=True))

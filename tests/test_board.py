@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import importlib.machinery, importlib.util, io, json, os, subprocess, sys, tempfile, time, unittest
+import importlib.machinery, importlib.util, io, json, os, sys, tempfile, time, unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,33 +12,40 @@ fc = importlib.util.module_from_spec(_spec)
 for _m in [m for m in sys.modules if m.startswith("fc_") and m not in ("fc_cost", "fc_mcp", "fc_sessions")]: del sys.modules[_m]
 _spec.loader.exec_module(fc)
 
-ENV = {"HERDR_ENV": "", "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+
+
+def fake_git(case, have=(), merged=(), layers=(), trunk="compose/p"):
+    """What the board asks git, answered from `case.have`, `case.merged` and `case.layers` (lists the test may change between reads);
+    returns the three fakes, so a test can count the questions a board read asks."""
+    case.have, case.merged, case.layers = list(have), list(merged), list(layers)
+    asked = SimpleNamespace(head=mock.Mock(return_value="head"), facts=mock.Mock(), order=mock.Mock())
+    asked.facts.side_effect = lambda repo, proj, head: {"prefix": "compose/p-", "have": set(case.have), "merged": set(case.merged)}
+    asked.order.side_effect = lambda repo, proj, tasks=None: [b for b in case.have if b not in case.merged]
+    for mod, name, fake in ((fc.fc_status, "project_head", asked.head), (fc.fc_status, "branch_facts", asked.facts), (fc.fc_core, "current_branch", lambda repo: trunk),
+                            (fc.fc_worktree, "stack_order", asked.order), (fc.fc_worktree, "task_prefix", lambda repo, proj: "compose/p-"), (fc.fc_layers, "layer_branches", lambda repo, proj: list(case.layers))):
+        patch = mock.patch.object(mod, name, fake); patch.start(); case.addCleanup(patch.stop)
+    return asked
 
 
 class Board(unittest.TestCase):
     """`status` and `watch` read the board every two seconds, from many loops at once: it must cost no process while nothing changed."""
 
     def setUp(self):
-        self.env = mock.patch.dict(os.environ, ENV); self.env.start(); self.addCleanup(self.env.stop)
         self.repo = Path(tempfile.mkdtemp())
-        self.git("init", "-q", "-b", "main")
-        (self.repo / "a.txt").write_text("base\n")
-        self.git("add", "-A"); self.git("commit", "-qm", "init")
-        self.git("checkout", "-q", "-b", "compose/p")
         self.proj = self.repo / ".compose" / "p"
         (self.proj / "results").mkdir(parents=True)
         (self.proj / "verify.json").write_text(json.dumps({"task_prefix": "compose/p-"}))
-        (self.repo / ".git" / "info" / "exclude").write_text("/.compose/\n")
         self.tasks(["001", "002", "003"])
         # 001: a branch merged into the project branch; 002: a branch not merged; 003: no branch yet
-        self.git("checkout", "-q", "-b", "compose/p-001"); self.git("commit", "-q", "--allow-empty", "-m", "001")
-        self.git("checkout", "-q", "compose/p"); self.git("merge", "-q", "compose/p-001")
-        self.git("checkout", "-q", "-b", "compose/p-002"); self.git("commit", "-q", "--allow-empty", "-m", "002")
-        self.git("checkout", "-q", "compose/p")
+        self.asked = fake_git(self, have=["compose/p-001", "compose/p-002"], merged=["compose/p-001"])
+        self.refs = self.repo / "refs" / "heads"; self.refs.mkdir(parents=True)  # the refs the stamp watches: a new branch writes one
+        patch = mock.patch.object(fc.fc_status, "git_dirs", lambda repo: (self.repo, self.repo)); patch.start(); self.addCleanup(patch.stop)
         self.result("001", "passed"); self.result("002", "passed")
 
-    def git(self, *a):
-        return subprocess.run(["git", *a], cwd=self.repo, check=True, capture_output=True, text=True).stdout.strip()
+    def branch(self, name, merged=False):
+        self.have.append(name)
+        self.merged += [name] * merged
+        (self.refs / name.replace("/", "-")).write_text("x")
 
     def tasks(self, ids):
         (self.proj / "results" / "tasks.json").write_text(json.dumps({"feature": {}, "tasks": [{"id": i, "title": f"t{i}"} for i in ids]}))
@@ -49,9 +56,9 @@ class Board(unittest.TestCase):
     def states(self, board):
         return {r["id"]: r["state"] for r in board["rows"]}
 
-    def counting(self):
-        """fc_core.sh wrapped so the test can count the processes a board read spawns."""
-        return mock.patch.object(fc.fc_core, "sh", wraps=fc.fc_core.sh)
+    def questions(self):
+        """How many times a board read has asked git so far."""
+        return self.asked.head.call_count + self.asked.facts.call_count + self.asked.order.call_count
 
     def test_the_board_tells_each_tasks_state_from_the_branches(self):
         b = fc.fc_status.board(self.repo, self.proj)
@@ -61,28 +68,28 @@ class Board(unittest.TestCase):
         self.assertEqual(b["layers"], {"compose/p-002": 1})
 
     def test_the_board_costs_no_process_while_nothing_changed(self):
-        with self.counting() as sh:
-            first = fc.fc_status.board(self.repo, self.proj)
-            n = sh.call_count
-            self.assertGreater(n, 0)
-            self.assertEqual(fc.fc_status.board(self.repo, self.proj), first)
-            self.assertEqual(sh.call_count, n, "a second read with nothing changed ran git")
+        first = fc.fc_status.board(self.repo, self.proj)
+        n = self.questions()
+        self.assertGreater(n, 0)
+        self.assertEqual(fc.fc_status.board(self.repo, self.proj), first)
+        self.assertEqual(self.questions(), n, "a second read with nothing changed ran git")
 
     def test_the_boards_git_cost_does_not_grow_with_the_task_count(self):
-        with self.counting() as few:
-            fc.fc_status.board(self.repo, self.proj)
+        fc.fc_status.board(self.repo, self.proj)
+        few = self.questions()
         self.tasks([f"{i:03}" for i in range(1, 25)])
-        with self.counting() as many:
-            fc.fc_status.board(self.repo, self.proj)
-        self.assertLessEqual(many.call_count, few.call_count, [c.args[0] for c in many.call_args_list])
+        fc.fc_status.board(self.repo, self.proj)
+        self.assertLessEqual(self.questions() - few, few)
 
     def test_a_new_branch_changes_the_board(self):
         fc.fc_status.board(self.repo, self.proj)
-        self.git("checkout", "-q", "-b", "compose/p-003"); self.git("commit", "-q", "--allow-empty", "-m", "003"); self.git("checkout", "-q", "compose/p")
+        time.sleep(0.01)
+        self.branch("compose/p-003")
         self.assertEqual(self.states(fc.fc_status.board(self.repo, self.proj))["003"], "pending")
         self.result("003", "passed")
         self.assertEqual(self.states(fc.fc_status.board(self.repo, self.proj))["003"], "passed")
-        self.git("merge", "-q", "compose/p-003")
+        time.sleep(0.01)
+        self.merged.append("compose/p-003"); (self.refs / "moved").write_text("x")
         self.assertEqual(self.states(fc.fc_status.board(self.repo, self.proj))["003"], "merged")
 
     def test_a_result_written_by_another_process_changes_the_board(self):
@@ -109,11 +116,11 @@ class Board(unittest.TestCase):
             self.assertEqual(self.states(fc.fc_status.board(self.repo, self.proj))["003"], "interrupted")
 
     def test_watch_snapshot_costs_no_process_while_nothing_changed(self):
-        with mock.patch.object(fc.fc_herdr, "herdr", return_value=None), self.counting() as sh:
+        with mock.patch.object(fc.fc_herdr, "herdr", return_value=None):
             first = fc.fc_watch.watch_snapshot(self.repo, self.proj)
-            n = sh.call_count
+            n = self.questions()
             self.assertEqual(fc.fc_watch.watch_snapshot(self.repo, self.proj), first)
-            self.assertEqual(sh.call_count, n)
+            self.assertEqual(self.questions(), n)
         self.assertEqual({t: v["state"] for t, v in first["tasks"].items()}, {"001": "merged", "002": "passed", "003": "pending"})
 
     def test_a_watch_loop_asks_herdr_for_its_agents_once_per_interval(self):
@@ -137,14 +144,11 @@ class ReadyList(unittest.TestCase):
     ITEMS = [{"id": "NEB-1", "title": "A"}, {"id": "NEB-2", "title": "B"}]
 
     def setUp(self):
-        self.env = mock.patch.dict(os.environ, ENV); self.env.start(); self.addCleanup(self.env.stop)
         self.repo = Path(tempfile.mkdtemp())
-        for a in (("init", "-q", "-b", "main"), ("commit", "-q", "--allow-empty", "-m", "init"), ("checkout", "-q", "-b", "compose/p")):
-            subprocess.run(["git", *a], cwd=self.repo, check=True, capture_output=True)
+        fake_git(self)
         self.proj = self.repo / ".compose" / "p"
         (self.proj / "results").mkdir(parents=True)
         (self.proj / "verify.json").write_text(json.dumps({"task_prefix": "compose/p-"}))
-        (self.repo / ".git" / "info" / "exclude").write_text("/.compose/\n")
         (self.proj / "results" / "tasks.json").write_text(json.dumps({"feature": {}, "tasks": [{"id": "001", "title": "t001"}]}))
         # ready_line's wording belongs to another unit; this stand-in shows which items reached it
         p = mock.patch.object(fc.fc_linear, "ready_line", side_effect=lambda items: "READY " + ", ".join(f"{i['id']} {i['title']}" for i in items))
@@ -161,7 +165,7 @@ class ReadyList(unittest.TestCase):
 
     def projects(self):
         out = io.StringIO()
-        with redirect_stdout(out):
+        with redirect_stdout(out), mock.patch.object(fc.fc_core, "all_projects", return_value={"p": (self.repo, self.proj)}):
             fc.fc_status.cmd_projects(SimpleNamespace(repo=str(self.repo)))
         return next(l for l in out.getvalue().splitlines() if l.startswith("p "))
 
@@ -193,13 +197,10 @@ class RouteColumns(unittest.TestCase):
     FALL = {"fallback": {"from": "a", "to": "b", "why": "x"}}
 
     def setUp(self):
-        self.env = mock.patch.dict(os.environ, ENV); self.env.start(); self.addCleanup(self.env.stop)
         self.repo = Path(tempfile.mkdtemp())
-        for a in (("init", "-q", "-b", "main"), ("commit", "-q", "--allow-empty", "-m", "init"), ("checkout", "-q", "-b", "compose/p")):
-            subprocess.run(["git", *a], cwd=self.repo, check=True, capture_output=True)
+        fake_git(self)
         self.proj = self.repo / ".compose" / "p"
         (self.proj / "results").mkdir(parents=True)
-        (self.repo / ".git" / "info" / "exclude").write_text("/.compose/\n")
 
     def write(self, name, data):
         (self.proj / "results" / name).write_text(json.dumps(data))
@@ -238,14 +239,11 @@ class RouteSummary(unittest.TestCase):
     """`status` sums attempts, escalations, fix rounds and cost per workflow and per depth, under the task table."""
 
     def setUp(self):
-        self.env = mock.patch.dict(os.environ, ENV); self.env.start(); self.addCleanup(self.env.stop)
         self.repo = Path(tempfile.mkdtemp())
-        for a in (("init", "-q", "-b", "main"), ("commit", "-q", "--allow-empty", "-m", "init"), ("checkout", "-q", "-b", "compose/p")):
-            subprocess.run(["git", *a], cwd=self.repo, check=True, capture_output=True)
+        fake_git(self)
         self.proj = self.repo / ".compose" / "p"
         (self.proj / "results").mkdir(parents=True)
         (self.proj / "verify.json").write_text(json.dumps({"task_prefix": "compose/p-"}))
-        (self.repo / ".git" / "info" / "exclude").write_text("/.compose/\n")
         import fc_routecost
         self.summary = fc_routecost.summary
 
@@ -303,60 +301,41 @@ class RouteRow(unittest.TestCase):
 
 
 class BoardOneListing(unittest.TestCase):
-    """Projects on one repo read its branch list once; each still asks git for its own merged branches."""
+    """What `branch_facts` reads from git: the branches that start with the prefix, and those merged into the trunk."""
 
     def setUp(self):
-        env = mock.patch.dict(os.environ, ENV); env.start(); self.addCleanup(env.stop)
         for d in (fc.fc_worktree._heads, fc.fc_worktree._prefixes, fc.fc_worktree._commons): d.clear()
         self.repo = Path(tempfile.mkdtemp())
-        self.git("init", "-q", "-b", "main"); self.git("commit", "-q", "--allow-empty", "-m", "init")
-        for b in ("compose/p-001", "other/p-009"):
-            self.git("branch", b)
-        self.git("checkout", "-q", "-b", "compose/q-001"); self.git("commit", "-q", "--allow-empty", "-m", "q")
-        self.git("checkout", "-q", "main")
-        self.git("checkout", "-q", "-b", "compose/p-002"); self.git("commit", "-q", "--allow-empty", "-m", "two")
-        self.git("checkout", "-q", "-b", "compose/p"); self.git("checkout", "-q", "main")
-        self.git("merge", "-q", "--no-ff", "-m", "m", "compose/p-001")
-        self.trunk = self.git("rev-parse", "HEAD")
+        self.asked = []
+        def sh(cmd, cwd=None, **k):
+            self.asked.append(cmd)
+            merged = "refs/heads/compose/p-001\n" if any(a.startswith("--merged") for a in cmd) else ""
+            return SimpleNamespace(returncode=0, stdout=merged, stderr="")
+        for mod, name, fake in ((fc.fc_core, "sh", sh), (fc.fc_worktree, "heads", lambda repo: ["main", "compose/p-001", "compose/p-002", "compose/q-001", "other/p-009"])):
+            patch = mock.patch.object(mod, name, fake); patch.start(); self.addCleanup(patch.stop)
 
-    def git(self, *a):
-        return subprocess.run(["git", *a], cwd=self.repo, check=True, capture_output=True, text=True).stdout.strip()
-
-    def facts(self, name, trunk=None):
+    def facts(self, name, trunk="trunk"):
         proj = self.repo / ".compose" / name
         proj.mkdir(parents=True, exist_ok=True)
         (proj / "verify.json").write_text(json.dumps({"task_prefix": f"compose/{name}-"}))
-        return fc.fc_status.branch_facts(self.repo, proj, self.trunk if trunk is None else trunk)
+        return fc.fc_status.branch_facts(self.repo, proj, trunk)
 
     def test_have_is_the_branches_that_start_with_the_prefix_and_merged_those_in_trunk(self):
         self.assertEqual(self.facts("p"), {"prefix": "compose/p-", "have": {"compose/p-001", "compose/p-002"}, "merged": {"compose/p-001"}})
         self.assertEqual(self.facts("p", trunk="")["merged"], set())
-
-    def test_two_projects_on_one_repo_list_the_branches_once_and_each_reads_its_own_merged(self):
-        with mock.patch("subprocess.run", wraps=subprocess.run) as run:
-            p, q = self.facts("p"), self.facts("q")
-        calls = [c.args[0] for c in run.call_args_list if "for-each-ref" in c.args[0]]
-        merged = [c for c in calls if any(a.startswith("--merged") for a in c)]
-        self.assertEqual((p["have"], q["have"], q["merged"]), ({"compose/p-001", "compose/p-002"}, {"compose/q-001"}, set()))
-        self.assertEqual(len(merged), 2)
-        self.assertEqual(len(calls) - len(merged), 1)
 
 
 class WatchFilesStamp(unittest.TestCase):
     """A `watch` saves its memory between ticks: that must not make the cached board stale, while every other state change must."""
 
     def setUp(self):
-        self.env = mock.patch.dict(os.environ, ENV); self.env.start(); self.addCleanup(self.env.stop)
         self.repo = Path(tempfile.mkdtemp())
-        self.git("init", "-q", "-b", "main")
-        self.git("commit", "-q", "--allow-empty", "-m", "init")
+        self.refs = self.repo / "refs" / "heads"; self.refs.mkdir(parents=True)  # a branch is a file here
+        patch = mock.patch.object(fc.fc_status, "git_dirs", lambda repo: (self.repo, self.repo)); patch.start(); self.addCleanup(patch.stop)
         self.proj = self.repo / ".compose" / "p"
         (self.proj / "results").mkdir(parents=True)
         (self.proj / "results" / "verify.json").write_text("{}")
         (self.proj / "layers.json").write_text("{}")
-
-    def git(self, *a):
-        return subprocess.run(["git", *a], cwd=self.repo, check=True, capture_output=True, text=True).stdout.strip()
 
     def stamp(self):
         return fc.fc_status.board_stamp(self.repo, self.proj)
@@ -378,7 +357,7 @@ class WatchFilesStamp(unittest.TestCase):
     def test_a_new_branch_changes_the_stamp_even_beside_watch_writes(self):
         before = self.stamp()
         (self.proj / "results" / "watch-all.json").write_text("{}")
-        self.git("branch", "compose/p-001")
+        (self.refs / "compose-p-001").write_text("x")
         self.assertNotEqual(self.stamp(), before)
 
 

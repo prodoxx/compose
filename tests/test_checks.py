@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import datetime, os, platform, shutil, stat, subprocess, sys, tempfile, unittest
+import datetime, os, platform, stat, sys, tempfile, unittest
 from pathlib import Path
 from unittest import mock
 os.environ["HERDR_ENV"] = ""
@@ -7,7 +7,6 @@ os.environ["HERDR_ENV"] = ""
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bin"))
 for _m in [m for m in sys.modules if m.startswith("fc_") and m not in ("fc_cost", "fc_mcp", "fc_sessions")]: del sys.modules[_m]
 import fc_checks as C
-ORIGINAL_PATH = os.environ["PATH"]
 
 
 class Checks(unittest.TestCase):
@@ -149,9 +148,6 @@ class Startup(unittest.TestCase):
         self.bin, self.wt = Path(tempfile.mkdtemp()), Path(tempfile.mkdtemp()).resolve()
         p = mock.patch.dict(os.environ, {"PATH": str(self.bin)}); p.start(); self.addCleanup(p.stop)
         os.environ.pop("COMPOSE_NO_AWAKE", None)
-        os.environ["PATH"] += os.pathsep + str(Path(shutil.which("git", path=ORIGINAL_PATH)).parent)  # the real git, after the fake tools
-        subprocess.run(["git", "init", "-q", str(self.wt)], check=True)
-        (self.wt / ".gitignore").write_text(".env\n.env.*\n")
 
     fake = Checks.fake
 
@@ -174,8 +170,8 @@ class Startup(unittest.TestCase):
         (self.wt / ".env").write_text("DATABASE_URL=postgresql://u:p@localhost:5432/website\nNEXT_PUBLIC_URL=https://x.test\n")
         (self.wt / "app").mkdir(); (self.wt / "app" / ".env.local").write_text("DATABASE_URL=postgresql://u:p@localhost:5433/dtt\n")
         (self.wt / ".env.example").write_text("DATABASE_URL=postgresql://user:pass@host/db\n")  # tracked, not ignored: no target
-        subprocess.run(["git", "-C", str(self.wt), "add", "-f", ".gitignore", ".env.example"], check=True, capture_output=True)
-        self.assertEqual(C.database_targets(self.wt), {".env DATABASE_URL": "localhost:5432/website", "app/.env.local DATABASE_URL": "localhost:5433/dtt"})
+        with mock.patch.object(C.fc_worktree, "ignored_entries", return_value=[".env", "app/.env.local"]):  # git's ignored list: .env.example is tracked
+            self.assertEqual(C.database_targets(self.wt), {".env DATABASE_URL": "localhost:5432/website", "app/.env.local DATABASE_URL": "localhost:5433/dtt"})
 
     def test_database_problems_name_a_changed_and_an_unconfirmed_target_with_how_to_confirm(self):
         now = {".env DATABASE_URL": "localhost:5433/dtt", "app/.env DATABASE_URL": "localhost:5433/app"}

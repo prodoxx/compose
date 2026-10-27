@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import os, stat, subprocess, tempfile
+import os, stat, tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -29,17 +29,14 @@ class TrailPack(FakeTrail):
         self.assert_pack(fc.fc_implement.fc_trailpack.trail_pack(self.repo_on("graft"), "entry point"), "entry point")
         self.assertTrue(self.calls()[-1].startswith("ask entry point --source -n 6 --no-refresh "))
 
-    def test_a_task_clone_gets_the_graph_rebuilt_in_trail_cache_and_keeps_it_out_of_git(self):
+    def test_a_task_clone_gets_the_graph_rebuilt_in_trail_cache(self):
         for graph in (".trail/cache", "graft"):
             repo = self.repo_on(graph)
-            clone = Path(tempfile.mkdtemp()) / "clone"
-            subprocess.run(["git", "clone", "-q", str(repo), str(clone)], check=True)
-            fc.fc_worktree.ready_checkout(repo, clone)
+            clone = Path(tempfile.mkdtemp()) / "clone"; clone.mkdir()
             self.assert_pack(fc.fc_implement.fc_trailpack.trail_pack(clone, "entry point", repo=repo, limit=3), "entry point")
             self.assertTrue((clone / ".trail" / "cache" / "INDEX.md").exists())  # .trail/cache/ made before the build
             self.assertEqual((clone / "graft").exists(), graph == "graft")
             self.assertEqual(self.calls()[-2:], [f"build --no-gitignore --no-ignore {clone}", f"ask entry point --source -n 3 --no-refresh {clone}"])
-            self.assertEqual(subprocess.run(["git", "status", "--porcelain"], cwd=clone, capture_output=True, text=True).stdout, "")
 
     def test_no_graph_or_a_failing_ask_gives_no_pack(self):
         repo, _ = repo_with({"a.txt": "x\n"})

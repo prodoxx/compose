@@ -110,11 +110,9 @@ class ProveCase(unittest.TestCase):
 
 
 class Repo(unittest.TestCase):
-    """A temp git repo with a project and verify.json, and jev's stand-in Agent under the real `python -m jev_ultrafast`."""
+    """A temp folder with a project and verify.json, and jev's stand-in Agent under the real `python -m jev_ultrafast`."""
     def setUp(self):
-        self.repo = Path(tempfile.mkdtemp())
-        for args in (["init", "-q", "-b", "main"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]):
-            subprocess.run(["git", *args], cwd=self.repo, check=True)
+        self.repo, self.sha = Path(tempfile.mkdtemp()), "a" * 40
         self.proj = self.repo / ".compose" / "p"
         (self.proj / "results").mkdir(parents=True)
         jev = Path(tempfile.mkdtemp())
@@ -122,7 +120,8 @@ class Repo(unittest.TestCase):
         (jev / "jev_ultrafast" / "__init__.py").write_text(FAKE_AGENT)
         shutil.copy(fc.fc_config.JEV_DIR / "jev_ultrafast" / "__main__.py", jev / "jev_ultrafast" / "__main__.py")
         for p in (mock.patch.object(fc.fc_config, "JEV_DIR", jev), mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "ts-test"}),
-                  mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj)):
+                  mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), mock.patch.object(fc.fc_worktree, "stack_order", return_value=[]),
+                  mock.patch.object(fc.fc_core, "sh", return_value=subprocess.CompletedProcess([], 0, self.sha + "\n", ""))):  # git answers with one commit, whatever it is asked
             p.start(); self.addCleanup(p.stop)
         fake_uv(self)
 
@@ -210,9 +209,7 @@ class ProveCommand(Proving):
             seen.update(root=root, e2e=cfg["e2e"])
             rest[1]["e2e"] = [{"exit": 1}]
         layers = [f"compose/p-{t}" for t in ("001", "002", "003")]
-        real_sh = fc.fc_core.sh
-        sh = lambda cmd, cwd=None, **kw: real_sh(["true"], cwd, **kw) if cmd[:2] == ["git", "checkout"] else real_sh(cmd, cwd, **kw)  # the stack worktree is no repo here
-        with mock.patch.object(fc.fc_core, "sh", side_effect=sh), mock.patch.object(fc.fc_worktree, "stack_order", return_value=layers), mock.patch.object(fc.fc_worktree, "task_prefix", return_value="compose/p-"), \
+        with mock.patch.object(fc.fc_worktree, "stack_order", return_value=layers), mock.patch.object(fc.fc_worktree, "task_prefix", return_value="compose/p-"), \
              mock.patch.object(fc.fc_tasks, "load_tasks", return_value=[{"id": t} for t in ("001", "002", "003")]), \
              mock.patch.object(fc.fc_worktree, "stack_worktree", return_value=wt), mock.patch.object(fc.fc_worktree, "ready_checkout"), \
              mock.patch.object(fc.fc_layers, "linearize", return_value=layers[:2]) as lin, mock.patch.object(fc.fc_verify, "e2e_stage", side_effect=stage), \
@@ -290,7 +287,7 @@ class ProveEvidence(Repo):
 
     def test_one_event_per_case_in_order_on_the_feature_issue(self):
         code, out = self.prove(self.ROWS, False)
-        sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.repo, capture_output=True, text=True, check=True).stdout.strip()
+        sha = self.sha
         self.assertEqual(code, 1, out)
         self.record.assert_called_once()
         issue, events = self.record.call_args.args

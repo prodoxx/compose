@@ -55,9 +55,11 @@ class Checkout(tuple):
 _checkouts = {}
 
 def checkout(path):
-    """The Checkout `path` is in, None outside a git worktree. Asked once per process per path: a directory stays in the checkout
+    """The Checkout `path` is in, None outside a git worktree. Asked of git once per process per path: a directory stays in the checkout
     it is in for as long as its git dir exists, so only a found one is kept, and a removed one is asked again."""
     here = Path(path).resolve()
+    if not os.environ.get("GIT_DIR") and not any((d / ".git").exists() for d in (here, *here.parents)):
+        return None  # git finds a checkout through a .git above it, so with none there is nothing to ask
     c = _checkouts.get(here)
     if c is None or not c.git_dir.is_dir():
         p = sh(["git", "rev-parse", "--path-format=absolute", "--show-toplevel", "--absolute-git-dir", "--git-common-dir"], here, check=False) \

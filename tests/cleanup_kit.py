@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import importlib.machinery, importlib.util, os, subprocess, sys, tempfile
+import importlib.machinery, importlib.util, os, sys
 from pathlib import Path
 os.environ["COMPOSE_NO_TREEHOUSE"] = "1"  # these cover the plain-worktree path, not the treehouse pool
 os.environ["HERDR_ENV"] = ""
@@ -8,21 +8,6 @@ _spec = importlib.util.spec_from_loader("fc", importlib.machinery.SourceFileLoad
 fc = importlib.util.module_from_spec(_spec)
 for _m in [m for m in sys.modules if m.startswith("fc_") and m not in ("fc_cost", "fc_mcp", "fc_sessions")]: del sys.modules[_m]
 _spec.loader.exec_module(fc)
-
-CLI = str(Path(__file__).resolve().parents[1] / "bin" / "compose")
-
-ENV = {"COMPOSE_NO_TRAIL": "1", "HERDR_ENV": "", "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
-
-def repo():
-    r = Path(tempfile.mkdtemp()).resolve() / "repo"
-    r.mkdir()
-    run = lambda *a, cwd=r: subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True, text=True)
-    run("init", "-q", "-b", "main")
-    (r / "a.txt").write_text("base\n")
-    (r / ".git" / "info" / "exclude").write_text("/.compose/\n")
-    run("add", "-A"); run("commit", "-qm", "init")
-    return r, run
-
 
 class FakeLinear:
     """Linear in memory: issues by identifier, each with a state and a parent. A state's id is its name."""

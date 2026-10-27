@@ -146,7 +146,8 @@ class CrewPiLocal(unittest.TestCase):
                   mock.patch.object(fc.fc_herdr, "herdr", lambda *args, **kw: self.calls.append(args) or replies.get(args[:2], {})), mock.patch("time.sleep"),
                   mock.patch.object(fc.fc_herdr, "herdr_env", return_value=True), mock.patch.object(fc.fc_herdr, "herdr_space", return_value="w9"),
                   mock.patch.object(fc.fc_herdr, "herdr_find_space", return_value="w9"), mock.patch.object(fc.fc_mcp, "installed_servers", return_value=[]),
-                  mock.patch.object(fc.fc_models, "model_available", return_value=(True, "")), mock.patch.dict(os.environ), mock.patch("builtins.print")):
+                  mock.patch.object(fc.fc_models, "model_available", return_value=(True, "")), mock.patch.object(fc.fc_pin, "cli_commit", return_value="abc1234"),
+                  mock.patch.dict(os.environ), mock.patch("builtins.print")):
             p.start(); self.addCleanup(p.stop)
         (self.d / ".compose" / "shop").mkdir(parents=True); os.environ.pop("COMPOSE_PI_MODEL", None)
     def start(self, model):

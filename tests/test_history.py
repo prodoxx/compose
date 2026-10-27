@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import contextlib, importlib.machinery, importlib.util, io, json, os, shutil, subprocess, sys, tempfile, unittest
+import contextlib, importlib.machinery, importlib.util, io, json, os, shutil, sys, tempfile, unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -12,18 +12,15 @@ for _m in [m for m in sys.modules if m.startswith("fc_") and m not in ("fc_cost"
 _spec.loader.exec_module(fc)
 import fc_cost, fc_history, fc_ledger  # noqa: E402
 
-ENV = {"HERDR_ENV": "", "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+ENV = {"HERDR_ENV": ""}
 
 
 class Repo(unittest.TestCase):
-    """A git repository with one project, and a history file of its own."""
+    """A plain folder with one project, and a history file of its own."""
     def setUp(self):
         env = mock.patch.dict(os.environ, ENV); env.start(); self.addCleanup(env.stop)
         self.repo = Path(tempfile.mkdtemp()).resolve()
         self.addCleanup(shutil.rmtree, self.repo, True)
-        git = lambda *a: subprocess.run(["git", *a], cwd=self.repo, check=True, capture_output=True, text=True).stdout.strip()
-        git("init", "-q", "-b", "main"); (self.repo / "a.txt").write_text("base\n"); git("add", "-A"); git("commit", "-qm", "init")
-        (self.repo / ".git" / "info" / "exclude").write_text("/.compose/\n")
         self.proj = self.repo / ".compose" / "p"
         (self.proj / "results").mkdir(parents=True)
         self.cfg = Path(tempfile.mkdtemp())
@@ -49,9 +46,8 @@ class Record(Repo):
         fc_history.record(self.proj, self.repo, "run-start", tasks=2)
         shutil.rmtree(self.repo / ".compose")  # what returning a worktree does to results/
         wt = self.repo.parent / (self.repo.name + "-wt")
-        subprocess.run(["git", "worktree", "add", "-q", str(wt), "-b", "other"], cwd=self.repo, check=True)
-        self.addCleanup(shutil.rmtree, wt, True)
-        self.assertEqual([e["kind"] for e in fc_history.read(wt)], ["run-start"])
+        with mock.patch.object(fc_history.fc_core, "main_checkout", return_value=self.repo):  # git says a linked worktree belongs to the main checkout
+            self.assertEqual([e["kind"] for e in fc_history.read(wt)], ["run-start"])
         self.assertEqual(fc_history.read(Path(tempfile.mkdtemp()).resolve()), [])  # another repository sees none of it
 
     def test_an_unwritable_history_never_fails_the_run(self):
@@ -89,7 +85,7 @@ class RunWrites(Repo):
         fc.fc_core.LEDGER.rows.clear()
         with mock.patch.object(real, "preflight"), mock.patch.object(real.fc_proc, "keep_awake"), mock.patch.object(real.fc_herdr, "herdr_space"), \
                 mock.patch.object(real.fc_blockers, "released", return_value=({}, {})), mock.patch.object(real.fc_implement, "run_task", run_task), \
-                mock.patch.object(real, "triage"), mock.patch.object(real.fc_stack, "register_stack"), mock.patch.object(real.fc_core, "say"):
+                mock.patch.object(real, "triage"), mock.patch.object(real.fc_fast, "run_events", return_value=[]), mock.patch.object(real.fc_stack, "register_stack"), mock.patch.object(real.fc_core, "say"):
             with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as e:
                 real.run_tasks(self.repo, self.proj, [m for m in fc.fc_tasks.load_tasks(self.proj, required=True) if only in (None, m["id"])],
                                SimpleNamespace(attempts=3, parallel=1, trunk="main", no_stack=True))
@@ -140,7 +136,10 @@ class VerifyWrites(Repo):
         with mock.patch.object(fc.fc_verify, "run_stages", return_value=(passed, {"checks": []}, "" if passed else "finding")), mock.patch.object(fc_ledger, "verify_record"), \
                 mock.patch.object(fc.fc_verify.fc_costevent, "verify_events", return_value=[]), mock.patch.object(fc.fc_tasks, "load_tasks", return_value=[{"id": "001"}]), \
                 mock.patch.object(fc.fc_core.LEDGER, "snapshot", return_value={"total": 0.37}), mock.patch.object(fc.fc_verify, "verify_failed"), \
-                mock.patch.object(fc.fc_linear, "linear_reconcile"), mock.patch.object(fc.fc_core, "say"), contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
+                mock.patch.object(fc.fc_linear, "linear_reconcile"), mock.patch.object(fc.fc_core, "say"), mock.patch.object(fc.fc_verify.fc_worktree, "dirty_paths", return_value=[]), \
+                mock.patch.object(fc.fc_verify.fc_worktree, "review_base", return_value="main"), \
+                mock.patch.object(fc.fc_core, "sh", return_value=SimpleNamespace(stdout="main\n", returncode=0)), \
+                contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
             fc.fc_verify.verify_rounds(self.repo, self.proj, {"review_base": "main"}, SimpleNamespace(fix=0, skip_review=True, review_only=False), [], 0)
 
     def test_each_round_and_the_end_are_one_line(self):

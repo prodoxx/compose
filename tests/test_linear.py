@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import contextlib, importlib.machinery, importlib.util, io, json, os, tempfile, unittest, urllib.error
+import contextlib, importlib.machinery, importlib.util, io, json, os, subprocess, tempfile, unittest, urllib.error
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -10,7 +10,7 @@ _spec = importlib.util.spec_from_loader("fc", importlib.machinery.SourceFileLoad
 fc = importlib.util.module_from_spec(_spec)
 for _m in [m for m in sys.modules if m.startswith("fc_") and m not in ("fc_cost", "fc_mcp", "fc_sessions")]: del sys.modules[_m]
 _spec.loader.exec_module(fc)
-import fc_evidence, fc_ledger, fc_plan  # noqa: E402
+import fc_evidence, fc_ledger, fc_plan, fc_routectx  # noqa: E402
 
 
 def issue(ident, title, desc="", blocked_by=()):
@@ -27,6 +27,7 @@ class Sync(unittest.TestCase):
         self.proj = Path(tempfile.mkdtemp()) / "feat"
         self.proj.mkdir()
         (self.proj / "linear.json").write_text('{"feature": "ENG-1"}')
+        p = mock.patch.object(fc.fc_core, "sh", return_value=subprocess.CompletedProcess([], 0, "", "")); p.start(); self.addCleanup(p.stop)
 
     def sync(self, issues, feature="ENG-1"):
         return fc.fc_tasks.sync_tasks(self.proj, {"feature": {"id": feature, "title": "Feature", "description": "## Plan\nThe plan."}, "issues": issues})
@@ -187,6 +188,8 @@ class HandTasks(unittest.TestCase):
             issue("ENG-2", "Remove tests", block(id="001", kind="hand", files="tests/a.py", test="python3 -m unittest tests.a")),
             issue("ENG-3", "Store", block(id="002", files="a.go", protected="a_test.go", test="go test"))]})
         self.by = {m["id"]: m for m in fc.fc_tasks.load_tasks(self.proj)}
+        for mod, name, value in ((fc_routectx, "context_hash", "h" * 16), (fc.fc_core, "sh", subprocess.CompletedProcess([], 0, "a" * 40, ""))):
+            p = mock.patch.object(mod, name, return_value=value); p.start(); self.addCleanup(p.stop)
 
     def test_sync_keeps_a_hand_task_with_its_kind_and_the_code_filter_keeps_it_for_the_stack(self):
         self.assertEqual((self.by["001"]["kind"], self.by["001"]["files"], self.by["001"]["protected"]), ("hand", ["tests/a.py"], []))
@@ -225,6 +228,8 @@ class DesignTasks(unittest.TestCase):
             design(1, " Checkout/Cart ,Checkout/Pay"), issue("ENG-2", "Store", block(id="002", files="a.go, b.go", protected="a_test.go", figma_nodes="7-21, 9:144", test="go test")),
             design(3, "Home/Hero"), design(4, "Checkout/Summary"), design(5, "Home/Footer")]})
         self.by = {m["id"]: m for m in fc.fc_tasks.load_tasks(self.proj)}
+        for mod, name, value in ((fc_routectx, "context_hash", "h" * 16), (fc.fc_core, "sh", subprocess.CompletedProcess([], 0, "a" * 40, ""))):
+            p = mock.patch.object(mod, name, return_value=value); p.start(); self.addCleanup(p.stop)
 
     def test_sync_keeps_kind_and_nodes_and_code_tasks_drops_design(self):
         self.assertEqual((self.by["001"]["kind"], self.by["001"]["nodes"]), ("design", ["Checkout/Cart", "Checkout/Pay"]))
@@ -631,16 +636,13 @@ class ReadyRefresh(unittest.TestCase):
             self.assertEqual(calls.mock_calls[-1][0], "print" if stdin else "refresh_ready")  # after the task list
 
     def test_clean_refreshes_the_linked_feature_after_moving_merged_work(self):
-        import subprocess
         r = Path(tempfile.mkdtemp()).resolve()
-        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
-        g = lambda *a: subprocess.run(["git", *a], cwd=r, check=True, capture_output=True, env=env)
-        g("init", "-q", "-b", "main"); g("commit", "-q", "--allow-empty", "-m", "init"); g("checkout", "-q", "-b", "compose/p")
         proj = r / ".compose" / "p"; (proj / "results").mkdir(parents=True)
         (proj / "verify.json").write_text("{}"); (proj / "linear.json").write_text(json.dumps({"feature": "ENG-7"}))
         calls = mock.Mock()
         with mock.patch.object(fc.fc_linear, "linear_merged", calls.linear_merged), mock.patch.object(fc.fc_linear, "refresh_ready", calls.refresh_ready), \
-                mock.patch("sys.stdout", io.StringIO()), mock.patch.dict(os.environ, {"COMPOSE_NO_TREEHOUSE": "1"}):
+                mock.patch("sys.stdout", io.StringIO()), mock.patch.dict(os.environ, {"COMPOSE_NO_TREEHOUSE": "1"}), \
+                mock.patch.object(fc.fc_core, "sh", return_value=subprocess.CompletedProcess([], 0, "", "")), mock.patch.object(fc.fc_core, "current_branch", return_value="compose/p"):
             fc.fc_clean.clean_project(r, "p", r, proj, explicit=True)
         self.assertEqual(calls.mock_calls[-2:], [mock.call.linear_merged("ENG-7", [], False, scope=None), mock.call.refresh_ready(proj, "ENG-7")])
 

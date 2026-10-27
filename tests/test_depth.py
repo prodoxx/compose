@@ -95,9 +95,8 @@ class DepthEvents(unittest.TestCase):
         self.ledger = importlib.import_module("fc_ledger")  # the foundation's module, not on every branch
         self.repo = Path(tempfile.mkdtemp()).resolve(); self.proj = self.repo / ".compose" / "p"; self.proj.mkdir(parents=True)
         (self.proj / "linear.json").write_text(json.dumps({"feature": "ENG-1"}))
-        git = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=self.repo, check=True, capture_output=True, text=True)
-        git("init", "-q", "-b", "main"); (self.repo / "a.txt").write_text("x"); git("add", "-A"); git("commit", "-qm", "init")
-        self.head = git("rev-parse", "HEAD").stdout.strip()
+        self.head = "a" * 40
+        mock.patch.object(fc.fc_core, "sh", return_value=subprocess.CompletedProcess([], 0, self.head + "\n", "")).start(); self.addCleanup(mock.patch.stopall)
 
     def events(self, cfg, run_cfg, depth="FAST", sha=SHA):
         return fc_depth.depth_events(cfg, run_cfg, depth, "061", sha)
@@ -139,6 +138,7 @@ class VerifyDepth(unittest.TestCase):
         (proj / "results" / "tasks.json").write_text(json.dumps({"feature": {}, "tasks": metas, "issues": issues}))
         calls, said, a = [], [], mock.Mock(repo=str(repo), project="p", skip_e2e=False, skip_review=False, fix=0, review_only=False)
         with mock.patch.object(fc.fc_core, "project_dir", return_value=proj), mock.patch.object(fc.fc_core, "say", said.append), \
+                mock.patch.object(fc.fc_update, "refuse_while_building"), mock.patch.object(fc.fc_init, "start_checks"), mock.patch.object(fc.fc_proc, "keep_awake"), mock.patch.object(fc.fc_verify.fc_reroute, "before_verify"), \
                 mock.patch.object(fc.fc_verify, "verify_root", return_value=(repo, "main", None)), mock.patch.object(fc_depth, "record_depth", side_effect=lambda *x: calls.append(("record", x))), \
                 mock.patch.object(fc.fc_verify, "verify_rounds", side_effect=lambda *x: calls.append(("rounds", x[2]))):
             fc.fc_verify.cmd_verify(a)

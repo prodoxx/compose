@@ -406,7 +406,7 @@ class TestCrewTiers(unittest.TestCase):
         (d / "config.json").write_text(json.dumps({"models": {"implementer": "pi:x/y", "crew": fc_defaults.DEFAULT_MODELS["crew"], "tiers": fc.fc_config.DEFAULT_TIERS}}))
         for p in (mock.patch.object(fc.fc_config, "CONFIG_PATH", d / "config.json"), mock.patch.object(fc.fc_config, "PROBE_CACHE", d / "probe.json"),
                   mock.patch.object(fc.fc_models, "model_available", return_value=(True, "answered")), mock.patch.object(fc.fc_mcp, "installed_servers", return_value=SERVERS),
-                  mock.patch.dict(os.environ, {"COMPOSE_ROLE": "orchestrator"})):
+                  mock.patch.object(fc.fc_pin, "cli_commit", return_value="abc1234"), mock.patch.dict(os.environ, {"COMPOSE_ROLE": "orchestrator"})):
             p.start(); self.addCleanup(p.stop)
         fc.fc_config.apply_config()
         for k in ("CREW_MODELS", "CREW_EFFORT", "CREW_FALLBACK", "TIERS"):

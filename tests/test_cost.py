@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import contextlib, hashlib, importlib.machinery, importlib.util, io, json, os, subprocess, sys, tempfile, time, unittest
+import contextlib, hashlib, importlib.machinery, importlib.util, io, json, os, sys, tempfile, time, unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -284,8 +284,6 @@ class CostCommand(unittest.TestCase):
 
     def setUp(self):
         self.repo = Path(tempfile.mkdtemp())
-        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=self.repo, check=True)
-        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "i"], cwd=self.repo, check=True)
         self.proj = self.repo / ".compose" / "shop"
         (self.proj / "results" / "crew").mkdir(parents=True)
 
@@ -315,7 +313,7 @@ class CostCommand(unittest.TestCase):
     def test_status_puts_each_projects_totals_under_its_header(self):
         other = self.repo / ".compose" / "shop22"
         (other / "results").mkdir(parents=True)
-        with self.fake():
+        with self.fake(), mock.patch.object(fc.fc_status, "board", return_value={"trunk": "main", "rows": [], "layers": {}, "stack": ""}):
             lines = fc.fc_status.render_status(self.repo, [self.proj, other]).splitlines()
         heads = [i for i, line in enumerate(lines) if line.startswith("project ")]
         self.assertEqual([lines[i + 1] for i in heads], ["  cost  11in  22cc  33cr  44out  (4 teammates)", "  cost  11in  22cc  33cr  44out  (6 teammates)"])

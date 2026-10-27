@@ -7,9 +7,25 @@ os.environ["HERDR_ENV"] = ""
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bin"))
 for _m in [m for m in sys.modules if m.startswith("fc_") and m not in ("fc_cost", "fc_mcp", "fc_sessions")]: del sys.modules[_m]
-import fc_checks, fc_config, fc_harness, fc_init, fc_links, fc_models, fc_steprun, fc_steps
+import fc_checks, fc_config, fc_core, fc_harness, fc_init, fc_links, fc_models, fc_steprun, fc_steps
 _spec = importlib.util.spec_from_loader("fc", importlib.machinery.SourceFileLoader("fc", str(Path(__file__).resolve().parents[1] / "bin" / "compose.py")))
 fc = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(fc)
+
+def fake_checkouts(tmp, *worktrees, clone=None):
+    """Folders under `tmp` that are checkouts, git never asked: each worktree of a repo `<name>-main`, and a clone, which has one git dir. Returns {folder: Checkout}."""
+    found = {}
+    for name in worktrees:
+        common = tmp / f"{name}-main" / ".git"; (tmp / name).mkdir(parents=True); common.mkdir(parents=True)
+        found[tmp / name] = fc_core.Checkout((tmp / name, common / "worktrees" / name, common))
+    if clone: clone.mkdir(); found[clone] = fc_core.Checkout((clone, clone / ".git", clone / ".git"))
+    return found
+
+def in_repo(case, repo):
+    """`repo` is a checkout for the hooks, git never asked: checkout() finds it, and the one question the edit guard puts to git says yes under it and no elsewhere."""
+    top = Path(repo).resolve(); under = lambda path: top in (Path(path).resolve(), *Path(path).resolve().parents)
+    for p in (mock.patch.object(fc_core, "checkout", lambda path: fc_core.Checkout((top, top / ".git", top / ".git")) if under(path) else None),
+              mock.patch.object(fc_core, "sh", lambda cmd, cwd, **kw: SimpleNamespace(returncode=0 if under(cwd) else 1, stdout=""))):
+        p.start(); case.addCleanup(p.stop)
 
 FC_MODULES = {n: m for n, m in sys.modules.items() if n.startswith("fc_")}
 
@@ -432,7 +448,7 @@ class HarnessPassDown(unittest.TestCase):
                 mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), mock.patch.object(fc.fc_herdr, "herdr", herdr), mock.patch.object(fc.fc_models, "model_available", return_value=(True, "")), \
                 mock.patch.object(fc.fc_herdr, "herdr_env", return_value=True), mock.patch.object(fc.fc_herdr, "herdr_space", return_value="w9"), mock.patch.object(time, "sleep"), \
                 mock.patch.object(fc.fc_herdr, "herdr_find_space", return_value="w9"), \
-                mock.patch.object(fc.fc_claude, "claude_trusted", return_value=True), mock.patch("builtins.print"):
+                mock.patch.object(fc.fc_claude, "claude_trusted", return_value=True), mock.patch.object(fc.fc_pin, "cli_commit", return_value="abc1234"), mock.patch("builtins.print"):
             for k in ("COMPOSE_HARNESS", "CLAUDECODE", "CODEX_THREAD_ID"): os.environ.pop(k, None)
             os.environ.update(env)
             try: fc.main()
@@ -681,14 +697,11 @@ class DoctorWithoutClaude(unittest.TestCase):
 class CodexArgv(unittest.TestCase):
     def setUp(self):
         d = tempfile.TemporaryDirectory(); self.addCleanup(d.cleanup)
-        self.tmp, self.results = Path(d.name), Path(d.name, "results")
-        git = lambda *a, cwd: subprocess.run(["git", "-C", str(cwd), "-c", "user.name=t", "-c", "user.email=t@t", *a], check=True, capture_output=True, text=True).stdout.strip()
-        def tree(name):  # a worktree of its own repo, with the dirs it needs: the shared one and its own
-            main, wt = self.tmp / f"{name}-main", self.tmp / name
-            main.mkdir(); git("init", "-q", cwd=main); git("commit", "-q", "--allow-empty", "-m", "i", cwd=main); git("worktree", "add", "-q", "-b", name, str(wt), cwd=main)
-            return wt, [str(Path(git(*a, cwd=wt)).resolve()) for a in (("rev-parse", "--path-format=absolute", "--git-common-dir"), ("rev-parse", "--absolute-git-dir"))]
-        (self.cwd, self.dirs), (self.work, self.wdirs) = tree("cwd"), tree("work")
-        self.clone = self.tmp / "clone"; self.clone.mkdir(); git("init", "-q", cwd=self.clone)
+        self.tmp, self.results = Path(d.name).resolve(), Path(d.name, "results").resolve()
+        self.clone = self.tmp / "clone"; found = fake_checkouts(self.tmp, "cwd", "work", clone=self.clone)
+        p = mock.patch.object(fc_core, "checkout", lambda path: found.get(Path(path).resolve())); p.start(); self.addCleanup(p.stop)
+        self.cwd, self.work = self.tmp / "cwd", self.tmp / "work"
+        self.dirs, self.wdirs = ([str(found[w].common), str(found[w].git_dir)] for w in (self.cwd, self.work))
 
     def argv(self, model="codex:gpt-6.1-sol", effort="high", prompt="p", cwd=None, work=None):
         return [str(x) for x in fc_harness.crew_argv(model, effort, prompt, "/s/SKILL.md", cwd or self.cwd, self.results, work)]
@@ -751,7 +764,7 @@ class CodexStart(unittest.TestCase):
                 mock.patch.object(fc.fc_herdr, "herdr_env", return_value=True), mock.patch.object(fc.fc_herdr, "herdr_space", return_value="w9"), mock.patch.object(fc.fc_herdr, "herdr_find_space", return_value="w9"), \
                 mock.patch.object(fc.fc_claude, "claude_trusted", return_value=trusted), mock.patch.object(fc.fc_models, "model_available", return_value=(True, "")), \
                 mock.patch.object(fc.fc_mcp, "installed_servers", return_value=[]), mock.patch.object(fc.fc_config, "CREW_MODELS", {role: entry}), mock.patch.object(fc.fc_config, "CREW_EFFORT", {role: "high"}), \
-                mock.patch.object(fc.fc_hooks, "SKILL_DIR", skill), mock.patch("builtins.print"):
+                mock.patch.object(fc.fc_hooks, "SKILL_DIR", skill), mock.patch.object(fc.fc_pin, "cli_commit", return_value="abc1234"), mock.patch("builtins.print"):
             fc.fc_crew.cmd_crew(a)
         start = next(c for c in calls if c[:2] == ("agent", "start"))
         return start, ready, json.loads(next(fc.fc_crew.crew_dir(proj).glob("*.json")).read_text()), proj, calls
@@ -1042,7 +1055,7 @@ class HookTrust(unittest.TestCase):
 class CodexGuard(unittest.TestCase):
     def setUp(self):
         self.repo = Path(tempfile.mkdtemp())
-        fc.fc_core.sh(["git", "init", "-q"], self.repo)
+        in_repo(self, self.repo)
         d = Path(tempfile.mkdtemp())
         (d / "skill").mkdir(); (d / "skill" / "SKILL.md").write_text("v1\n")
         for p in (mock.patch.object(fc.fc_hooks, "SKILL_DIR", d / "skill"), mock.patch.object(fc.fc_hooks, "SKILL_SEEN", d / "seen")):
@@ -1246,12 +1259,10 @@ class CodexOnce(unittest.TestCase):
 
     def setUp(self):
         d = tempfile.TemporaryDirectory(); self.addCleanup(d.cleanup)
-        self.tmp = Path(d.name)
-        git = lambda *a, cwd: subprocess.run(["git", "-C", str(cwd), "-c", "user.name=t", "-c", "user.email=t@t", *a], check=True, capture_output=True, text=True).stdout.strip()
-        main, self.wt, self.clone = self.tmp / "main", self.tmp / "wt", self.tmp / "clone"
-        for f in (main, self.clone): f.mkdir(); git("init", "-q", cwd=f)
-        git("commit", "-q", "--allow-empty", "-m", "i", cwd=main); git("worktree", "add", "-q", "-b", "wt", str(self.wt), cwd=main)
-        self.dirs = [str(Path(git(*a, cwd=self.wt)).resolve()) for a in (("rev-parse", "--path-format=absolute", "--git-common-dir"), ("rev-parse", "--absolute-git-dir"))]
+        self.tmp = Path(d.name).resolve()
+        self.clone = self.tmp / "clone"; found = fake_checkouts(self.tmp, "wt", clone=self.clone); self.wt = self.tmp / "wt"
+        p = mock.patch.object(fc_core, "checkout", lambda path: found.get(Path(path).resolve())); p.start(); self.addCleanup(p.stop)
+        self.dirs = [str(found[self.wt].common), str(found[self.wt].git_dir)]
         self.ledger = fc.fc_core.Ledger()
         p = mock.patch.object(fc.fc_core, "LEDGER", self.ledger); p.start(); self.addCleanup(p.stop)
 
@@ -1499,7 +1510,7 @@ class HooksCheckBadFiles(unittest.TestCase):
 class GuardRedirects(unittest.TestCase):
     def setUp(self):
         self.repo = Path(tempfile.mkdtemp())
-        fc.fc_core.sh(["git", "init", "-q"], self.repo)
+        in_repo(self, self.repo)
 
     def denied(self, cmd, role="orchestrator"):
         ev, out = {"tool_name": "Bash", "cwd": str(self.repo), "tool_input": {"command": cmd}}, io.StringIO()
@@ -1666,7 +1677,7 @@ class GuardCorpus(unittest.TestCase):
 
     def setUp(self):
         self.repo = Path(tempfile.mkdtemp())
-        fc.fc_core.sh(["git", "init", "-q"], self.repo)
+        in_repo(self, self.repo)
         for f in self.FILES:
             (self.repo / f).parent.mkdir(parents=True, exist_ok=True)
             (self.repo / f).write_text("x\n")

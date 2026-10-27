@@ -220,7 +220,8 @@ Every command is documented in [docs/cli.md](docs/cli.md).
 
 Run the CLI tests with `python3 -m tests.run test_x.py ...` for the files you changed, or `python3 -m tests.run --all` for every file (a verify or run check needs no flag), which runs the test files in parallel (`-j N`, else `COMPOSE_TEST_JOBS`, else a quarter of the cores) and prints unittest's summary; `python3 -m unittest discover -s tests` runs the same tests serially.
 Test behavior, not wording: no test pins a sentence of a doc, a brief, or a message the code does not act on, and a doc change needs no test.
-A rule that can be checked without a real git repo or process is tested without one; a real repo is for the end-to-end path and the safety failures.
+Compose has no end-to-end tests: no test runs git or builds a repository, and the git the suite puts on PATH fails any test that calls it.
+A test mocks the function that asks git, and mocks it there rather than matching git's argument lists.
 Type-check the CLI with `npx -y pyright@1.1.414 --pythonpath /usr/bin/python3` (strict; the error count is reported, nothing is gated on it).
 Run the jev tests with `cd jev && uv run pytest`, and the bp tests with `cd bp && npm test`.
 The CLI core is stdlib; `jev/` is a uv project, and `bp/` is one Node file with no dependencies.

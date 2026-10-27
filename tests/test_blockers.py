@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import importlib.machinery, importlib.util, json, os, subprocess, tempfile, unittest
+import importlib.machinery, importlib.util, json, os, tempfile, unittest
 from pathlib import Path
 from unittest import mock
 import sys
@@ -11,26 +11,19 @@ fc = importlib.util.module_from_spec(_spec)
 for _m in [m for m in sys.modules if m.startswith("fc_") and m not in ("fc_cost", "fc_mcp", "fc_sessions")]: del sys.modules[_m]
 _spec.loader.exec_module(fc)
 
-ENV = {"HERDR_ENV": "", "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
-
-
 class OutsideBlockers(unittest.TestCase):
-    """Project `found` builds NEB-10 (task 001) and NEB-11 (task 002); project `app` has a task that waits on one of them."""
+    """Project `found` builds NEB-10 (task 001) and NEB-11 (task 002); project `app` has a task that waits on one of them.
+    What git would say is `self.trunk` (the refs that are ancestors of main), `self.twins` (ref -> the main commit carrying its patch) and `self.heads`."""
     def setUp(self):
-        self.env = mock.patch.dict(os.environ, ENV); self.env.start(); self.addCleanup(self.env.stop)
         self.repo = Path(tempfile.mkdtemp())
-        self.git("init", "-q", "-b", "main")
-        self.commit("base")
-        (self.repo / ".git" / "info" / "exclude").write_text("/.compose/\n")
+        self.trunk, self.twins, self.heads = set(), {}, ["main"]
+        for name, fake in (("in_base", lambda repo, ref, base: ref in self.trunk), ("landed_as", lambda repo, ref, base: self.twins.get(ref, "")),
+                           ("missing", lambda repo, ref, base: f"{ref} is not in {base}")):
+            patch = mock.patch.object(fc.fc_blockers, name, fake); patch.start(); self.addCleanup(patch.stop)
+        patch = mock.patch.object(fc.fc_worktree, "heads", lambda repo: self.heads); patch.start(); self.addCleanup(patch.stop)
+        patch = mock.patch.object(fc.fc_core, "worktree_branches", lambda repo: [(self.repo, "main")]); patch.start(); self.addCleanup(patch.stop)
         self.found = self.project("found", "NEB-1", [("001", "NEB-10", "passed"), ("002", "NEB-11", "passed")])
         self.app = self.project("app", "NEB-2", [("010", "NEB-20", None)], waits=["NEB-10 (In Review)"])
-
-    def git(self, *a):
-        return subprocess.run(["git", *a], cwd=self.repo, check=True, capture_output=True, text=True).stdout.strip()
-
-    def commit(self, name):
-        (self.repo / name).write_text(name)
-        self.git("add", "-A"); self.git("commit", "-qm", name)
 
     def project(self, name, feature, tasks, waits=()):
         proj = self.repo / ".compose" / name
@@ -47,8 +40,7 @@ class OutsideBlockers(unittest.TestCase):
         return fc.fc_blockers.released(self.repo, self.app, fc.fc_tasks.load_tasks(self.app), base)
 
     def test_a_blocker_whose_task_branch_is_in_the_trunk_holds_nothing_whatever_its_state(self):
-        self.git("checkout", "-q", "-b", "found-001"); self.commit("one"); self.git("checkout", "-q", "main")
-        self.git("merge", "-q", "--no-ff", "-m", "m", "found-001")
+        self.trunk = {"found-001"}
         for state in ("In Review", "Todo"):
             (self.app / "results" / "tasks.json").write_text(json.dumps({"feature": {"id": "NEB-2"}, "issues": {}, "tasks": [
                 {"id": "010", "kind": "code", "linear": "NEB-20", "waits_on": [f"NEB-10 ({state})"]}]}))
@@ -58,10 +50,9 @@ class OutsideBlockers(unittest.TestCase):
             self.assertEqual(fc.fc_tasks.waiting(fc.fc_tasks.load_tasks(self.app), out), {})
 
     def test_a_blocker_whose_task_branch_is_not_in_the_trunk_stays_held_with_the_reason(self):
-        self.git("checkout", "-q", "-b", "found-001"); self.commit("one"); self.git("checkout", "-q", "main")
         out, still = self.released()
         self.assertEqual(out, {})
-        self.assertEqual(still, {"NEB-10": "found task 001: found-001 is not in main (missing %s one); found: no stack built yet" % self.git("rev-parse", "--short", "found-001")})
+        self.assertEqual(still, {"NEB-10": "found task 001: found-001 is not in main; found: no stack built yet"})
         self.assertIn("NEB-10", fc.fc_tasks.waiting(fc.fc_tasks.load_tasks(self.app), out)["010"]["reason"])
 
     def test_a_route_hold_is_no_blocker_and_is_not_judged(self):
@@ -70,33 +61,28 @@ class OutsideBlockers(unittest.TestCase):
         self.assertEqual(self.released(), ({}, {}))
 
     def test_a_task_rebased_into_the_stack_counts_when_the_stack_top_is_in_the_trunk(self):
-        self.git("checkout", "-q", "-b", "found-001"); self.commit("one"); self.git("checkout", "-q", "main")
-        self.git("checkout", "-q", "-b", "found-layer-01"); self.commit("one again"); self.git("checkout", "-q", "main")
+        self.heads = ["main", "found-001", "found-layer-01"]
         self.assertEqual(self.released()[0], {})
-        self.git("merge", "-q", "--no-ff", "-m", "m", "found-layer-01")
+        self.trunk = {"found-layer-01"}
         out, still = self.released()
         self.assertEqual((list(out), still), (["NEB-10"], {}))
         self.assertIn("found-layer-01", out["NEB-10"])
 
     def test_a_task_commit_rebased_into_the_trunk_under_another_hash_counts_by_its_patch(self):
-        self.git("checkout", "-q", "-b", "found-001"); self.commit("one"); self.git("checkout", "-q", "main")
         (self.found / "results" / "002.json").unlink()  # the stack top proves nothing: task 002 is open
-        self.commit("other"); self.git("cherry-pick", "found-001")
+        self.twins = {"found-001": "abcdef1234"}
         out, still = self.released()
         self.assertEqual((list(out), still), (["NEB-10"], {}))
-        self.assertIn("found-001 is in main as " + self.git("rev-parse", "--short=7", "HEAD"), out["NEB-10"])
+        self.assertIn("found-001 is in main as abcdef1", out["NEB-10"])
 
     def test_a_task_commit_whose_patch_is_not_in_the_trunk_stays_held(self):
-        self.git("checkout", "-q", "-b", "found-001"); self.commit("one"); self.git("checkout", "-q", "main")
-        self.commit("other")
         out, still = self.released()
         self.assertEqual(out, {})
         self.assertIn("found-001 is not in main", still["NEB-10"])
 
     def test_a_stack_whose_tasks_have_not_all_passed_proves_nothing(self):
         (self.found / "results" / "002.json").unlink()
-        self.git("checkout", "-q", "-b", "found-layer-01"); self.commit("one"); self.git("checkout", "-q", "main")
-        self.git("merge", "-q", "--no-ff", "-m", "m", "found-layer-01")
+        self.heads, self.trunk = ["main", "found-layer-01"], {"found-layer-01"}
         self.assertEqual(self.released(), ({}, {"NEB-10": "found task 001: found-001 is not in main; found: task 002 not passed yet"}))
 
     def test_a_blocker_no_project_has_stays_held(self):
@@ -105,9 +91,7 @@ class OutsideBlockers(unittest.TestCase):
         self.assertEqual(self.released(), ({}, {"NEB-99": "no project of this repository has NEB-99 in its last sync"}))
 
     def test_a_backup_branch_beside_the_layers_is_not_a_layer(self):
-        for b in ("found-layer-01", "found-layer-02", "found-layer-01-prerebase"):
-            self.git("checkout", "-q", "-b", b, "main"); self.commit(b); self.git("checkout", "-q", "main")
-        self.git("merge", "-q", "--no-ff", "-m", "m", "found-layer-02")
+        self.heads, self.trunk = ["main", "found-layer-01", "found-layer-02", "found-layer-01-prerebase"], {"found-layer-02"}
         out, still = self.released()
         self.assertEqual((list(out), still), (["NEB-10"], {}))
         self.assertIn("found-layer-02", out["NEB-10"])

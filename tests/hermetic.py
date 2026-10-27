@@ -4,10 +4,11 @@ On import the process gets a temp HOME and COMPOSE_CONFIG and loses the key vari
 the bin modules compute at import land there; each test then runs with its own fresh temp HOME (see temp_home) and COMPOSE_CONFIG, and its environment is restored after.
 A test that still changes the real ~/.compose files that hold keys or config (created, written, moved or deleted, from the test
 process or any subprocess) fails, naming the files, never their content.
-Nor does a test reach the real machine: `lsof` and `herdr` on PATH are fakes (see guard_dir). The fake lsof answers only for the
+Nor does a test reach the real machine: `lsof`, `herdr` and `git` on PATH are fakes (see guard_dir). The fake lsof answers only for the
 listeners a test registers with listen() and, for a port the call names, the machine's socket table (netstat), so it never walks the machine's processes; the fake herdr answers its version and integration status and fails
-the test that ran any other call, naming it. Every process a test registers is killed when the test ends."""
-import atexit, hashlib, json, os, pwd, shutil, signal, subprocess, sys, tempfile, time, unittest
+the test that ran any other call, naming it. Compose has no end-to-end tests: the fake git answers only its version and fails the test
+that ran any other call, so a test mocks the function that asks git instead of building a repository. Every process a test registers is killed when the test ends."""
+import atexit, hashlib, json, os, pwd, shutil, signal, sys, tempfile, time, unittest
 from pathlib import Path
 from unittest import mock
 
@@ -134,8 +135,7 @@ def temp_home():
     COMPOSE_NO_AWAKE=1 keeps a test that reaches run, verify, watch or crew start from leaving a caffeinate on the suite's pid.
     COMPOSE_NO_LOAD=1 switches the load gate off: a test that reaches crew start, timed, run or verify would otherwise read this
     machine's real load and hold or wait when it is high; a test of the gate pops it or patches fc_load.off.
-    GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME and GIT_COMMITTER_EMAIL give a test a git identity, because a temp
-    HOME has no ~/.gitconfig, so git would refuse its commits with "Author identity unknown"."""
+    """
     home = Path(tempfile.mkdtemp(prefix="compose-home-")).resolve()
     (home / "guard").mkdir()
     for rel, text in INSTALLED.items():
@@ -146,8 +146,7 @@ def temp_home():
     (home / ".graft").mkdir()
     (home / ".graft" / "update-check.json").write_text(json.dumps({"latest": None, "checkedAt": int(time.time() * 1000)}))
     return {"HOME": str(home), "COMPOSE_CONFIG": str(home / ".compose" / "config.json"), "DO_NOT_TRACK": "1", "COMPOSE_NO_PREFLIGHT": "1", "COMPOSE_NO_AWAKE": "1", "COMPOSE_NO_LOAD": "1",
-            "PATH": guarded_path(), "COMPOSE_TEST_GUARD": str(home / "guard"), **git_env(),
-            "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+            "PATH": guarded_path(), "COMPOSE_TEST_GUARD": str(home / "guard")}
 
 
 FAKE_LSOF = """#!{python}
@@ -188,40 +187,25 @@ echo "herdr $*" >> "${COMPOSE_TEST_GUARD:-/dev/null}/calls"
 echo '{"error": {"code": "test_guard", "message": "a test must not reach the real herdr"}}'
 exit 1
 """
+FAKE_GIT = """#!/bin/sh
+[ "$*" = "--version" ] && { echo "git version 99.0.0"; exit 0; }
+echo "git $*" >> "${COMPOSE_TEST_GUARD:-/dev/null}/calls"
+echo "fatal: a test must not run git; mock the function that asks it" >&2
+exit 128
+"""
 _guard = None
 
 
 def guard_dir():
-    """The directory holding the fake lsof and herdr, first on every test's PATH."""
+    """The directory holding the fake lsof, herdr and git, first on every test's PATH."""
     global _guard
     if _guard is None:
         _guard = Path(_mkdtemp(prefix="compose-guard-")).resolve()
         atexit.register(shutil.rmtree, _guard, ignore_errors=True)
-        for name, body in (("lsof", FAKE_LSOF.format(python=sys.executable)), ("herdr", FAKE_HERDR)):
+        for name, body in (("lsof", FAKE_LSOF.format(python=sys.executable)), ("herdr", FAKE_HERDR), ("git", FAKE_GIT)):
             (_guard / name).write_text(body)
             _chmod(_guard / name, 0o755)
     return _guard
-
-
-_git_env = None
-
-
-def git_env():
-    """On macOS /usr/bin/git is an xcrun shim that costs ~7 ms a call on top of git's own ~4, and the suite makes tens of
-    thousands of git calls. guard_dir gets a link to the real git; git finds its helpers through the link only when told where."""
-    global _git_env
-    if _git_env is None:
-        _git_env = {}
-        if sys.platform == "darwin" and shutil.which("git") == "/usr/bin/git":
-            try:
-                real = Path(subprocess.run(["xcrun", "-f", "git"], capture_output=True, text=True, timeout=10).stdout.strip())
-            except (OSError, subprocess.SubprocessError):
-                real = Path()
-            core, templates = real.parents[1] / "libexec" / "git-core", real.parents[1] / "share" / "git-core" / "templates"
-            if real.name == "git" and real.is_file() and core.is_dir():
-                (guard_dir() / "git").symlink_to(real)
-                _git_env = {"GIT_EXEC_PATH": str(core), **({"GIT_TEMPLATE_DIR": str(templates)} if templates.is_dir() else {})}
-    return _git_env
 
 
 def guarded_path():
@@ -244,7 +228,7 @@ def guard_calls(tool=None, clear=False):
 
 
 def guarded(data):
-    """Kill every process the test registered with listen(), then fail the test if it ran the fake herdr."""
+    """Kill every process the test registered with listen(), then fail the test if it ran the fake herdr or git."""
     f = Path(data) / "listeners"
     for l in f.read_text().splitlines() if f.exists() else []:
         try:
@@ -252,9 +236,11 @@ def guarded(data):
         except (ProcessLookupError, PermissionError, ValueError):
             pass
     calls = Path(data) / "calls"
-    herdr = [l for l in calls.read_text().splitlines() if l.startswith("herdr ")] if calls.exists() else []
-    if herdr:
+    lines = calls.read_text().splitlines() if calls.exists() else []
+    if herdr := [l for l in lines if l.startswith("herdr ")]:
         raise AssertionError(f"this test ran the real herdr, which starts agents and tabs on the user's machine: {'; '.join(herdr)}")
+    if git := [l for l in lines if l.startswith("git ")]:
+        raise AssertionError(f"this test ran git ({len(git)} calls, first: {git[0]}); compose has no end-to-end tests, so mock the function that asks git")
 
 
 def snapshot():

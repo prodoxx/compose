@@ -3,6 +3,7 @@ import contextlib, importlib.machinery, importlib.util, io, json, os, tempfile, 
 from pathlib import Path
 from unittest import mock
 import shutil, subprocess, sys, time
+from types import SimpleNamespace
 os.environ["COMPOSE_NO_TREEHOUSE"] = "1"  # these cover the plain-worktree path, not the treehouse pool
 os.environ["HERDR_ENV"] = ""
 
@@ -21,6 +22,7 @@ def snap(proj):
 
 _patches = [mock.patch.object(time, "sleep"),  # crew start waits for the agent to be working; a fake herdr answering {} never is, so do not sleep through the wait
             mock.patch.object(fc.fc_mcp, "installed_servers", side_effect=lambda cwd: []),  # no test runs the real `claude mcp list`
+            mock.patch.object(fc.fc_pin, "cli_commit", return_value="abc1234"),  # the CLI's own checkout is never asked for its commit
             mock.patch.dict(os.environ, {"COMPOSE_ROLE": "orchestrator"}),  # every start and watch here is the team lead's unless the test clears it: the caller's own role never decides who a teammate reports to
             mock.patch.dict(os.environ)]  # restores the herdr variables setUpModule drops
 HERDR_VARS = ("HERDR_ENV", "HERDR_SOCKET_PATH", "HERDR_PANE_ID", "HERDR_WORKSPACE_ID")  # run inside herdr, a `done` report would start a real tab close against the live socket
@@ -606,9 +608,16 @@ class Attention(unittest.TestCase):
 class Guard(unittest.TestCase):
     """The team lead writes Linear and the CLI's JSON; code, tests, and docs are teammate work."""
     def setUp(self):
-        self.repo = Path(tempfile.mkdtemp())
-        fc.fc_core.sh(["git", "init", "-q"], self.repo)
+        self.repo, self.other = Path(tempfile.mkdtemp()).resolve(), Path(tempfile.mkdtemp()).resolve()
         (self.repo / ".compose" / "shop").mkdir(parents=True)
+        def checkout(path):  # the repo and the other folder are checkouts, nothing else is
+            here = Path(path).resolve()
+            root = next((r for r in (self.repo, self.other) if r == here or r in here.parents), None)
+            return fc.fc_core.Checkout((root, root / ".git", root / ".git")) if root else None
+        def sh(cmd, cwd, **kw):  # `rev-parse --is-inside-work-tree`, the one thing the edit guard asks git
+            return SimpleNamespace(returncode=0 if self.repo in Path(cwd).resolve().parents or Path(cwd).resolve() == self.repo else 1, stdout="")
+        for p in (mock.patch.object(fc.fc_core, "checkout", checkout), mock.patch.object(fc.fc_core, "sh", sh)):
+            p.start(); self.addCleanup(p.stop)
 
     def test_team_lead_cannot_edit_repo_files(self):
         for f in ("src/app.go", "tests/app_test.go", "README.md", "package.json", ".compose/shop/notes.md"):
@@ -643,7 +652,7 @@ class Guard(unittest.TestCase):
             self.assertIsNone(fc.fc_hooks.guard_decision("Edit", str(self.repo / "src/app.go"), role), role)
 
     def test_a_crew_session_cannot_switch_branches_in_the_shared_project_worktree(self):
-        other = Path(tempfile.mkdtemp()); fc.fc_core.sh(["git", "init", "-q"], other)
+        other = self.other
         decide = lambda command, cwd=self.repo, role="crew": fc.fc_hooks.switch_decision(command, str(cwd), role, str(self.repo))
         for command in ("git checkout feature", "git switch -c work", "git -c core.x=1 checkout main", f"cd {other} && cd {self.repo} && git checkout x", "echo hi; git switch main"):
             self.assertIn("move the team lead's HEAD", decide(command) or "", command)
@@ -680,7 +689,7 @@ class ToolBug(unittest.TestCase):
         log = Path(tempfile.mkdtemp()) / "tool-bugs.jsonl"
         fc.fc_crew.write_report(self.proj, "shop-tests", "working", "started")
         before = snap(self.proj)
-        with mock.patch.object(fc.fc_crew, "TOOL_BUGS", log):
+        with mock.patch.object(fc.fc_crew, "TOOL_BUGS", log), mock.patch.object(fc.fc_core, "sh", return_value=SimpleNamespace(stdout="abc1234\n")):  # the CLI's own commit
             self.report("shop-tests", "tool-bug", "run crashed on index.lock; worked around with --parallel 1")
         self.assertEqual(fc.fc_crew.crew_reports(self.proj, "shop-tests")[-1]["state"], "tool-bug")
         entry = json.loads(log.read_text().splitlines()[-1])
@@ -733,17 +742,14 @@ class ToolBug(unittest.TestCase):
         """A session started in a folder Claude Code never trusted waits at the trust prompt (the CLI's own checkout,
         ~/.compose/src, usually is one), so --work-repo puts only the work there: the toolsmith's worktree of that repo."""
         repo = Path(tempfile.mkdtemp()).resolve()
-        fc.fc_core.sh(["git", "init", "-q", "-b", "main"], repo)
-        fc.fc_core.sh(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"], repo)
-        calls, failed = self.start_on_repo(repo)
+        work = repo / ".claude" / "worktrees" / "shop-toolsmith-1"
+        with mock.patch.object(fc.fc_worktree, "common_dir", return_value=repo / ".git"), mock.patch.object(fc.fc_worktree, "repo_worktree", return_value=(work, "shop-toolsmith-1")):
+            calls, failed = self.start_on_repo(repo)
         self.assertIsNone(failed)
         wt, rec = fc.fc_herdr.project_worktree(self.proj), fc.fc_crew.crew_record(self.proj, "shop-toolsmith")
         tab = next(c for c in calls if c[:2] == ("tab", "create"))
         self.assertEqual(tab[tab.index("--cwd") + 1], str(wt))
-        work = Path(rec["worktree"])
-        self.assertEqual((work.parent, rec["cwd"]), (repo / ".claude" / "worktrees", str(wt)))
-        self.assertEqual(fc.fc_core.sh(["git", "branch", "--show-current"], work).stdout.strip(), rec["branch"])
-        self.assertEqual(fc.fc_core.sh(["git", "branch", "--show-current"], repo).stdout.strip(), "main")  # the repo's own checkout stays put
+        self.assertEqual((Path(rec["worktree"]), rec["branch"], rec["cwd"]), (work, "shop-toolsmith-1", str(wt)))
         start = next(c for c in calls if c[:2] == ("agent", "start"))
         self.assertEqual(start[start.index("--add-dir") + 1], str(work))
         self.assertTrue(start[start.index("--add-dir") + 2].startswith("--"))  # --add-dir takes many paths: a flag must follow it
@@ -770,34 +776,26 @@ class ToolBug(unittest.TestCase):
 
     def test_an_untrusted_cwd_repo_points_to_work_repo(self):
         repo = Path(tempfile.mkdtemp()).resolve()
-        fc.fc_core.sh(["git", "init", "-q", "-b", "main"], repo)
-        fc.fc_core.sh(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"], repo)
-        with mock.patch.object(fc.fc_claude, "claude_trusted", return_value=False), self.assertRaises(SystemExit) as e:
+        with mock.patch.object(fc.fc_worktree, "common_dir", return_value=repo / ".git"), mock.patch.object(fc.fc_claude, "claude_trusted", return_value=False), self.assertRaises(SystemExit) as e:
             fc.fc_crew.crew_workdir(str(repo), fc.fc_herdr.project_worktree(self.proj), "shop-research")
         self.assertIn(f"--work-repo {repo}", str(e.exception.code))
 
 
 class ToolsmithWorktree(unittest.TestCase):
     def test_any_role_in_the_project_repo_gets_its_own_worktree_and_leaves_checkouts_alone(self):
-        def git(*args, cwd):
-            return fc.fc_core.sh(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd).stdout.strip()
-        repo = Path(tempfile.mkdtemp()).resolve()
-        git("init", "-q", "-b", "main", cwd=repo)
-        git("commit", "-q", "--allow-empty", "-m", "init", cwd=repo)
-        slot = repo.parent / (repo.name + "-slot")
-        git("worktree", "add", "-q", "-b", "compose/shop", str(slot), cwd=repo)
-        with mock.patch.object(fc.fc_claude, "claude_trusted", return_value=True):
-            git("commit", "-q", "--allow-empty", "-m", "stubs", cwd=slot)
+        repo = Path(tempfile.mkdtemp()).resolve(); slot, plain = repo.parent / (repo.name + "-slot"), Path(tempfile.mkdtemp())
+        made = mock.Mock(side_effect=lambda cwd, name: (repo / ".claude" / "worktrees" / name, name + "-1"))
+        with mock.patch.object(fc.fc_worktree, "common_dir", lambda p: repo / ".git" if Path(p) != plain else None), mock.patch.object(fc.fc_worktree, "repo_worktree", made), \
+                mock.patch.object(fc.fc_claude, "claude_trusted", return_value=True):
             path, branch = fc.fc_crew.crew_workdir(str(repo), slot, "shop-toolsmith2")
             other, other_branch = fc.fc_crew.crew_workdir(str(slot), slot, "shop-explore")
             same, none = fc.fc_crew.crew_workdir(str(slot), slot, "shop-tests-001", leased=True)
-        for p, b, start in ((path, branch, "main"), (other, other_branch, "compose/shop")):
-            self.assertEqual(p.parent, repo / ".claude" / "worktrees")  # under the main checkout, never nested in the project worktree
-            self.assertEqual(git("branch", "--show-current", cwd=p), b)
-            self.assertEqual(git("rev-parse", "HEAD", cwd=p), git("rev-parse", start, cwd=repo))  # off the checkout it was pointed at
-        self.assertTrue(branch.startswith("shop-toolsmith2-") and other_branch.startswith("shop-explore-"))
-        self.assertEqual((git("branch", "--show-current", cwd=repo), git("branch", "--show-current", cwd=slot)), ("main", "compose/shop"))
+            bare = fc.fc_crew.crew_workdir(str(plain), slot, "shop-research")
+        self.assertEqual([c.args for c in made.call_args_list], [(str(repo), "shop-toolsmith2"), (str(slot), "shop-explore")])  # a worktree of its own, off the checkout it was pointed at
+        self.assertEqual((path.parent, other.parent), (repo / ".claude" / "worktrees",) * 2)  # under the main checkout, never nested in the project worktree
+        self.assertTrue(branch.startswith("shop-toolsmith2") and other_branch.startswith("shop-explore"))
         self.assertEqual((same, none), (slot, None))  # a worktree leased for this teammate runs where it was pointed
+        self.assertEqual(bare, (plain, None))  # and so does a plain folder
 
 
 class EndedSlots(unittest.TestCase):
@@ -807,14 +805,12 @@ class EndedSlots(unittest.TestCase):
         self.base = Path(tempfile.mkdtemp()).resolve(); self.addCleanup(shutil.rmtree, self.base, True)
         self.repo, self.slot = self.base / "tool", self.base / "slot"
         self.proj = self.base / "app" / ".compose" / "shop"; self.proj.mkdir(parents=True)
-        self.git(self.repo.parent, "init", "-q", "-b", "main", str(self.repo))
-        self.git(self.repo, "commit", "-q", "--allow-empty", "-m", "init")
-        self.git(self.repo, "worktree", "add", "-q", "-b", "shop-toolsmith-1", str(self.slot))
-        self.holder, self.agents, self.returned = "compose:shop-toolsmith", [], []
+        self.repo.mkdir(); self.slot.mkdir()
+        self.holder, self.agents, self.returned, self.dirty = "compose:shop-toolsmith", [], [], []
+        for p in (mock.patch.object(fc.fc_worktree, "common_dir", lambda path: self.repo / ".git"), mock.patch.object(fc.fc_worktree, "dirty_paths", lambda path: self.dirty),
+                  mock.patch.object(fc.fc_core, "all_projects", return_value={})):
+            p.start(); self.addCleanup(p.stop)
         self.record("shop-toolsmith", worktree=str(self.slot), branch="shop-toolsmith-1", cwd=str(self.base / "app"))
-
-    def git(self, cwd, *a):
-        return fc.fc_core.sh(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd).stdout.strip()
 
     def record(self, name, **c):
         (fc.fc_crew.crew_dir(self.proj) / f"{name}.json").write_text(json.dumps({"name": name, "agent": name, "title": "t", "space": "w1", "tab": "w1:t2", **c}))
@@ -833,15 +829,14 @@ class EndedSlots(unittest.TestCase):
 
     def test_the_slot_of_a_teammate_whose_tab_is_gone_goes_back_and_its_branch_stays(self):
         self.assertEqual(self.release(), [self.slot])
-        self.assertTrue(self.git(self.repo, "rev-parse", "--verify", "shop-toolsmith-1"))
 
     def test_a_running_teammate_a_dirty_slot_and_a_slot_leased_to_someone_else_stay(self):
         self.agents = [{"name": "shop-toolsmith", "workspace_id": "w1"}]
         self.assertEqual(self.release(), [])
         self.agents = []
-        (self.slot / "wip.txt").write_text("not committed\n")
+        self.dirty = ["wip.txt"]
         self.assertEqual(self.release(), [])
-        (self.slot / "wip.txt").unlink()
+        self.dirty = []
         self.holder = "compose:shop-other"
         self.assertEqual(self.release(), [])
 
@@ -1022,14 +1017,14 @@ class AtomicState(unittest.TestCase):
 
     def test_watch_retries_one_bad_read_of_the_cache(self):
         proj = Path(tempfile.mkdtemp()) / "p"; (proj / "results").mkdir(parents=True)
-        reads = iter([json.JSONDecodeError("Expecting value", "", 0), []])
-        def load(p, required=False):
+        reads = iter([json.JSONDecodeError("Expecting value", "", 0), {"rows": []}])
+        def board(repo, p):
             r = next(reads)
             if isinstance(r, Exception):
                 raise r
             return r
-        with mock.patch.object(fc.fc_tasks, "load_tasks", load), mock.patch.object(fc.fc_herdr, "herdr", return_value={}):
-            self.assertEqual(fc.fc_watch.watch_snapshot(Path("."), proj)["tasks"], {})
+        with mock.patch.object(fc.fc_status, "board", board), mock.patch.object(fc.fc_herdr, "herdr", return_value={}):
+            self.assertEqual(fc.fc_watch.watch_snapshot(proj.parent, proj)["tasks"], {})
 
 
 class RestrictedStart(unittest.TestCase):

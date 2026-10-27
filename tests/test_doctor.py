@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import io, json, os, re, shutil, stat, subprocess, sys, tempfile, unittest, urllib.error, urllib.parse
+import io, json, os, re, stat, subprocess, sys, tempfile, unittest, urllib.error, urllib.parse
 from pathlib import Path
 from unittest import mock
 os.environ["HERDR_ENV"] = ""
@@ -10,7 +10,6 @@ sys.modules.pop("compose", None)  # another test file may have imported it again
 import compose as fc
 import fc_steps, fc_auth, fc_checks
 
-ORIGINAL_PATH = os.environ["PATH"]
 CLI = str(Path(__file__).resolve().parents[1] / "bin" / "compose.py")
 TOOLS = {"herdr": "0.9.3", "treehouse": "v3.1.2", "trail": "0.23.0", "gh": "gh version 2.94.0", "pi": "1.0.3", "claude": "2.1.301 (Claude Code)", "npx": "11.19.0", "bp": ""}
 SKILLS = (".claude/skills/herdr/SKILL.md", ".claude/plugins/marketplaces/i-have-adhd/skills/i-have-adhd/SKILL.md",
@@ -355,6 +354,10 @@ class DesignerExtras(unittest.TestCase):
         self.assertLess(lines.index(self.LINE), lines.index(wait[0]))
         self.assertGreater(lines.index(self.LINE), lines.index("MISSING: uv (install: brew install uv) - optional"))
 
+class GotPastTheGate(Exception):
+    """Raised by the faked `sh` of InitGate: init got as far as asking git for the first time."""
+
+
 class InitGate(unittest.TestCase):
     """init stops only on a missing required tool row, one whose check is a command, a command list, or a file under home;
     a required row checked by a function prints its MISSING line and init goes on. doctor exits 1 on either."""
@@ -377,9 +380,15 @@ class InitGate(unittest.TestCase):
                                            "COMPOSE_CONFIG": str(self.home / ".compose" / "config.json"), "COMPOSE_NO_TREEHOUSE": "1", "COMPOSE_NO_TRAIL": "1"})
         env.start(), self.addCleanup(env.stop)
         [os.environ.pop(k, None) for k in ("OPENROUTER_API_KEY", "TEXT_MODEL_API_KEY", "OPENCODE_CONFIG_CONTENT", "TYPESAFE_API_KEY")]
-        subprocess.run("git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m i", shell=True, cwd=self.repo, check=True)
+        real = fc.fc_core.sh
+        def sh(cmd, *a, **kw):
+            if cmd[0] == "git": raise GotPastTheGate
+            return real(cmd, *a, **kw)
+        self.git = mock.patch.object(fc.fc_core, "sh", side_effect=sh); self.sh = self.git.start(); self.addCleanup(self.git.stop)
+        p = mock.patch.object(fc.fc_core, "all_projects", return_value={}); p.start(); self.addCleanup(p.stop)
 
     def run_cmd(self, cmd, rows):
+        """(exit code or "past the gate" once init asks git for the first time, its output)."""
         out, code = io.StringIO(), 0
         a = mock.Mock(repo=str(self.repo), project="p", branch=None, here=False, after=None)
         with mock.patch.object(fc_steps, "STEPS", rows), mock.patch("sys.stdout", out):
@@ -387,15 +396,16 @@ class InitGate(unittest.TestCase):
                 cmd(a)
             except SystemExit as e:
                 code = e.code
+            except GotPastTheGate:
+                code = "past the gate"
         return code, out.getvalue()
 
     def assert_init(self, rows, stops):
         code, out = self.run_cmd(fc.fc_init.cmd_init, rows)
-        created = (self.tmp / "compose-p" / ".compose" / "p" / "verify.json").exists()
-        self.assertEqual(("init stopped" in str(code), created), (stops, not stops), out)
-        if stops:  # before anything is created: no worktree, no branch
+        self.assertEqual(("init stopped" in str(code), code == "past the gate"), (stops, not stops), out)
+        if stops:  # before anything is created: no worktree, no branch, no git
             self.assertEqual(sorted(p.name for p in self.tmp.iterdir()), ["bin", "home", "repo"])
-            self.assertEqual(subprocess.run(["git", "branch", "--list", "compose/p"], cwd=self.repo, capture_output=True, text=True).stdout, "")
+            self.assertEqual([c.args[0] for c in self.sh.call_args_list if c.args[0][0] == "git"], [])
         self.assertEqual(self.run_cmd(fc.fc_init.cmd_doctor, rows)[0], 1)
         return out
 
@@ -464,13 +474,13 @@ class Preflight(unittest.TestCase):
 
     def setUp(self):
         self.repo = Path(tempfile.mkdtemp()).resolve()
-        subprocess.run(["git", "init", "-q", "-b", "main", str(self.repo)], check=True)
+        self.dirty = []  # what `git status` would show of the user's: fc_worktree.dirty_paths
         Doctor.setUp(self)
-        os.environ["PATH"] += os.pathsep + str(Path(shutil.which("git", path=ORIGINAL_PATH)).parent)  # the real git, after the fake tools
         os.environ.pop("COMPOSE_NO_PREFLIGHT", None)  # hermetic sets it; restored with the rest of the environment
         for p in (mock.patch.object(fc.fc_config, "OPENROUTER_KEY", "or-key"), mock.patch.object(fc.fc_config, "LINEAR_KEY", "lin-key"),
                   mock.patch.object(fc.fc_config, "WORKSPACE", "work"), mock.patch.object(fc_checks, "machine_warnings", return_value=[]),
-                  mock.patch.object(fc_checks, "battery_report", return_value="")):  # never the real battery: on battery it stops a start
+                  mock.patch.object(fc_checks, "battery_report", return_value=""),
+                  mock.patch.object(fc.fc_worktree, "dirty_paths", side_effect=lambda repo: list(self.dirty))):  # never the real battery: on battery it stops a start
             p.start(); self.addCleanup(p.stop)
         self.requests = []
 
@@ -522,10 +532,7 @@ class Preflight(unittest.TestCase):
         return str(e.exception), say
 
     def test_run_reports_the_dirty_tree_the_bad_key_and_the_logged_out_gh_all_at_once(self):
-        (self.repo / "new_test.py").write_text("x\n")
-        (self.repo / "graft").mkdir(); (self.repo / "graft" / "map.json").write_text("{}")  # the tools' own files never count
-        (self.repo / ".trail").mkdir(); (self.repo / ".trail" / "hook.cjs").write_text("")
-        (self.repo / ".claude").mkdir(); (self.repo / ".claude" / "settings.json").write_text("{}")
+        self.dirty = ["new_test.py"]
         self.fake("gh", "gh version 2.94.0", body='[ "$1 $2" = "auth status" ] && exit 1')
         with self.serve(openrouter=401, linear=Answer({})):
             msg, say = self.stop(hint="commit the tests first so worktrees include them")
@@ -536,7 +543,7 @@ class Preflight(unittest.TestCase):
             "  gh is not logged in, so the stack cannot be submitted: gh auth login (or run with --no-stack)"])
 
     def test_no_stack_skips_gh_and_verify_skips_the_tree_and_a_clean_start_goes_on_with_its_warnings(self):
-        (self.repo / "new_test.py").write_text("x\n")
+        self.dirty = ["new_test.py"]
         self.fake("gh", "gh version 2.94.0", body="exit 1")
         with self.serve(openrouter=Answer({}), linear=Answer({})):
             fc.fc_init.start_checks(self.repo, stack=False, tree=False)  # nothing to stop on
@@ -567,10 +574,9 @@ class Preflight(unittest.TestCase):
 
     def test_the_first_start_records_the_database_targets_and_prints_the_checklist(self):
         self.fake("gh", "gh version 2.94.0")
-        (self.repo / ".gitignore").write_text(".env*\n"); (self.repo / ".env").write_text("DATABASE_URL=postgresql://u:p@localhost:5433/dtt\n")
-        subprocess.run(["git", "-C", str(self.repo), "add", ".gitignore"], check=True, capture_output=True)
-        subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "ignore"], check=True, capture_output=True)
+        (self.repo / ".env").write_text("DATABASE_URL=postgresql://u:p@localhost:5433/dtt\n")
         proj, say = self.project(), []
+        env_files = mock.patch.object(fc.fc_worktree, "env_files", return_value=[".env"]); env_files.start(); self.addCleanup(env_files.stop)  # git-ignored, as in a real project
         with self.serve(openrouter=Answer({}), linear=Answer({})), mock.patch.object(fc.fc_core, "say", say.append), \
                 mock.patch.object(fc_checks, "battery_report", return_value="Now drawing from 'AC Power'\n 90%; charged"), mock.patch.object(fc_checks.platform, "system", return_value="Linux"), mock.patch.dict(os.environ, {"COMPOSE_NO_AWAKE": ""}):
             fc.fc_init.start_checks(self.repo, proj=proj)
@@ -589,7 +595,7 @@ class Preflight(unittest.TestCase):
         self.assertEqual(problems, [])
 
     def test_the_opt_out_keeps_only_the_tree_check(self):
-        (self.repo / "new_test.py").write_text("x\n")
+        self.dirty = ["new_test.py"]
         self.fake("gh", "gh version 2.94.0", body="exit 1")
         with mock.patch.dict(os.environ, {"COMPOSE_NO_PREFLIGHT": "1"}), mock.patch.object(fc_checks, "machine_warnings", side_effect=AssertionError):
             msg, _ = self.stop()
@@ -625,7 +631,7 @@ class Preflight(unittest.TestCase):
         return code, out.getvalue().splitlines()
 
     def test_doctor_prints_each_problem_and_exits_1_and_otherwise_stays_ready(self):
-        (self.repo / "new_test.py").write_text("x\n")
+        self.dirty = ["new_test.py"]
         args = type("A", (), {"repo": str(self.repo), "project": "p"})
         self.fake("gh", "gh version 2.94.0")
         found = {"p": (self.repo, self.repo / ".compose" / "p")}
@@ -637,7 +643,7 @@ class Preflight(unittest.TestCase):
                 "PROBLEM: repo has uncommitted changes (new_test.py); commit or discard them",
                 "PROBLEM: the OpenRouter key is rejected (HTTP 401): get a new key at openrouter.ai/keys, then: pbpaste | compose workspace key work",
                 "2 problems to fix before work starts"]))
-            (self.repo / "new_test.py").unlink()
+            self.dirty = []
             with self.serve(openrouter=Answer({}), linear=Answer({})):
                 self.assertEqual(self.doctor(args), (0, ["WARNING: load average 51 on 8 cores", "every step compose needs is ready"]))
         with mock.patch.object(fc.fc_core, "all_projects", return_value={}), self.serve(openrouter=Answer({}), linear=Answer({})):

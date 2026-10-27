@@ -14,51 +14,53 @@ ENV = {"HERDR_ENV": "", "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_
 CASES = "def test_a\ndef test_b\ndef test_c\n"
 
 
-def score(base, head, test="true", loose=None, **kv):
-    r = Path(tempfile.mkdtemp())
-    run = lambda *a: subprocess.run(["git", *a], cwd=r, check=True, capture_output=True, text=True)
-    put = lambda files: [(r / n).write_text(t) for n, t in files.items()]
-    run("init", "-q", "-b", "main"); put(base); run("add", "-A"); run("commit", "-qm", "base")
-    b = run("rev-parse", "HEAD").stdout.strip()
-    put(head); run("add", "-A"); run("commit", "-qm", "head"); put(loose or {})
-    meta = {"id": "001", "files": ["impl.txt"], "protected": ["test_impl.py"], "test": test, "body": "## Acceptance criteria\n\n* a\n* b\n", **kv}
-    return r, fc.fc_bench.score_test(r, meta, b)
+def sh_fake(diff="", numstat="", at_base=("impl.txt",)):
+    """The few git answers score_test asks for: which files exist at base, and the protected files' diff."""
+    def sh(argv, cwd, check=True):
+        out = (numstat if argv[2] == "--numstat" else diff) if argv[1] == "diff" else ""
+        return subprocess.CompletedProcess(argv, 0 if argv[1] != "cat-file" or argv[3].split(":")[1] in at_base else 1, out, "")
+    return sh
+
+
+def score(test_rc, diff="", numstat="", **kv):
+    meta = {"id": "001", "files": ["impl.txt"], "protected": ["test_impl.py"], "test": "t", "body": "## Acceptance criteria\n\n* a\n* b\n", **kv}
+    rcs = iter(test_rc)
+    with mock.patch.object(fc.fc_core, "sh", sh_fake(diff, numstat)), mock.patch.object(fc.fc_implement, "run_test", lambda *a: SimpleNamespace(returncode=next(rcs))):
+        return fc.fc_bench.score_test(Path(tempfile.mkdtemp()), meta, "base")
 
 
 def want(**kv):
     return {"lines": 3, "budget": 60, "over_budget": False, "cases": 3, "holdouts": 1, "green": True, "red": True, **kv}
 
 
+NUMSTAT, DIFF = "3\t0\ttest_impl.py\n", "+def test_a\n+def test_b\n+def test_c\n"
+
+
 class Score(unittest.TestCase):
-    def setUp(self):
-        mock.patch.dict(os.environ, ENV).start(); self.addCleanup(mock.patch.stopall)
-    def test_a_test_that_fails_at_base_is_green_and_red_and_leaves_files_at_base(self):
-        r, got = score({"impl.txt": "0\n"}, {"impl.txt": "1\n", "test_impl.py": CASES}, "grep -qx 1 impl.txt")
-        self.assertEqual(got, want())
-        self.assertEqual((r / "impl.txt").read_text(), "0\n")
+    def test_a_test_that_passes_at_head_and_fails_at_base_is_green_and_red(self):
+        self.assertEqual(score([0, 1], DIFF, NUMSTAT), want())
 
     def test_a_test_that_passes_at_base_is_not_red_and_test_lines_sets_the_budget(self):
-        _, got = score({"impl.txt": "0\n"}, {"impl.txt": "1\n", "test_impl.py": CASES}, test_lines=2)
-        self.assertEqual(got, want(budget=2, over_budget=True, red=False))
+        self.assertEqual(score([0, 0], DIFF, NUMSTAT, test_lines=2), want(budget=2, over_budget=True, red=False))
 
     def test_a_test_that_fails_at_head_is_not_green(self):
-        _, got = score({"impl.txt": "0\n"}, {"impl.txt": "1\n", "test_impl.py": CASES}, "grep -qx 2 impl.txt")
-        self.assertEqual(got, want(green=False))
+        self.assertEqual(score([1, 1], DIFF, NUMSTAT), want(green=False, red=True))
 
     def test_a_files_path_absent_at_base_is_deleted_before_the_red_run(self):
-        r, got = score({"impl.txt": "0\n"}, {"new.txt": "1\n", "test_impl.py": CASES}, "grep -qx 1 new.txt", files=["new.txt"])
-        self.assertEqual(got, want())
-        self.assertFalse((r / "new.txt").exists())
+        wt = Path(tempfile.mkdtemp()); (wt / "new.txt").write_text("1\n")
+        meta = {"id": "001", "files": ["new.txt"], "protected": ["test_impl.py"], "test": "t", "body": "## Acceptance criteria\n\n* a\n* b\n"}
+        seen = []
+        with mock.patch.object(fc.fc_core, "sh", sh_fake()), mock.patch.object(fc.fc_implement, "run_test", lambda *a: seen.append((wt / "new.txt").exists()) or SimpleNamespace(returncode=0)):
+            fc.fc_bench.score_test(wt, meta, "base")
+        self.assertEqual(seen, [True, False])
 
-    def test_lines_count_added_plus_deleted_including_changed_and_untracked_tests(self):
-        _, got = score({"impl.txt": "0\n", "test_impl.py": "a\nb\n"}, {"impl.txt": "1\n"},
-                       loose={"test_impl.py": "a\nc\nd\n", "test_new.py": "x\ny\n"}, protected=["test_impl.py", "test_new.py"])
-        self.assertEqual(got, want(lines=5, cases=0, holdouts=0, red=False))
+    def test_lines_sum_added_and_deleted_and_skip_binary_files(self):
+        self.assertEqual(score([0, 0], "", "2\t3\ttest_impl.py\n-\t-\timg.png\n")["lines"], 5)
 
     def test_cases_count_each_opener_and_holdouts_are_cases_over_criteria(self):
-        text = "async def test_a():\nit('x')\ntest('y')\nfunc TestZ(t)\n# def test_no\nx = 1\n"
-        _, got = score({"impl.txt": "0\n"}, {"impl.txt": "1\n"}, loose={"test_impl.py": text})
-        self.assertEqual(got, want(lines=6, cases=4, holdouts=2, red=False))
+        diff = "+async def test_a():\n+it('x')\n+test('y')\n+func TestZ(t)\n+# def test_no\n+x = 1\n def test_ctx\n"
+        got = score([0, 0], diff, "6\t0\ttest_impl.py\n")
+        self.assertEqual((got["cases"], got["holdouts"]), (4, 2))
 
 
 SCORES = {"001": dict(lines=10, budget=60, over_budget=True, cases=4, holdouts=2, green=True, red=True),
@@ -69,10 +71,13 @@ class BenchTests(unittest.TestCase):
     def setUp(self):
         mock.patch.dict(os.environ, ENV).start(); self.addCleanup(mock.patch.stopall); mock.patch("sys.stdout", io.StringIO()).start()
         self.repo = Path(tempfile.mkdtemp()); self.proj = self.repo / ".compose" / "p"; (self.proj / "results").mkdir(parents=True)
-        run = lambda *a: subprocess.run(["git", *a], cwd=self.repo, check=True, capture_output=True, text=True)
-        put = lambda t: [(self.repo / n).write_text(t) for n in ("test_impl.py", "README.md")]
-        run("init", "-q", "-b", "main"); put("base\n"); run("add", "-A"); run("commit", "-qm", "base"); self.base = run("rev-parse", "HEAD").stdout.strip()
-        put("head\n"); (self.repo / "test_new.py").write_text("head\n"); run("add", "-A"); run("commit", "-qm", "head")
+        self.base = "b" * 40
+        def sh(argv, cwd, check=True):
+            """The clone is an empty folder; test_new.py is absent at base, every other protected file is "base\\n" there."""
+            if argv[1] == "clone": Path(argv[-1]).mkdir(parents=True)
+            if argv[1] == "checkout": (Path(cwd) / argv[-1]).write_text("base\n")
+            return subprocess.CompletedProcess(argv, int(argv[1] == "cat-file" and argv[3].endswith("test_new.py")), "", "")
+        mock.patch.object(fc.fc_core, "sh", sh).start(); mock.patch.object(fc.fc_worktree, "ready_checkout").start()
         self.tasks = [{"id": i, "title": "t" + i, "protected": p, "files": ["impl.py"], "test": "true", "body": "## Acceptance criteria\n\n* a\n* b\n"}
                       for i, p in (("001", ["test_impl.py"]), ("002", ["test_new.py"]), ("003", []), ("004", ["test_impl.py"]))]
         self.calls, self.usage = [], {"cost": 0.5, "reference_cost": 0.25}

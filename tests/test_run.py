@@ -93,7 +93,7 @@ class RunLoadGate(unittest.TestCase):
                    mock.patch.object(R.fc_core, "say", lambda m, *a, **k: lines.append(m)), mock.patch.object(R.fc_implement, "run_task", run_task),
                    mock.patch.object(R.fc_credit, "check", return_value=None), mock.patch.object(R, "preflight"), mock.patch.object(R.fc_proc, "keep_awake"),
                    mock.patch.object(R.fc_blockers, "released", return_value=({}, {})), mock.patch.object(R.fc_herdr, "herdr_space"),
-                   mock.patch.object(R.fc_history, "record"), mock.patch.object(R.fc_ledger, "record_task"), mock.patch.object(R, "triage"),
+                   mock.patch.object(R.fc_history, "record"), mock.patch.object(R.fc_fast, "run_events", return_value=[]), mock.patch.object(R.fc_ledger, "record_task"), mock.patch.object(R, "triage"),
                    mock.patch.object(R.fc_reroute, "after_run", return_value=None), mock.patch.object(R.fc_core, "current_branch", return_value="main")]
         for p in patches: p.start()
         self.addCleanup(mock.patch.stopall)

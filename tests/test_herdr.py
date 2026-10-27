@@ -1,6 +1,7 @@
 import hermetic  # first: no test sees the real home
 import importlib.machinery, importlib.util, json, os, shutil, tempfile, unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 import sys, time
 os.environ["HERDR_ENV"] = ""
@@ -266,31 +267,24 @@ class PaneNames(unittest.TestCase):
 class NoHerdr(unittest.TestCase):
     """COMPOSE_NO_HERDR=1 keeps every command headless inside herdr too: init and verify open no space, tab, or pane."""
     def test_init_and_verify_never_call_herdr(self):
-        import subprocess
-        d = Path(tempfile.mkdtemp()).resolve(); (d / "bin").mkdir(); (d / "r").mkdir()
-        log, repo = d / "herdr.log", d / "r"
-        (d / "bin" / "herdr").write_text(f"#!/bin/sh\necho \"$*\" >> {log}\necho '{{\"result\": {{\"root_pane\": {{\"pane_id\": \"w1:p9\"}}}}}}'\n")
-        (d / "bin" / "herdr").chmod(0o755)
-        git = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
-        subprocess.run("git init -q -b main && git commit -q --allow-empty -m init", shell=True, cwd=repo, check=True, env={**os.environ, **git})
-        inside = {**git, "PATH": f"{d / 'bin'}{os.pathsep}{os.environ['PATH']}", "HERDR_ENV": "1", "HERDR_SOCKET_PATH": str(d / "sock"),
-                  "HERDR_WORKSPACE_ID": "w1", "HERDR_PANE_ID": "w1:p1", "COMPOSE_NO_TRAIL": "1"}
+        d = Path(tempfile.mkdtemp()).resolve(); repo = d / "r"; repo.mkdir()
+        inside = {"HERDR_ENV": "1", "HERDR_SOCKET_PATH": str(d / "sock"), "HERDR_WORKSPACE_ID": "w1", "HERDR_PANE_ID": "w1:p1"}
+        proj = repo / ".compose" / "p"; (proj / "results").mkdir(parents=True)
         for off in (True, False):
-            env, name = inside | ({"COMPOSE_NO_HERDR": "1"} if off else {}), "off" if off else "on"
-            log.unlink(missing_ok=True)
-            subprocess.run([str(Path(__file__).resolve().parents[1] / "bin" / "compose"), "init", "--here", "--project", name, "--repo", str(repo)],
-                           cwd=repo, check=True, capture_output=True, env={**os.environ, **env})
-            with mock.patch.dict(os.environ, env):
+            env = inside | ({"COMPOSE_NO_HERDR": "1"} if off else {})
+            with mock.patch.dict(os.environ, env), mock.patch.object(fc.fc_herdr.subprocess, "run", return_value=SimpleNamespace(returncode=0, stderr="", stdout='{"result": {"root_pane": {"pane_id": "w1:p9"}}}')) as run, \
+                 mock.patch.object(fc.fc_herdr, "herdr_repo_space", return_value=None), mock.patch.object(fc.fc_herdr, "herdr_close_tabs"):
                 fc.fc_herdr.HERDR_SPACES.clear()
-                fc.fc_herdr.herdr_verify_panes("w1", repo, ["checks"], fc.fc_herdr.tab_label(repo / ".compose" / name, "verify"))
-            calls = log.read_text() if log.exists() else ""
-            if off:  # the setup checks still ask herdr its version and integrations; nothing touches the session
-                self.assertEqual([c for c in calls.splitlines() if c.split()[0] in ("workspace", "worktree", "tab", "pane", "agent")], [])
-            else:  # the same commands without the variable do reach herdr: the fake is on the path
-                self.assertIn("tab create --workspace w1 --label on shell", calls)
-                self.assertIn("pane rename w1:p9 on shell", calls)  # the tab's pane carries its name
-                self.assertIn("pane rename w1:p1 manager: on", calls)  # the pane init was run in says what it is for
-                self.assertIn("--label on verify", calls)
+                space = fc.fc_herdr.herdr_space(proj)  # what init opens
+                fc.fc_herdr.herdr_name_manager(proj)
+                fc.fc_herdr.herdr_verify_panes("w1", repo, ["checks"], fc.fc_herdr.tab_label(proj, "verify"))  # verify's tab: herdr_verify_panes itself asks only for a space
+            asked = [tuple(c.args[0][1:]) for c in run.call_args_list]  # the arguments after the herdr binary
+            if off:
+                self.assertEqual((space, [a for a in asked if a[0] in ("workspace", "worktree", "tab", "pane", "agent")]), (None, []))
+            else:  # the same commands without the variable do reach herdr
+                self.assertEqual(space, "w1")
+                self.assertIn(("pane", "get", "w1:p1"), asked)
+                self.assertTrue(any(a[:6] == ("tab", "create", "--workspace", "w1", "--label", fc.fc_herdr.tab_label(proj, "verify")) for a in asked), asked)
 
 
 FAKE_HERDR = """#!{py}

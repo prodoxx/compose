@@ -1,6 +1,7 @@
 import hermetic  # first: no test sees the real home
-import importlib.machinery, importlib.util, json, os, subprocess, tempfile, unittest
+import importlib.machinery, importlib.util, json, os, tempfile, unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 import sys
 os.environ["HERDR_ENV"] = ""
@@ -58,7 +59,7 @@ class Writer(unittest.TestCase):
     """The regression test writer starts on its own branch and checkout off the task's tip."""
 
     def setUp(self):
-        env = {"HERDR_ENV": "", "COMPOSE_NO_TREEHOUSE": "1", "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        env = {"HERDR_ENV": "", "COMPOSE_NO_TREEHOUSE": "1"}
         patch = mock.patch.dict(os.environ, env)
         patch.start()
         self.addCleanup(patch.stop)
@@ -66,31 +67,17 @@ class Writer(unittest.TestCase):
         self.repo, self.proj, self.wt = root / "repo", root / "repo" / ".compose" / "p", root / "clone"
         self.proj.mkdir(parents=True)
         (self.proj / "verify.json").write_text(json.dumps({"task_prefix": "fast/p/", "install": "make deps"}))
-        self.git(self.repo, "init", "-q", "-b", "main")
-        self.git(self.repo, "commit", "-q", "--allow-empty", "-m", "base")
-        self.git(self.repo, "checkout", "-q", "-b", "fast/p/001")
-        (self.repo / "x.py").write_text("fixed\n")
-        self.git(self.repo, "add", "x.py")
-        self.git(self.repo, "commit", "-q", "-m", "fix")
-        self.git(self.repo, "checkout", "-q", "main")
-        self.git(root, "clone", "-q", "-b", "fast/p/001", str(self.repo), str(self.wt))
-        self.tip = self.git(self.repo, "rev-parse", "fast/p/001")
         self.result = {"branch": "fast/p/001", "worktree": str(self.wt)}
 
-    def git(self, cwd, *args):
-        return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
-
     def start(self):
-        with mock.patch.object(fc.fc_crew, "cmd_crew") as crew, mock.patch.object(fc.fc_worktree, "ready_checkout") as ready:
+        sh = lambda argv, *a, **kw: SimpleNamespace(stdout="+fixed\n", returncode=0)  # the fix's diff, and the branch and worktree it makes
+        with mock.patch.object(fc.fc_crew, "cmd_crew") as crew, mock.patch.object(fc.fc_worktree, "ready_checkout") as ready, mock.patch.object(fc.fc_core, "sh", sh):
             path = fc_regwriter.start_writer(self.repo, self.proj, {"id": "001", "title": "T", "body": BODY}, self.result)
         return path, ready, vars(crew.call_args[0][0])
 
-    def test_plain_worktree_on_branch_at_tip_ready_with_install_and_started(self):
-        self.git(self.repo, "branch", "fast/p/regress-001", "main")
+    def test_plain_worktree_ready_with_install_and_started(self):
         path, ready, crew = self.start()
         self.assertEqual(path, self.proj / "worktrees" / "regress-001")
-        self.assertEqual(self.git(path, "branch", "--show-current"), "fast/p/regress-001")
-        self.assertEqual(self.git(self.repo, "rev-parse", "fast/p/regress-001"), self.tip)
         ready.assert_called_once_with(self.repo, path, install="make deps")
         want = dict(repo=str(self.repo), project="p", action="start", role="tests-001", title="tests 001", force=False, cwd=str(path), leased=True)
         self.assertEqual({k: crew[k] for k in want}, want)

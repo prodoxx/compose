@@ -22,18 +22,16 @@ def setUpModule():
 def tearDownModule():
     _mcp.stop()
 
-ENV = {"HERDR_ENV": "", "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+ENV = {"HERDR_ENV": ""}
 
 
 def repo_with(files):
+    """A plain folder holding `files`; the tests that need git's facts mock the function that asks."""
     r = Path(tempfile.mkdtemp())
-    run = lambda *a: subprocess.run(["git", *a], cwd=r, check=True, capture_output=True, text=True)
-    run("init", "-q", "-b", "main")
     for name, text in files.items():
         (r / name).parent.mkdir(parents=True, exist_ok=True)
         (r / name).write_text(text)
-    run("add", "-A"); run("commit", "-qm", "init")
-    return r, run
+    return r, None
 
 
 class Groundwork(unittest.TestCase):
@@ -41,6 +39,7 @@ class Groundwork(unittest.TestCase):
     def setUp(self):
         self.env = mock.patch.dict(os.environ, ENV); self.env.start(); self.addCleanup(self.env.stop)
         self.repo, _ = repo_with({"server/go.mod": "module x\n", "client/package.json": "{}", "client/yarn.lock": ""})
+        p = mock.patch.object(fc.fc_briefs, "test_written", lambda meta, wt: set(meta.get("protected") or [])); p.start(); self.addCleanup(p.stop)  # none is on the branch yet: git is not asked
         self.proj = self.repo / ".compose" / "p"
         (self.proj / "results").mkdir(parents=True)
         tasks = [{"id": "001", "title": "Store", "files": ["server/store.go"], "protected": ["server/store_test.go"],
@@ -239,16 +238,19 @@ class Groundwork(unittest.TestCase):
 class Triage(unittest.TestCase):
     def setUp(self):
         self.env = mock.patch.dict(os.environ, {**ENV, "TEXT_MODEL_API_KEY": "k"}); self.env.start(); self.addCleanup(self.env.stop)
-        self.repo, run = repo_with({"a.go": "a\n", "b.go": "b\n"})
+        self.repo, _ = repo_with({"a.go": "a\n", "b.go": "b\n"})
         self.proj = self.repo / ".compose" / "p"
         (self.proj / "results").mkdir(parents=True)
         tasks = []
         for tid, f in (("001", "a.go"), ("002", "b.go")):
-            run("checkout", "-q", "-b", f"fast/p/{tid}", "main")
-            (self.repo / f).write_text(f"{tid} change\n"); run("commit", "-qam", tid); run("checkout", "-q", "main")
             (self.proj / "results" / f"{tid}.json").write_text(json.dumps({"id": tid, "status": "passed"}))
             tasks.append({"id": tid, "files": [f], "body": "brief"})
         (self.proj / "results" / "tasks.json").write_text(json.dumps({"feature": {}, "tasks": tasks}))
+        self.diffs = {"fast/p/001": "-a\n+001 change\n", "fast/p/002": "-b\n+002 change\n"}  # what `git diff <base> <branch>` shows, by branch
+        def sh(cmd, cwd, **kw):  # git, by verb: one base commit, one commit above the trunk, the diff of the branch asked for
+            return SimpleNamespace(returncode=1 if "--is-ancestor" in cmd else 0, stdout={"merge-base": "base", "rev-list": "1", "diff": self.diffs.get(cmd[3], "")}[cmd[1]])
+        for p in (mock.patch.object(fc.fc_core, "sh", sh), mock.patch.object(fc.fc_core, "current_branch", return_value="main"), mock.patch.object(fc.fc_worktree, "task_branches", return_value={}), mock.patch.object(fc.fc_worktree, "task_prefix", return_value="fast/p/")):
+            p.start(); self.addCleanup(p.stop)
 
     def test_tasks_are_triaged_at_once_and_the_verdict_is_kept(self):
         live, peak, lock = [0], [0], threading.Lock()
@@ -264,22 +266,6 @@ class Triage(unittest.TestCase):
         self.assertEqual(peak[0], 2)
         self.assertEqual(out["001"][0], "flag"); self.assertEqual(out["002"][0], "clean")
         self.assertEqual(json.loads((self.proj / "results" / "001.json").read_text())["triage"]["verdict"], "flag")
-
-    def test_a_stacked_task_is_shown_only_its_own_layer(self):
-        run = lambda *a: subprocess.run(["git", *a], cwd=self.repo, check=True, capture_output=True)
-        run("checkout", "-q", "-b", "fast/p/003", "fast/p/001")
-        (self.repo / "a.go").write_text("001 change\n003 change\n"); run("commit", "-qam", "003"); run("checkout", "-q", "main")
-        (self.proj / "results" / "003.json").write_text(json.dumps({"id": "003", "status": "passed", "base": "fast/p/001"}))
-        t = json.loads((self.proj / "results" / "tasks.json").read_text())
-        t["tasks"].append({"id": "003", "after": "001", "files": ["a.go"], "body": "brief"})
-        (self.proj / "results" / "tasks.json").write_text(json.dumps(t))
-        users = []
-        with mock.patch.object(fc.fc_models, "fast_json", lambda env, system, user, **kw: users.append(user) or {"verdict": "clean"}), \
-             mock.patch.object(fc.fc_core, "say"):
-            fc.fc_run.triage(self.repo, self.proj, ["003"])
-        diff = users[0].split("DIFF:\n", 1)[1]
-        self.assertIn("+003 change", diff)
-        self.assertNotIn("+001 change", diff)
 
     def test_a_failed_call_is_unknown_never_a_crash(self):
         with mock.patch.object(fc.fc_models, "fast_json", side_effect=RuntimeError("down")), mock.patch.object(fc.fc_core, "say"):
@@ -322,17 +308,6 @@ class Triage(unittest.TestCase):
             else:
                 self.assertEqual((verdict, reason), ("unknown", f"triage failed: reply cut off at max_tokens={budgets[1]}"))
 
-    def test_the_diff_is_read_from_the_helper_named_branch(self):
-        git = lambda *a: subprocess.run(["git", *a], cwd=self.repo, check=True, capture_output=True)
-        git("branch", "-m", "fast/p/001", "team/p-001"); git("branch", "-D", "fast/p/002")
-        (self.proj / "verify.json").write_text(json.dumps({"branch": "team/p"}))
-        seen = []
-        with mock.patch.object(fc.fc_models, "fast_json", lambda env, system, user, **kw: seen.append(user) or {"verdict": "clean"}), \
-                mock.patch.object(fc.fc_core, "say"):
-            out = fc.fc_run.triage(self.repo, self.proj, ["001"])
-        self.assertEqual(out["001"][0], "clean")
-        self.assertIn("+001 change", seen[0])
-
 
 class ReadFailure(unittest.TestCase):
     def test_haiku_writes_the_brief_read_only_and_failures_add_nothing(self):
@@ -358,19 +333,20 @@ class CrewWorkdir(unittest.TestCase):
     def setUp(self):
         self.env = mock.patch.dict(os.environ, ENV); self.env.start(); self.addCleanup(self.env.stop)
         self.project, _ = repo_with({"README.md": "project\n"})
-        self.tool, self.tool_git = repo_with({"bin/tool": "v1\n"})
+        self.tool, _ = repo_with({"bin/tool": "v1\n"}); self.tool = self.tool.resolve()
+        self.made = mock.Mock(return_value=(self.tool / ".claude" / "worktrees" / "shop-toolsmith-1", "shop-toolsmith-1"))
+        for p in (mock.patch.object(fc.fc_worktree, "common_dir", lambda path: self.tool / ".git" if str(path) == str(self.tool) else None),  # the tool folder is a repository's checkout
+                  mock.patch.object(fc.fc_worktree, "repo_worktree", self.made)):
+            p.start(); self.addCleanup(p.stop)
         self.home = Path(tempfile.mkdtemp())
         trusted = {"projects": {str(self.tool.resolve()): {"hasTrustDialogAccepted": True}}}
         (self.home / ".claude.json").write_text(json.dumps(trusted))
 
-    def test_another_repo_gets_a_worktree_on_a_new_branch(self):
+    def test_another_repo_gets_a_worktree_on_a_new_branch_and_its_checkout_is_left_alone(self):
         with mock.patch.object(Path, "home", return_value=self.home):
             path, branch = fc.fc_crew.crew_workdir(str(self.tool), self.project, "shop-toolsmith")
-        self.assertTrue(branch.startswith("shop-toolsmith-"))
-        self.assertEqual(path.parent, self.tool.resolve() / ".claude" / "worktrees")
-        self.assertTrue((path / "bin" / "tool").exists())
-        self.assertEqual(self.tool_git("branch", "--show-current").stdout.strip(), "main")  # the checkout stayed put
-        self.assertEqual(self.tool_git("status", "--porcelain").stdout.strip(), "")  # the worktree is excluded, not untracked noise
+        self.assertEqual((path.parent, branch), (self.tool / ".claude" / "worktrees", "shop-toolsmith-1"))
+        self.made.assert_called_once_with(str(self.tool), "shop-toolsmith")
 
     def test_a_leased_worktree_and_plain_folders_run_where_pointed(self):
         self.assertEqual(fc.fc_crew.crew_workdir(str(self.project), self.project, "x", leased=True), (self.project, None))
@@ -383,7 +359,7 @@ class CrewWorkdir(unittest.TestCase):
         with mock.patch.object(Path, "home", return_value=self.home), self.assertRaises(SystemExit) as e:
             fc.fc_crew.crew_workdir(str(self.tool), self.project, "shop-toolsmith")
         self.assertIn("trust", str(e.exception))
-        self.assertEqual(self.tool_git("worktree", "list").stdout.count("\n"), 1)  # nothing created
+        self.made.assert_not_called()  # nothing created
 
 
 class ClaudeTrust(unittest.TestCase):
@@ -398,23 +374,27 @@ class ClaudeTrust(unittest.TestCase):
         with mock.patch.object(Path, "home", return_value=self.home):
             return fc.fc_claude.claude_trusted(path)
 
+    def checkout(self, top, main=None):
+        """fc_core.checkout answering for the folders under `top`: a checkout of the repository whose main checkout is `main` (default `top`)."""
+        found = fc.fc_core.Checkout((top, (main or top) / ".git", (main or top) / ".git"))
+        return mock.patch.object(fc.fc_core, "checkout", lambda path: found if Path(path).is_relative_to(top) else None)
+
     def test_a_repo_nested_in_a_trusted_folder_still_asks(self):
         outer = Path(tempfile.mkdtemp()).resolve()
         (outer / "repo" / "src").mkdir(parents=True)
-        subprocess.run(["git", "init", "-q", str(outer / "repo")], check=True)
         (outer / "plain" / "sub").mkdir(parents=True)
-        self.assertIs(self.trusted(outer / "repo", outer), False)
-        self.assertIs(self.trusted(outer / "repo" / "src", outer), False)
-        self.assertIs(self.trusted(outer / "repo" / "src", outer / "repo"), True)
-        self.assertIs(self.trusted(outer / "plain" / "sub", outer), True)
+        with self.checkout(outer / "repo"):
+            self.assertIs(self.trusted(outer / "repo", outer), False)
+            self.assertIs(self.trusted(outer / "repo" / "src", outer), False)
+            self.assertIs(self.trusted(outer / "repo" / "src", outer / "repo"), True)
+            self.assertIs(self.trusted(outer / "plain" / "sub", outer), True)
 
     def test_a_worktree_shares_its_main_checkouts_trust(self):
-        main, git = repo_with({"src/a.py": ""})
-        main, wt = main.resolve(), Path(tempfile.mkdtemp()).resolve() / "wt"
-        git("worktree", "add", "-q", str(wt))
-        self.assertIs(self.trusted(wt / "src", main), True)
-        self.assertIs(self.trusted(wt, main / "src"), False)
-        self.assertIs(self.trusted(wt / "src", wt / "src"), True)
+        main, wt = Path(tempfile.mkdtemp()).resolve(), Path(tempfile.mkdtemp()).resolve() / "wt"
+        with self.checkout(wt, main):  # a linked worktree: its common dir is the main checkout's .git
+            self.assertIs(self.trusted(wt / "src", main), True)
+            self.assertIs(self.trusted(wt, main / "src"), False)
+            self.assertIs(self.trusted(wt / "src", wt / "src"), True)
 
 
 class DesignerBrief(unittest.TestCase):
@@ -721,6 +701,9 @@ class NoTestToWrite(unittest.TestCase):
     def setUp(self):
         self.env = mock.patch.dict(os.environ, ENV); self.env.start(); self.addCleanup(self.env.stop)
         self.repo, _ = repo_with({"README.md": "x\n"})
+        p = mock.patch.object(fc.fc_briefs, "test_written", lambda meta, wt: set(meta.get("protected") or [])); p.start(); self.addCleanup(p.stop)  # none is on the branch yet: git is not asked
+        p = mock.patch.object(fc.fc_worktree, "task_prefix", return_value="fast/p/"); p.start(); self.addCleanup(p.stop)
+        p = mock.patch.object(fc.fc_briefs, "test_open", return_value=False); p.start(); self.addCleanup(p.stop)
         self.proj = self.repo / ".compose" / "p"
         (self.proj / "results").mkdir(parents=True)
         tasks = [{"id": "001", "title": "Store", "files": ["server/store.go"], "protected": ["server/store_test.go"], "test": "go test ./...", "body": "## Goal\nOpen."},

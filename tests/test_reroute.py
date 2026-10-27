@@ -11,39 +11,29 @@ fc = importlib.util.module_from_spec(_spec)
 for _m in [m for m in sys.modules if m.startswith("fc_") and m not in ("fc_cost", "fc_mcp", "fc_sessions")]: del sys.modules[_m]
 _spec.loader.exec_module(fc)
 import fc_reroute  # noqa: E402  (nothing imports it into `fc` yet; compose.py put bin/ on sys.path)
-import fc_evidence, fc_ledger, fc_policy, fc_route, fc_routectx, fc_routerec  # noqa: E402  (the modules fc_reroute holds: a later test file swaps sys.modules)
+import fc_depth, fc_evidence, fc_ledger, fc_policy, fc_route, fc_routectx, fc_routerec  # noqa: E402  (the modules fc_reroute holds: a later test file swaps sys.modules)
 
 FILES = ["src/keep.py", "src/new.py", "src/gone.py", "src/a.py", "src/b.py"]
+SIGNALS = {"changed": [{"path": "docs/note.md", "added": 1, "deleted": 0}, {"path": "src/greet.py", "added": 1, "deleted": 0}], "lines": 2, "outside": ["docs/note.md"], "untouched": []}
+
+
+def setUpModule():
+    patch = mock.patch.object(fc.fc_worktree, "task_prefix", lambda repo, proj: "t/")  # the one git fact every layer name needs
+    patch.start(); unittest.addModuleCleanup(patch.stop)
+
+
+def git_says(out):
+    """An `sh` fake that answers every call with `out` on stdout."""
+    return lambda cmd, *a, **kw: SimpleNamespace(stdout=out, stderr="", returncode=0)
+
+
+NUMSTAT = "-\t-\tassets/logo.png\n1\t0\tdocs/outside.txt\n2\t1\tsrc/a.py\n0\t2\tsrc/gone.py\n3\t0\tsrc/new.py\n"
 
 
 class Signals(unittest.TestCase):
-    def setUp(self):
-        self.repo = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, self.repo, True)
-        self.git("init", "-q", "-b", "main")
-        self.write({"src/a.py": "1\n2\n3\n", "src/b.py": "b\n", "src/keep.py": "k\n", "src/gone.py": "p\nq\n"})
-        self.commit("base")
-        self.git("checkout", "-qb", "task")
-        self.write({"src/a.py": "1\n3\nA\nB\n", "src/new.py": "x\ny\nz\n", "docs/outside.txt": "o\n", "assets/logo.png": b"\x00\x01"})
-        (self.repo / "src/gone.py").unlink()
-        self.commit("task")
-        self.git("checkout", "-q", "main")
-        self.write({"src/b.py": "b\nmore\n", "other.txt": "1\n2\n3\n4\n5\n"})
-        self.commit("base moves on")
-
-    def git(self, *a):
-        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=self.repo, check=True, capture_output=True)
-
-    def commit(self, msg):
-        self.git("add", "-A"); self.git("commit", "-qm", msg)
-
-    def write(self, files):
-        for name, body in files.items():
-            p = self.repo / name; p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_bytes(body if isinstance(body, bytes) else body.encode())
-
-    def signals(self, files, branch="task"):
-        return fc_reroute.diff_signals(self.repo, {"files": files}, "main", branch)
+    def signals(self, files):
+        with mock.patch.object(fc.fc_core, "sh", git_says(NUMSTAT)):
+            return fc_reroute.diff_signals(Path("repo"), {"files": files}, "main", "task")
 
     def test_changed_lines_outside_and_untouched_come_from_the_three_dot_diff(self):
         got = self.signals(FILES)
@@ -64,23 +54,19 @@ class LayerBase(unittest.TestCase):
     def setUp(self):
         self.repo = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.repo, True)
-        self.git("init", "-q", "-b", "main"); self.git("commit", "-q", "--allow-empty", "-m", "init")
         self.proj = self.repo / ".compose" / "p"
         (self.proj / "results").mkdir(parents=True)
         # stack, bottom to top: 005, 010, 011, 007 (007 is after 011); 020 has a branch but is no synced task, 030 has no branch
         tasks = [{"id": t, "after": after} for t, after in (("005", ""), ("007", "011"), ("010", ""), ("011", "010"), ("030", ""))]
         (self.proj / "results" / "tasks.json").write_text(json.dumps({"feature": {}, "tasks": tasks}))
-        for t in ("005", "007", "010", "011", "020"):
-            self.git("branch", self.branch(t), self.git("commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", t))
-
-    def git(self, *a):
-        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=self.repo, check=True, capture_output=True, text=True).stdout.strip()
+        self.unmerged = "\n".join(self.branch(t) for t in ("005", "007", "010", "011", "020") ) + "\nt/tests-005"
 
     def branch(self, tid):
         return fc.fc_worktree.task_branch(self.repo, self.proj, tid)
 
     def base(self, tid):
-        return fc_reroute.layer_base(self.repo, self.proj, tid, "trunk")
+        with mock.patch.object(fc.fc_core, "sh", git_says(self.unmerged)):
+            return fc_reroute.layer_base(self.repo, self.proj, tid, "trunk")
 
     def test_a_task_gets_the_branch_right_below_it_in_the_stack_order(self):
         self.assertEqual([self.base(t) for t in ("010", "011", "007")], [self.branch(t) for t in ("005", "010", "011")])
@@ -98,42 +84,41 @@ def _hit(path, *hits):
     return {"symbol": {"path": path}, "hits": [{"path": h} for h in hits]}
 
 
+DIFF = """--- a/src/a.py
++++ b/src/a.py
+@@ -2 +2 @@
+@@ -8,0 +9 @@
+@@ -11,2 +10,0 @@
+--- a/src/c.py
++++ b/src/c.py
+@@ -1 +1 @@
+--- a/src/gone.py
++++ /dev/null
+@@ -1 +0,0 @@
+--- a/src/n.py
++++ b/src/n.py
+@@ -3 +3 @@
+"""
+
+
 class Callers(unittest.TestCase):
     SPANS = {"src/a.py": {"f1": "L1-L3", "f2": "L4-L6", "f3": "L7-L8", "f4": "L9-L10", "f5": "L12-L12"}, "src/c.py": {"g": "L1-L1"}, "src/n.py": {"h": "L1-L1"}, "src/gone.py": {"x": "L1-L1"}}
     CALLERS = {"f1": [_hit("src/a.py", "src/z.py", "src/peer.py", "src/a.py", "src/z.py"), _hit("src/other.py", "src/intruder.py")], "f3": [_hit("src/a.py", "src/y.py", "src/z.py")],
                "g": [_hit("src/c.py", *[f"c/n{i % 25:02}.py" for i in range(50, 0, -1)])]}
 
     def setUp(self):
+        self.asked = []
         self.repo = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.repo, True)
-        self.git("init", "-q", "-b", "main")
-        self.write({"src/a.py": "".join(f"l{i}\n" for i in range(1, 13)), "src/c.py": "c\n", "src/n.py": "1\n2\n3\n", "src/gone.py": "p\n"}); self.commit("base")
-        self.git("checkout", "-qb", "task")
-        self.write({"src/a.py": "l1\nx\n" + "".join(f"l{i}\n" for i in range(3, 9)) + "ins\nl9\nl10\n", "src/c.py": "C\n", "src/n.py": "1\n2\nthree\n"})
-        (self.repo / "src/gone.py").unlink(); self.commit("task")
-        self.asked = []
-
-    def git(self, *a):
-        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=self.repo, check=True, capture_output=True)
-
-    def commit(self, msg):
-        self.git("add", "-A"); self.git("commit", "-qm", msg)
-
-    def write(self, files):
-        for name, body in files.items():
-            (self.repo / name).parent.mkdir(parents=True, exist_ok=True); (self.repo / name).write_text(body)
+        for f in ("src/a.py", "src/c.py", "src/n.py"): (self.repo / f).parent.mkdir(exist_ok=True); (self.repo / f).write_text("x\n")
 
     def sh(self, cmd, cwd=None, *a, **kw):
-        if cmd[:2] == ["trail", "skeleton"]:
-            self.asked.append(cmd[2])
-            return subprocess.CompletedProcess(cmd, 0, json.dumps({"entries": [{"name": n, "span": s} for n, s in self.SPANS[cmd[2]].items()]}), "")
-        if cmd[:2] == ["trail", "callers"]:
-            self.asked.append(cmd[2])
-            return subprocess.CompletedProcess(cmd, 0, json.dumps({"matches": self.CALLERS.get(cmd[2], [])}), "")
-        return self.real(cmd, cwd, *a, **kw)
+        if cmd[0] == "git": return SimpleNamespace(stdout=DIFF, stderr="", returncode=0)
+        self.asked.append(cmd[2])
+        body = {"entries": [{"name": n, "span": s} for n, s in self.SPANS[cmd[2]].items()]} if cmd[1] == "skeleton" else {"matches": self.CALLERS.get(cmd[2], [])}
+        return subprocess.CompletedProcess(cmd, 0, json.dumps(body), "")
 
     def test_callers_of_the_symbols_whose_span_meets_an_old_side_range(self):
-        self.real = fc.fc_core.sh
         with mock.patch.object(fc.fc_core, "sh", self.sh):
             got = fc_reroute.diff_callers(self.repo, "main", "task", {"files": ["src/a.py", "src/c.py", "src/peer.py"]})
         self.assertEqual(got, {"callers": {"src/a.py": ["src/y.py", "src/z.py"], "src/c.py": [f"c/n{i:02}.py" for i in range(20)], "src/n.py": []}})
@@ -147,27 +132,20 @@ class Unavailable(unittest.TestCase):
     def setUp(self):
         self.repo = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.repo, True)
-        self.git("init", "-q", "-b", "main")
-        for n in "ac": (self.repo / f"{n}.py").write_text("1\n2\n3\n")
-        self.git("add", "-A"); self.git("commit", "-qm", "base"); self.git("checkout", "-qb", "task")
-        for n in "ac": (self.repo / f"{n}.py").write_text("1\nx\n3\n")
-        self.git("add", "-A"); self.git("commit", "-qm", "task")
-
-    def git(self, *a):
-        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=self.repo, check=True, capture_output=True)
+        for n in "ac": (self.repo / f"src/{n}.py").parent.mkdir(exist_ok=True); (self.repo / f"src/{n}.py").write_text("1\n2\n3\n")
 
     def run_callers(self, fail=None, how=None):
         """diff_callers with trail faked; call number `fail` (0-based) breaks as `how`. Returns (result, trail calls made)."""
-        calls, real = [], fc.fc_core.sh
+        calls = []
         def sh(cmd, cwd=None, *a, **kw):
-            if cmd[0] != "trail": return real(cmd, cwd, *a, **kw)
+            if cmd[0] != "trail": return SimpleNamespace(stdout=DIFF, stderr="", returncode=0)
             calls.append(cmd)
-            body = json.dumps({"entries": [{"name": "f", "span": "L1-L3"}]} if cmd[1] == "skeleton" else {"matches": [{"symbol": {"path": "a.py"}, "hits": [{"path": "z.py"}]}]})
+            body = json.dumps({"entries": [{"name": "f", "span": "L1-L3"}]} if cmd[1] == "skeleton" else {"matches": [{"symbol": {"path": "src/a.py"}, "hits": [{"path": "z.py"}]}]})
             if len(calls) - 1 != fail: return subprocess.CompletedProcess(cmd, 0, body, "")
             if how == "missing": raise FileNotFoundError("trail")
             return subprocess.CompletedProcess(cmd, how, body, "") if isinstance(how, int) else subprocess.CompletedProcess(cmd, 0, how, "")
         with mock.patch.object(fc.fc_core, "sh", sh):
-            return fc_reroute.diff_callers(self.repo, "main", "task", {"files": ["a.py", "c.py"]}), calls
+            return fc_reroute.diff_callers(self.repo, "main", "task", {"files": ["src/a.py", "src/c.py"]}), calls
 
     def test_the_first_failing_call_gives_its_why_and_stops_the_calls(self):
         ok, calls = self.run_callers()
@@ -221,10 +199,6 @@ class JevState(unittest.TestCase):
         self.proj = self.repo / ".compose" / "p"
         (self.proj / "results").mkdir(parents=True)
         (self.proj / "linear.json").write_text('{"feature": "ENG-1"}')
-        git = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=self.repo, check=True, capture_output=True)
-        git("init", "-q", "-b", "main"); git("commit", "-q", "--allow-empty", "-m", "base"); git("checkout", "-qb", "task")
-        for f in ("docs/note.md", "src/greet.py"): (self.repo / f).parent.mkdir(exist_ok=True); (self.repo / f).write_text("n\n")
-        git("add", "docs", "src"); git("commit", "-qm", "task")
 
     def reassess(self, route=ROUTE, jev=None, policies=()):
         """Reassess the synced task whose recorded route is `route`; Jev replies `jev` (raised when an exception), `policies` is what read_policies gives."""
@@ -233,15 +207,13 @@ class JevState(unittest.TestCase):
         kv = lambda v, d: {"side_effect" if isinstance(v, Exception) else "return_value": v or d}
         with mock.patch.object(fc.fc_models, "jev_ask", **kv(jev, {"model": "jev-test", "answers": self.ANS})) as self.ask, \
                 mock.patch.object(fc_policy, "read_policies", **kv(policies, ([], ""))), mock.patch.object(fc_reroute, "diff_callers", return_value=self.CALLERS), \
-                mock.patch.object(fc_route, "record_route"):
+                mock.patch.object(fc_route, "record_route"), mock.patch.object(fc_reroute, "diff_signals", return_value=SIGNALS), mock.patch.object(fc_routectx, "context_hash", return_value="h"):
             return fc_reroute.reassess(self.repo, self.proj, tasks[0], tasks, ("diff", "scope"), "r1", "main", "task")
 
     def test_jev_sees_the_diff_callers_recorded_route_and_triggers_and_is_not_asked_for_the_workflow(self):
         route = self.reassess(policies=([self.DOCS, self.PLAIN], ""))
         state, questions = self.ask.call_args.args[2:4]
-        signals = fc_reroute.diff_signals(self.repo, {"files": ["src/greet.py"]}, "main", "task")
-        self.assertEqual(signals["outside"], ["docs/note.md"])
-        self.assertEqual(state["diff"], {**signals, **self.CALLERS})
+        self.assertEqual(state["diff"], {**SIGNALS, **self.CALLERS})
         self.assertEqual(state["recorded"], {"workflow": "implement-then-test", "depth": "STANDARD", "checks": ["make lint", "make e2e"]})
         self.assertEqual((state["triggers"], state["pin"], state["task"]), (["diff", "scope"], "implement-then-test", "Greet"))
         self.assertEqual(("workflow" in questions, "Keys are checked." in json.dumps(questions), "Docs stay true." in json.dumps(questions)), (False, True, False))
@@ -282,10 +254,6 @@ class Floor(unittest.TestCase):
         self.proj = self.repo / ".compose" / "p"
         (self.proj / "results").mkdir(parents=True)
         (self.proj / "linear.json").write_text('{"feature": "ENG-1"}')
-        git = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=self.repo, check=True, capture_output=True)
-        git("init", "-q", "-b", "main"); git("commit", "-q", "--allow-empty", "-m", "base"); git("checkout", "-qb", "task")
-        for f in ("docs/note.md", "src/greet.py"): (self.repo / f).parent.mkdir(exist_ok=True); (self.repo / f).write_text("n\n")
-        git("add", "docs", "src"); git("commit", "-qm", "task")
 
     def route(self, recorded="DEEP", jev="FAST", checks="make lint, make e2e", policies=(), triggers=("diff",)):
         """The route reassess returns for a recorded `recorded` depth and checks, Jev answering depth `jev` (or raising) and `policies`."""
@@ -295,7 +263,7 @@ class Floor(unittest.TestCase):
         reply = jev if isinstance(jev, Exception) else {"model": "jev-test", "answers": {"depth": {"choice": jev, "probabilities": {jev: 0.9}, "confidence": 0.9}}}
         with mock.patch.object(fc.fc_models, "jev_ask", **{"side_effect" if isinstance(jev, Exception) else "return_value": reply}), mock.patch.object(fc_reroute, "diff_callers", return_value={"callers": {}}), \
                 mock.patch.object(fc_policy, "read_policies", return_value=(list(policies), "")), mock.patch.object(fc_route, "record_route"), \
-                mock.patch.object(fc.fc_linear, "linear_gql", return_value={}):
+                mock.patch.object(fc.fc_linear, "linear_gql", return_value={}), mock.patch.object(fc_reroute, "diff_signals", return_value=SIGNALS), mock.patch.object(fc_routectx, "context_hash", return_value="h"):
             return fc_reroute.reassess(self.repo, self.proj, tasks[0], tasks, list(triggers), "3f9a0c1b2d4e", "main", "task")
 
     def test_the_depth_is_the_higher_of_jevs_and_the_recorded_and_the_note_says_when_the_recorded_won(self):
@@ -331,9 +299,6 @@ class Record(unittest.TestCase):
         self.proj = self.repo / ".compose" / "p"
         (self.proj / "results").mkdir(parents=True)
         (self.proj / "linear.json").write_text('{"feature": "ENG-1"}')
-        git = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=self.repo, check=True, capture_output=True)
-        git("init", "-q", "-b", "main"); git("commit", "-q", "--allow-empty", "-m", "base"); git("checkout", "-qb", "task")
-        (self.repo / "a.py").write_text("n\n"); git("add", "a.py"); git("commit", "-qm", "task")
 
     def reassess(self, triggers=("diff",), **record):
         """Reassess a synced task with a recorded route; returns (route, record_route mock, context_hash mock, the policies read_policies gave)."""
@@ -343,7 +308,7 @@ class Record(unittest.TestCase):
         reply = {"model": "jev-test", "answers": {"depth": {"choice": "DEEP", "probabilities": {"DEEP": 0.9}, "confidence": 0.9}}}
         with mock.patch.object(fc.fc_models, "jev_ask", return_value=reply), mock.patch.object(fc_reroute, "diff_callers", return_value={"callers": {}}), \
                 mock.patch.object(fc_policy, "read_policies", return_value=(policies, "")), mock.patch.object(fc.fc_linear, "linear_gql", return_value={}), \
-                mock.patch.object(fc_routectx, "context_hash", return_value=self.HASH) as ctx, mock.patch.object(fc_route, "record_route", **record) as rec:
+                mock.patch.object(fc_reroute, "diff_signals", return_value=SIGNALS), mock.patch.object(fc_routectx, "context_hash", return_value=self.HASH) as ctx, mock.patch.object(fc_route, "record_route", **record) as rec:
             return fc_reroute.reassess(self.repo, self.proj, self.meta, tasks, list(triggers), "3f9a0c1b2d4e", "main", "task"), rec, ctx, policies
 
     def test_the_route_is_hashed_with_the_policies_and_its_reason_ends_with_the_note(self):
@@ -468,7 +433,7 @@ class RunHook(unittest.TestCase):
                                           "branch": f"b/{meta['id']}", "log": pay if (status or {}).get(meta["id"]) == "payment_required" else []}
         order = mock.Mock(); order.after.return_value = hook
         with mock.patch.object(fc.fc_proc, "keep_awake"), mock.patch.object(fc.fc_run, "preflight"), mock.patch.object(fc.fc_herdr, "herdr_space"), mock.patch.object(fc.fc_core, "say"), \
-             mock.patch.object(fc.fc_implement, "run_task", run_task), mock.patch.object(fc.fc_models, "payment_halt", order.halt), mock.patch.object(fc.fc_run, "triage", order.triage), \
+             mock.patch.object(fc.fc_implement, "run_task", run_task), mock.patch.object(fc_ledger, "run_events", return_value=[]), mock.patch.object(fc_ledger, "record_task"), mock.patch.object(fc.fc_models, "payment_halt", order.halt), mock.patch.object(fc.fc_run, "triage", order.triage), \
              mock.patch.object(fc_reroute, "after_run", order.after), mock.patch("builtins.print", order.print), self.assertRaises(SystemExit) as e:
             fc.fc_run.run_tasks(repo, proj, tasks, mock.Mock(trunk="main", attempts=1, parallel=1, no_stack=True))
         return e.exception.code, order, repo, proj, tasks
@@ -505,19 +470,17 @@ class VerifyCatchUp(unittest.TestCase):
         """cmd_verify over a two-layer stack of passed tasks with its setup and stages faked; catch_up is a mock when given, else the real one.
         Returns (exit code or None, one mock recording catch_up, rounds, say and payment_halt, the repo, the proj)."""
         repo = Path(tempfile.mkdtemp()).resolve(); self.addCleanup(shutil.rmtree, repo, True); proj = repo / ".compose" / "p"; (proj / "results").mkdir(parents=True)
-        git = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
-        git("init", "-q", "-b", "main"); git("commit", "-q", "--allow-empty", "-m", "init")
         tasks = [{"id": t, "after": "", "files": [], **({"linear": f"XX-{t}"} if t in linear else {})} for t in ("001", "002")]
         (proj / "results" / "tasks.json").write_text(json.dumps({"feature": {}, "tasks": tasks}))
         for t in ("001", "002"):
-            git("branch", fc.fc_worktree.task_branch(repo, proj, t), git("commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", t))
             (proj / "results" / f"{t}.json").write_text(json.dumps({"id": t, "status": "passed"}))
         order = mock.Mock(); order.catch_up.configure_mock(**catch_up)
         a = mock.Mock(repo=str(repo), project="p", fix=0, skip_review=True, skip_e2e=True, review_only=False)
         with mock.patch.object(fc.fc_core, "project_dir", return_value=proj), mock.patch.object(fc.fc_init, "start_checks"), mock.patch.object(fc.fc_proc, "keep_awake"), \
              mock.patch.object(fc.fc_verify, "verify_root", return_value=(repo, "main", None)), mock.patch.object(fc.fc_verify, "verify_rounds", order.rounds), \
              mock.patch.object(fc.fc_core, "say", order.say), mock.patch.object(fc.fc_models, "payment_halt", order.halt), mock.patch.object(fc.fc_config, "LINEAR_KEY", key), \
-             mock.patch.object(fc_reroute, "catch_up", *([order.catch_up] if catch_up else [fc_reroute.catch_up])):
+             mock.patch.object(fc.fc_worktree, "stack_order", return_value=["t/001", "t/002"]), mock.patch.object(fc_depth, "record_depth"), mock.patch.object(fc_reroute, "layer_base", return_value="main"), \
+             mock.patch.object(fc_reroute, "diff_signals", return_value={"outside": []}), mock.patch.object(fc_reroute, "catch_up", *([order.catch_up] if catch_up else [fc_reroute.catch_up])):
             try: fc.fc_verify.cmd_verify(a); code = None
             except SystemExit as e: code = e.code
         return code, order, repo, proj
@@ -550,28 +513,23 @@ class VerifyCatchUp(unittest.TestCase):
 
 
 class PassScope(unittest.TestCase):
+    OUTSIDE = {"001": ["logo.png"], "002": [], "003": ["src/c.py"]}  # 001 leaves its files (also a logo), 002 stays inside, 003 has no files: so every changed file is outside
+
     def setUp(self):
         self.repo = Path(tempfile.mkdtemp()).resolve()
         self.addCleanup(shutil.rmtree, self.repo, True)
         self.proj = self.repo / ".compose" / "p"
         (self.proj / "results").mkdir(parents=True)
-        git = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=self.repo, check=True, capture_output=True)
-        git("init", "-q", "-b", "main"); git("commit", "-q", "--allow-empty", "-m", "init")
-        # 001 leaves its files (also a logo), 002 stays inside, 003 has no files: so every changed file is outside
-        edits = {"001": ["src/a.py", "logo.png"], "002": ["src/b.py"], "003": ["src/c.py"]}
-        self.tasks = [{"id": t, "after": "", "files": [] if t == "003" else [f"src/{'ab'[int(t) - 1]}.py"], "linear": f"XX-{t}"} for t in edits]
+        self.tasks = [{"id": t, "after": "", "files": [] if t == "003" else [f"src/{'ab'[int(t) - 1]}.py"], "linear": f"XX-{t}"} for t in self.OUTSIDE]
         (self.proj / "results" / "tasks.json").write_text(json.dumps({"feature": {}, "tasks": self.tasks}))
-        for t, paths in edits.items():
-            git("checkout", "-q", "-b", fc.fc_worktree.task_branch(self.repo, self.proj, t), "main")
-            for p in paths: (self.repo / p).parent.mkdir(exist_ok=True); (self.repo / p).write_text(t)
-            git("add", *paths); git("commit", "-qm", t)
-            (self.proj / "results" / f"{t}.json").write_text(json.dumps({"id": t, "status": "passed"}))
-        git("checkout", "-q", "main")
+        for t in self.OUTSIDE: (self.proj / "results" / f"{t}.json").write_text(json.dumps({"id": t, "status": "passed"}))
+        self.signals = lambda repo, meta, *a: {"outside": self.OUTSIDE[meta["id"]]}
 
     def run_hook(self, hook, fired=(), **kw):
         """`hook(**kw)` with the pairs `fired` on every issue; returns (its return value, {task id: reassess call args})."""
         with mock.patch.object(fc.fc_config, "LINEAR_KEY", "lin_test"), mock.patch.object(fc_reroute, "reassess") as re, mock.patch.object(fc_reroute, "fired", return_value=set(fired)), \
-                mock.patch.object(fc_ledger, "run_id", side_effect=lambda proj, t: f"run-{t}"):
+                mock.patch.object(fc_ledger, "run_id", side_effect=lambda proj, t: f"run-{t}"), mock.patch.object(fc_reroute, "diff_signals", lambda *a: self.signals(*a)), \
+                mock.patch.object(fc.fc_worktree, "stack_order", return_value=["t/001", "t/002", "t/003"]), mock.patch.object(fc.fc_core, "sh", git_says("t/001\nt/002\nt/003")):
             got = hook(**kw)
         return got, {c.args[2]["id"]: c.args for c in re.call_args_list}
 
@@ -581,7 +539,7 @@ class PassScope(unittest.TestCase):
     def test_after_run_asks_diff_and_scope_for_a_layer_outside_its_files_and_diff_only_inside_with_the_layer_base_and_branch(self):
         got, calls = self.run_hook(lambda: fc_reroute.after_run(self.repo, self.proj, [{"id": t, "status": "passed"} for t in ("001", "002", "003")], self.tasks, "main"))
         self.assertEqual((got, {t: a[4] for t, a in calls.items()}), (None, {"001": ["diff", "scope"], "002": ["diff"], "003": ["diff", "scope"]}))
-        branch = lambda t: fc.fc_worktree.task_branch(self.repo, self.proj, t)
+        branch = lambda t: f"t/{t}"
         self.assertEqual([(a[5], a[6], a[7]) for a in calls.values()], [("run-001", "main", branch("001")), ("run-002", branch("001"), branch("002")), ("run-003", branch("002"), branch("003"))])
 
     def test_catch_up_with_scope_alone_asks_only_the_tasks_outside_their_files(self):
@@ -596,45 +554,40 @@ class PassScope(unittest.TestCase):
         self.assertEqual(calls, {})
 
     def test_a_diff_signals_error_is_that_tasks_failure_and_the_others_go_on(self):
-        real = fc_reroute.diff_signals
         def signals(repo, meta, *a):
             if meta["id"] == "001": raise RuntimeError("git diff failed")
-            return real(repo, meta, *a)
-        with mock.patch.object(fc_reroute, "diff_signals", signals):
-            got, calls = self.catch_up(("scope",))
+            return {"outside": self.OUTSIDE[meta["id"]]}
+        self.signals = signals
+        got, calls = self.catch_up(("scope",))
         self.assertEqual((got, list(calls)), ({"001": "git diff failed"}, ["003"]))
 
 
 class FixScope(unittest.TestCase):
     def rounds(self, stages, outside=True, layers=True, key="lin_test", reassess=None):
-        """verify_rounds in a worktree of a stack (001 inside src/a.py, 002 on src/b.py plus a logo when `outside`) with the stages `stages` (ok per round) and a fixer
-        that commits one edit to src/b.py. Returns (exit code, reassess call args, said lines, stages run, passed from verify.json)."""
-        main = Path(tempfile.mkdtemp()).resolve(); self.addCleanup(shutil.rmtree, main, True); wt = Path(tempfile.mkdtemp()).resolve(); self.addCleanup(shutil.rmtree, wt, True)
-        proj = main / ".compose" / "p"; (proj / "results").mkdir(parents=True)
-        git = lambda cwd, *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=cwd, check=True, capture_output=True)
-        git(main, "init", "-q", "-b", "main"); git(main, "commit", "-q", "--allow-empty", "-m", "init")
+        """verify_rounds on a stack (001 inside src/a.py, 002 on src/b.py plus a logo when `outside`) with the stages `stages` (ok per round) and a fixer
+        that edits src/b.py. Returns (exit code, reassess call args, said lines, stages run, passed from verify.json)."""
+        wt = Path(tempfile.mkdtemp()).resolve(); self.addCleanup(shutil.rmtree, wt, True)
+        proj = wt / ".compose" / "p"; (proj / "results").mkdir(parents=True)
         tasks = [{"id": t, "after": "", "title": t, "body": "", "test": "true","protected": [], "files": [f"src/{f}.py"], "linear": f"XX-{t}"} for t, f in (("001", "a"), ("002", "b"))]
         (proj / "results" / "tasks.json").write_text(json.dumps({"feature": {}, "tasks": tasks}))
-        for t, paths in ({"001": ["src/a.py"], "002": ["src/b.py"] + ["logo.png"] * outside} if layers else {}).items():
-            git(main, "checkout", "-q", "-b", fc.fc_worktree.task_branch(main, proj, t), *(["main"] if t == "001" else []))
-            for p in paths: (main / p).parent.mkdir(exist_ok=True); (main / p).write_text(t)
-            git(main, "add", *paths); git(main, "commit", "-qm", t); (proj / "results" / f"{t}.json").write_text(json.dumps({"id": t, "status": "passed"}))
-        git(main, "checkout", "-q", "main"); wt.rmdir(); git(main, "worktree", "add", "-q", "-b", "stack", str(wt), fc.fc_worktree.task_branch(main, proj, "002") if layers else "main")
-        asked, said, ran, done = [], [], [], set()
+        for t in ("001", "002"): (proj / "results" / f"{t}.json").write_text(json.dumps({"id": t, "status": "passed"}))
+        asked, said, ran, done, touched = [], [], [], set(), {}
         def re(*args):
             asked.append(args); done.update((k, args[5]) for k in args[4])
             if reassess: raise reassess
         def stage(*args):
             ran.append(len(asked)); return (stages[len(ran) - 1], {"checks": [{"cmd": "c", "exit": 1}]}, "finding")
-        def fixer(cwd, model, prompt): (wt / "src").mkdir(exist_ok=True); (wt / "src/b.py").write_text(f"fix {len(ran)}"); return None, "Tidy b", 1, {"cost": 0.0}
+        def fixer(cwd, model, prompt): touched["src/b.py"] = f"fix {len(ran)}"; return None, "Tidy b", 1, {"cost": 0.0}
         patches = [mock.patch.object(fc_reroute, "reassess", re), mock.patch.object(fc_reroute, "fired", lambda issue: set(done)), mock.patch.object(fc.fc_config, "LINEAR_KEY", key), mock.patch.object(fc_reroute, "after_round", return_value=([], {})),
-                   mock.patch.object(fc_ledger, "run_id", side_effect=lambda proj, t: f"run-{t}"), mock.patch.object(fc.fc_verify, "run_stages", stage),
+                   mock.patch.object(fc_reroute, "layer_base", return_value="main"), mock.patch.object(fc_reroute, "diff_signals", return_value={"outside": ["logo.png"] if outside else []}),
+                   mock.patch.object(fc_ledger, "run_id", side_effect=lambda proj, t: f"run-{t}"), mock.patch.object(fc.fc_verify, "run_stages", stage), mock.patch.object(fc.fc_verify, "changed_files", lambda repo: dict(touched)),
+                   mock.patch.object(fc.fc_worktree, "stack_order", return_value=["t/001", "t/002"] if layers else []), mock.patch.object(fc.fc_worktree, "review_base", return_value="main"), mock.patch.object(fc.fc_worktree, "dirty_paths", return_value=[]),
                    mock.patch.object(fc.fc_implement, "implementer", fixer), mock.patch.object(fc.fc_implement.fc_trailpack, "trail_pack", return_value=""), mock.patch.object(fc.fc_worktree, "ready_checkout"), mock.patch.object(fc.fc_proc, "run", return_value=mock.Mock(returncode=0)),
-                   mock.patch.object(fc.fc_verify, "verify_failed"), mock.patch.object(fc_ledger, "verify_record"), mock.patch.object(fc.fc_core, "say", said.append), mock.patch.dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")]
+                   mock.patch.object(fc.fc_verify, "verify_failed"), mock.patch.object(fc_ledger, "verify_record"), mock.patch.object(fc.fc_core, "say", said.append), mock.patch.object(fc.fc_core, "sh", git_says(""))]
         with contextlib.ExitStack() as stack:
             for p in patches: stack.enter_context(p)
             with self.assertRaises(SystemExit) as exit:
-                fc.fc_verify.verify_rounds(wt, proj, {"main_repo": str(main)}, SimpleNamespace(fix=len(stages) - 1, skip_review=True), [], 0)
+                fc.fc_verify.verify_rounds(wt, proj, {"main_repo": str(wt)}, SimpleNamespace(fix=len(stages) - 1, skip_review=True), [], 0)
         return exit.exception.code, asked, said, ran, json.loads((proj / "results" / "verify.json").read_text())["passed"]
 
     def test_a_kept_fix_reassesses_the_top_task_for_scope_once_before_the_next_round_and_a_second_fix_asks_nothing(self):
@@ -803,7 +756,7 @@ class LedgerRerun(unittest.TestCase):
         with mock.patch.object(fc.fc_verify, "run_stages", run), mock.patch.object(fc_ledger, "verify_record", note("record")), \
              mock.patch.object(fc.fc_accept, "jev_sufficiency", note("sufficiency", "judged")), mock.patch.object(fc_reroute, "after_round", cu), mock.patch.object(fc.fc_implement, "implementer", fixer), \
              mock.patch.object(fc.fc_worktree, "review_base", return_value="BASE"), mock.patch.object(fc.fc_worktree, "dirty_paths", return_value=[]), mock.patch.object(fc.fc_worktree, "ready_checkout"), \
-             mock.patch.object(fc.fc_verify, "verify_failed"), mock.patch.object(fc.fc_linear, "linear_reconcile"), mock.patch.object(fc.fc_core, "say"):
+             mock.patch.object(fc.fc_verify, "verify_failed"), mock.patch.object(fc.fc_linear, "linear_reconcile"), mock.patch.object(fc.fc_core, "say"), mock.patch.object(fc.fc_core, "sh", git_says("")):
             with self.assertRaises(SystemExit) as exit:
                 fc.fc_verify.verify_rounds(repo, proj, {"main_repo": main} if main else {}, SimpleNamespace(fix=fix, skip_review=False), rounds, 0)
         return exit.exception.code, order, run.call_args_list, rounds, cu.call_args_list, fixer, json.loads((proj / "results" / "verify.json").read_text())["passed"], repo, proj, reports

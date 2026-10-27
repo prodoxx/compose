@@ -13,6 +13,18 @@ _spec.loader.exec_module(fc)
 import fc_ledger, fc_evidence  # noqa: E402
 
 
+def git_says(refs, changed=()):
+    """A stand-in for fc_core.sh that answers what the ledger asks git: a ref's commit (none for an unknown ref), and whether paths differ between two commits."""
+    def sh(argv, cwd, check=True):
+        if argv[1] == "diff":  # diff --quiet <commit> <tip> -- <paths>: 128 for a commit git does not have, 1 when a path changed
+            a, b = argv[3:5]
+            hit = a != b and set(argv[argv.index("--") + 1:]) & set(changed)
+            return subprocess.CompletedProcess(argv, 128 if a not in refs.values() else int(bool(hit)), "", "")
+        sha = refs.get(argv[-1].removesuffix("^{commit}"), "")
+        return subprocess.CompletedProcess(argv, 0 if sha else 1, sha + "\n", "")
+    return mock.patch.object(fc.fc_core, "sh", sh)
+
+
 class Events(unittest.TestCase):
     ARGS = ("a1b2c3d4e5f6", "abc", ["003"], ["003.1:12345678"], "attempt", "run", "fail", None, "boom")
 
@@ -216,13 +228,8 @@ class RunEvidence(unittest.TestCase):
         self.proj = Path(tempfile.mkdtemp()) / "feat"
         self.proj.mkdir()
         self.repo = Path(tempfile.mkdtemp())
-        git = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=self.repo, check=True, capture_output=True, text=True).stdout.strip()
-        git("init", "-q", "-b", "main")
-        git("commit", "-q", "--allow-empty", "-m", "one")
-        self.base = git("rev-parse", "HEAD")
-        git("branch", "task", "HEAD")
-        git("commit", "-q", "--allow-empty", "-m", "two")
-        self.head, self.task = git("rev-parse", "HEAD"), git("rev-parse", "task")
+        self.base, self.head, self.task = "1" * 40, "2" * 40, "3" * 40
+        patch = git_says({"HEAD": self.head, self.base: self.base, "task": self.task}); patch.start(); self.addCleanup(patch.stop)
         self.meta = {"id": "003", "body": self.BODY}
 
     def events(self, **result):
@@ -273,10 +280,8 @@ class VerifyShared(unittest.TestCase):
         self.proj = Path(tempfile.mkdtemp()) / "feat"
         self.proj.mkdir()
         self.repo = Path(tempfile.mkdtemp())
-        git = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=self.repo, check=True, capture_output=True, text=True).stdout.strip()
-        git("init", "-q", "-b", "main")
-        git("commit", "-q", "--allow-empty", "-m", "one")
-        self.sha = git("rev-parse", "HEAD")
+        self.sha = "a" * 40
+        patch = git_says({"HEAD": self.sha}); patch.start(); self.addCleanup(patch.stop)
         (self.proj / "linear.json").write_text('{"feature": "ENG-1"}')
 
     def ev(self, phase, result, detail):
@@ -325,10 +330,8 @@ class VerifyTasks(unittest.TestCase):
         self.proj = Path(tempfile.mkdtemp()) / "feat"
         (self.proj / "results").mkdir(parents=True)
         self.repo = Path(tempfile.mkdtemp())
-        git = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=self.repo, check=True, capture_output=True, text=True).stdout.strip()
-        git("init", "-q", "-b", "main")
-        git("commit", "-q", "--allow-empty", "-m", "one")
-        self.sha = git("rev-parse", "HEAD")
+        self.sha = "a" * 40
+        patch = git_says({"HEAD": self.sha}); patch.start(); self.addCleanup(patch.stop)
         (self.proj / "linear.json").write_text('{"feature": "ENG-1"}')
         body = lambda *c: "## Goal\ng\n\n## Acceptance criteria\n" + "".join(f"* {x}\n" for x in c)
         self.tasks = [{"id": "021", "linear": "ENG-4", "test": self.T1, "body": body("a", "b", "c", "d", "e")}, {"id": "022", "linear": "ENG-5", "test": "t2", "body": body("x")},
@@ -383,9 +386,7 @@ class VerifyUnsaved(unittest.TestCase):
         self.proj = Path(tempfile.mkdtemp()) / "feat"
         (self.proj / "results").mkdir(parents=True)
         self.repo = Path(tempfile.mkdtemp())
-        git = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=self.repo, check=True, capture_output=True, text=True)
-        git("init", "-q", "-b", "main")
-        git("commit", "-q", "--allow-empty", "-m", "one")
+        patch = git_says({"HEAD": "a" * 40}); patch.start(); self.addCleanup(patch.stop)
         (self.proj / "linear.json").write_text('{"feature": "ENG-1"}')
 
     def rounds(self, passed, rows=(), saves=False):
@@ -439,12 +440,8 @@ class Relevance(unittest.TestCase):
     def setUp(self):
         self.repo, self.proj = Path(tempfile.mkdtemp()), Path(tempfile.mkdtemp()) / "feat"
         (self.proj / "results").mkdir(parents=True)
-        git = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=self.repo, check=True, capture_output=True, text=True).stdout.strip()
-        git("init", "-q", "-b", "main"); (self.repo / "a.py").write_text("1\n"); git("add", "-A"); git("commit", "-q", "-m", "a")
-        self.old = git("rev-parse", "HEAD")
-        git("checkout", "-q", "-b", "task-021"); (self.repo / "b.py").write_text("x\n"); git("add", "-A"); git("commit", "-q", "-m", "b")
-        self.tip = git("rev-parse", "HEAD")
-        git("checkout", "-q", "main")
+        self.old, self.tip = "1" * 40, "2" * 40  # the task branch added b.py on top of main, which has a.py
+        patch = git_says({"HEAD": self.old, "task-021": self.tip, self.old: self.old, self.tip: self.tip}, changed=["b.py"]); patch.start(); self.addCleanup(patch.stop)
         (self.proj / "results" / "runs.json").write_text('{"021": "r1"}')
         (self.proj / "results" / "021.json").write_text('{"branch": "task-021"}')
         h = lambda t: hashlib.sha256(t.encode()).hexdigest()[:8]
@@ -493,8 +490,7 @@ class RecordTask(unittest.TestCase):
         self.repo, self.proj = Path(tempfile.mkdtemp()), Path(tempfile.mkdtemp()) / "feat"
         (self.proj / "results").mkdir(parents=True)
         (self.proj / "results" / "runs.json").write_text('{"021": "r1"}')
-        for args in (["init", "-q", "-b", "main"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "a"]):
-            subprocess.run(["git", *args], cwd=self.repo, check=True, capture_output=True)
+        patch = git_says({"HEAD": "a" * 40}); patch.start(); self.addCleanup(patch.stop)
         self.meta = {"id": "021", "linear": "ENG-4", "body": "## Acceptance criteria\n* a\n", "files": [], "protected": []}
         self.issues = {"ENG-4": [self.row("mine"), self.row("old-run", run_id="r0")], "ENG-1": [self.row("shared", run_id="r0"), self.row("other", task_ids=["022"])]}
         self.writes, self.description, self.events = [], "## Goal\nx\n", [{"event_id": "new"}]
@@ -585,6 +581,7 @@ class DoneUnsaved(unittest.TestCase):
         (self.proj / "verify.json").write_text('{"task_prefix": "task-"}')
         (self.proj / "results" / "tasks.json").write_text(json.dumps({"tasks": [{"id": t, "title": f"t{t}", "linear": f"ENG-{t}", "body": "## Acceptance criteria\n* a\n"} for t in ("003", "004", "005")]}))
         self.old = json.dumps({"id": "003", "status": "failed", "branch": "task-003"})
+        patch = git_says({"task-003": "a" * 40}); patch.start(); self.addCleanup(patch.stop)
         (self.proj / "results" / "003.json").write_text(self.old)
 
     def done(self, saved, only="003,004,005"):
@@ -631,15 +628,3 @@ class DoneUnsaved(unittest.TestCase):
         self.assertEqual(le.call_count, 3)
         self.assertNotIn("not done", out)
         self.assertIn("003 hand_done  t003  (by hand)\n", out)
-
-    def test_done_brings_the_task_branch_from_its_clone_into_the_repo(self):
-        git = lambda cwd, *c: subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", *c], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
-        git(self.repo, "init", "-q", "-b", "main")
-        git(self.repo, "commit", "-q", "--allow-empty", "-m", "base")
-        clone = Path(tempfile.mkdtemp()) / "003"
-        git(self.repo, "clone", "-q", "--shared", "--no-hardlinks", str(self.repo), str(clone))
-        git(clone, "checkout", "-q", "-b", "task-003")
-        git(clone, "commit", "-q", "--allow-empty", "-m", "finished by hand in the clone")
-        (self.proj / "results" / "003.json").write_text(json.dumps({"id": "003", "status": "failed", "branch": "task-003", "worktree": str(clone)}))
-        self.done({"003": True}, only="003")
-        self.assertEqual(git(self.repo, "rev-parse", "task-003"), git(clone, "rev-parse", "HEAD"))

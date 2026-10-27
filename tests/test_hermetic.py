@@ -102,19 +102,5 @@ class HermeticModules(unittest.TestCase):
         self.assertIs(sys.modules["fc_probe"], probes[1])  # and what sys.modules held is back after each test
 
 
-class HermeticGitIdentity(unittest.TestCase):
-    """A temp HOME has no ~/.gitconfig, so every test's environment carries a git identity."""
-    def commit(self):
-        """git init and an empty commit in a fresh dir, with no -c user.*; returns the exit code and `author|committer` of the commit."""
-        repo = tempfile.mkdtemp()
-        for args in (["init", "-q"], ["commit", "-q", "--allow-empty", "-m", "x"]):
-            r = subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True)
-            self.assertEqual(r.returncode, 0, r.stderr)
-        log = subprocess.run(["git", "log", "-1", "--format=%an <%ae>|%cn <%ce>"], cwd=repo, capture_output=True, text=True)
-        return log.stdout.strip()
-
-    def test_a_commit_in_a_test_needs_no_identity_of_its_own(self):
-        self.assertEqual(self.commit(), "t <t@t>|t <t@t>")
-
 if __name__ == "__main__":
     unittest.main()

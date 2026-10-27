@@ -18,7 +18,6 @@ class State(unittest.TestCase):
     def setUp(self):
         d = tempfile.TemporaryDirectory(); self.addCleanup(d.cleanup)
         self.repo = Path(d.name).resolve()
-        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
 
     def test_state_round_trips_and_events_are_numbered(self):
         self.assertEqual(st.load_state(self.repo), st.EMPTY)
@@ -147,6 +146,8 @@ class Dispatch(unittest.TestCase):
         for name, new in (("all_projects", lambda repo: dict(self.projects)), ("leads_or_none", lambda repo: None if self.leads is None else dict(self.leads))):
             mod = ft.fc_core if name == "all_projects" else ft
             pa = unittest.mock.patch.object(mod, name, new); pa.start(); self.addCleanup(pa.stop)
+        self.branches = set()  # the local branches git would find; `sh` answers only the rev-parse --verify that asks whether a slug's branch exists
+        pa = unittest.mock.patch.object(ft.fc_core, "sh", lambda cmd, cwd, **kw: unittest.mock.Mock(returncode=0 if cmd[-1] in self.branches else 1, stdout="")); pa.start(); self.addCleanup(pa.stop)
         self.cli = unittest.mock.Mock(side_effect=self.fake_cli); self.prompt = unittest.mock.Mock(return_value=True)
         for name, m in (("compose_cli", self.cli), ("prompt_lead", self.prompt)):
             pa = unittest.mock.patch.object(ft, name, m); pa.start(); self.addCleanup(pa.stop)
@@ -252,9 +253,7 @@ class Dispatch(unittest.TestCase):
 
     def test_a_leftover_sibling_folder_or_branch_makes_a_slug_taken(self):
         (self.repo.parent / "compose-sign-in").mkdir()
-        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
-        subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x"], check=True)
-        subprocess.run(["git", "-C", str(self.repo), "branch", "compose/sign-in-2"], check=True)
+        self.branches.add("compose/sign-in-2")
         ft.dispatch(self.repo, self.plan, entry("NEB-10", "NEB-9"), "build", self.state, 100.0)
         self.assertEqual(self.cli.call_args_list[0].args[0][-1], "sign-in-3")
 
@@ -680,8 +679,8 @@ class Verbs(unittest.TestCase):
         self.mock, self.fcntl, self.time, self.argparse = mock, fcntl, time, argparse
         d = tempfile.TemporaryDirectory(); self.addCleanup(d.cleanup)
         self.repo = Path(d.name).resolve()
-        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
         self.proj = self.repo / "wt" / "sign-in"
+        pa = mock.patch.object(fc.fc_core, "worktree_branches", lambda repo: [(self.repo, "main")]); pa.start(); self.addCleanup(pa.stop)  # the one checkout git would list
         self.rests_on, self.hold = mock.Mock(return_value={}), mock.Mock(return_value=[])
         for mod, name, m in ((fc.fc_factory.fc_change, "rests_on", self.rests_on), (fc.fc_factory.fc_change, "hold_tasks", self.hold),
                              (fc.fc_factory.fc_factoryturn, "project_for", lambda repo, feature: ("sign-in", self.repo / "wt", self.proj) if feature == "NEB-9" else None),

@@ -32,7 +32,7 @@ class Keyless(unittest.TestCase):
         route = {"001": {"depth": "DEEP", "workflow": "implement-then-test"}, "002": {"depth": "STANDARD", "workflow": "test-first"}}
         for target, name, kw in [(fc.fc_core, "project_dir", {"return_value": self.proj}), (fc.fc_linear, "_linear_warned", {"new": []}), (fc.fc_linear, "linear_gql", {}),
                                  (fc_routectx, "dependency_context", {"return_value": {"callers": {}}}), (fc_routerec, "route_reason", {"side_effect": lambda r, s: f"why {s['tid']}; {r['note']}"}),
-                                 (fc_routectx, "route_context", {"side_effect": lambda repo, proj, m, tasks, issues: {"tid": m["id"]}}),
+                                 (fc_routectx, "route_context", {"side_effect": lambda repo, proj, m, tasks, issues: {"tid": m["id"]}}), (fc_routectx, "context_hash", {"return_value": "h" * 16}),
                                  (fc_routejev, "decide", {"side_effect": lambda env, cfg, s, m, p, more: {**route[s["tid"]]}})]:
             setattr(self, name, mock.patch.object(target, name, **kw).start())
         self.addCleanup(mock.patch.stopall)
@@ -71,7 +71,7 @@ class Policies(unittest.TestCase):
         self.tasks = fc.fc_tasks.load_tasks(self.proj)
         self.pols = [{"name": n, "globs": g, "checks": []} for n, g in (("A", ["bin/*"]), ("B", []), ("C", ["docs/*"]), ("D", []))]
         for target, name, kw in [(fc.fc_core, "project_dir", {"return_value": self.proj}), (fc.fc_linear, "_linear_warned", {"new": []}),
-                                 (fc_routectx, "route_context", {"return_value": {}}), (fc_routerec, "route_reason", {"side_effect": lambda r, s: "why; " + r["note"]}),
+                                 (fc_routectx, "route_context", {"return_value": {}}), (fc_routectx, "context_hash", {"return_value": "h" * 16}), (fc_routerec, "route_reason", {"side_effect": lambda r, s: "why; " + r["note"]}),
                                  (fc_routejev, "decide", {"side_effect": lambda *a: {"depth": "DEEP", "workflow": "test-first"}}),
                                  (fc_policy, "glob_matches", {"side_effect": lambda ps, files: [ps[0]] if files == ["bin/x.py"] else []}),
                                  (fc_policy, "read_policies", {"return_value": (self.pols, "a note")})]:

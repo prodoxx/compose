@@ -1,6 +1,7 @@
 import hermetic  # first: no test sees the real home
-import importlib.machinery, importlib.util, os, shutil, subprocess, tempfile, time, unittest
+import importlib.machinery, importlib.util, os, shutil, tempfile, time, unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 import sys
 os.environ["COMPOSE_NO_TREEHOUSE"] = "1"  # these cover the plain-worktree path, not the treehouse pool
@@ -13,20 +14,26 @@ for _m in [m for m in sys.modules if m.startswith("fc_") and m not in ("fc_cost"
 _spec.loader.exec_module(fc)
 
 
+def git_show(base):
+    """fc_core.sh answering only `git show HEAD:<file>` from `base` ({file: text on HEAD}); a file it lacks is not on HEAD. Anything else really runs."""
+    real = fc.fc_core.sh
+    def sh(cmd, cwd=None, **k):
+        if cmd[:2] != ["git", "show"]:
+            return real(cmd, cwd, **k)
+        name = cmd[2].removeprefix("HEAD:")
+        return SimpleNamespace(returncode=0, stdout=base[name]) if name in base else SimpleNamespace(returncode=128, stdout="")
+    return mock.patch.object(fc.fc_core, "sh", sh)
+
+
 class FormatOnPass(unittest.TestCase):
     def test_final_newline_added_without_a_formatter_but_base_and_binary_kept(self):
         wt = Path(tempfile.mkdtemp())
-        git = lambda *a: subprocess.run(["git", *a], cwd=wt, check=True, capture_output=True, text=True)
-        git("init", "-q", "-b", "main")
-        (wt / "bare.txt").write_bytes(b"no newline")
-        (wt / "bin.dat").write_bytes(b"\0\1")
-        git("add", "-A"); git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
         (wt / "new.mjs").write_bytes(b"export {}")
         (wt / "bare.txt").write_bytes(b"still none")
         (wt / "bin.dat").write_bytes(b"\0\2")
         (wt / "old.mjs").write_bytes(b"a\n\n\n")
-        git("add", "-A")
-        fc.fc_format.format_files(wt, ["new.mjs", "bare.txt", "bin.dat", "old.mjs"], "HEAD")
+        with git_show({"bare.txt": "no newline", "bin.dat": "\0\1"}):
+            fc.fc_format.format_files(wt, ["new.mjs", "bare.txt", "bin.dat", "old.mjs"], "HEAD")
         self.assertEqual((wt / "new.mjs").read_bytes(), b"export {}\n")
         self.assertEqual((wt / "old.mjs").read_bytes(), b"a\n")
         self.assertEqual((wt / "bare.txt").read_bytes(), b"still none")
@@ -34,52 +41,29 @@ class FormatOnPass(unittest.TestCase):
 
 
 class TaskBranches(unittest.TestCase):
+    """task_base with git answered: `self.branches` are the task branches that exist, none of them in HEAD yet."""
     def setUp(self):
         root = Path(tempfile.mkdtemp())
         self.repo, self.proj = root / "repo", root / "proj"
         self.repo.mkdir(); self.proj.mkdir()
-        self.git("init", "-q", "-b", "main")
-        (self.repo / "a.txt").write_text("a\n")
-        self.git("add", "-A"); self.git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
-
-    def git(self, *a):
-        return subprocess.run(["git", *a], cwd=self.repo, check=True, capture_output=True, text=True).stdout
-
-    def run_task(self, tid, tag="", after="", test=None, status="passed"):
-        task = {"id": tid, "title": "f", "files": [f"{tid}.py"], "protected": [], "test": test or f"grep -q F {tid}.py",
-                "model": "pi:x/y", "after": after, "linear": "", "body": "## Goal\nAdd F."}
-        def impl(cwd, model, prompt, session=None, task=None, timeout=None):
-            (Path(cwd) / f"{tid}.py").write_text("F\n")
-            return "s", "", 1, {"tokens_in": 1, "tokens_out": 1, "cost": 0.0}
-        with mock.patch.object(fc.fc_implement, "implementer", impl), mock.patch.object(fc.fc_implement.fc_trailpack, "trail_pack", return_value=""), \
-                mock.patch.object(fc.fc_config, "FALLBACK_MODEL", None), \
-                mock.patch.dict(os.environ, {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}):
-            r = fc.fc_implement.run_task(self.repo, self.proj, task, 1, tag=tag)
-        self.assertEqual(r["status"], status)
-        return r
-
-    def test_a_new_project_commits_on_its_project_branch_name(self):
-        self.assertEqual(self.run_task("001")["branch"], "compose/proj-001")
-        self.assertEqual(self.git("show", "compose/proj-001:001.py"), "F\n")
-        self.assertEqual(self.git("branch", "--list", "fast/*"), "")
-        self.assertEqual(self.run_task("001", tag="-bench-x")["branch"], "compose/proj-001-bench-x")  # the tag follows the helper's name
-
-    def test_a_recorded_project_branch_names_the_task_branch(self):
-        (self.proj / "verify.json").write_text('{"branch": "team/x"}')
-        self.run_task("001")
-        self.assertEqual(self.git("show", "team/x-001:001.py"), "F\n")
+        self.branches = {"compose/proj-001"}
+        def sh(cmd, cwd=None, **k):
+            code = 1 if "--is-ancestor" in cmd else (cmd[-1] not in self.branches) if "--verify" in cmd else 0  # no branch is in HEAD yet
+            return SimpleNamespace(returncode=int(code), stdout="head" if cmd[-1] == "HEAD" else "sha-" + cmd[-1], stderr="")
+        for mod, name, fake in ((fc.fc_core, "sh", sh), (fc.fc_core, "current_branch", lambda repo: "main"), (fc.fc_worktree, "stack_worktree", lambda repo, proj, trunk: repo),
+                                (fc.fc_layers, "linearize", lambda repo, proj, trunk, wt, through=(): list(through))):
+            patch = mock.patch.object(mod, name, fake); patch.start(); self.addCleanup(patch.stop)
+        (self.proj / "verify.json").write_text('{"task_prefix": "compose/proj-"}')
 
     def test_an_after_task_builds_on_its_unmerged_dependency(self):
-        self.run_task("001")
         base, sha = fc.fc_implement.task_base(self.repo, self.proj, {"id": "002", "after": "001"})
-        self.assertEqual((base, sha), ("compose/proj-001", self.git("rev-parse", "compose/proj-001").strip()))
+        self.assertEqual((base, sha), ("compose/proj-001", "sha-compose/proj-001"))
 
     def test_an_after_on_an_already_green_task_builds_on_that_task_s_own_dependency(self):
         # 002's test passes on 001's code, so 002 ends already_green with no branch; 003 needs that code all the same
         (self.proj / "results").mkdir()
         (self.proj / "results" / "tasks.json").write_text('{"feature": {}, "tasks": [{"id": "001", "after": ""}, {"id": "002", "after": "001"}, {"id": "003", "after": "002"}]}')
-        self.run_task("001")
-        self.run_task("002", after="001", test="grep -q F 001.py", status="already_green")
+        (self.proj / "results" / "002.json").write_text('{"status": "already_green"}')
         base, _ = fc.fc_implement.task_base(self.repo, self.proj, {"id": "003", "after": "002"})
         self.assertEqual(base, "compose/proj-001")
 
@@ -137,7 +121,7 @@ class AcceptanceJudge(unittest.TestCase):
             sent.append((crit[len("CRITERION: "):], code))
             return True, "x"
         with mock.patch.object(fc.fc_config, "ENV_FILE", proj / "none.env"), mock.patch.object(fc.fc_models, "jev_ask", return_value=reply) as ask, \
-                mock.patch.object(fc.fc_models, "confirm_call", side_effect=confirm_call):
+                mock.patch.object(fc.fc_accept.fc_ledger, "counted", lambda repo, proj, meta, rows: rows), mock.patch.object(fc.fc_models, "confirm_call", side_effect=confirm_call):
             res = fc.fc_accept.jev_acceptance({}, proj, diff, repo=repo)
         states = {c.args[2]["task"]: c.args[2] for c in ask.call_args_list if c.args[4] == "Jev acceptance"}
         a, b, c = states["002"], states["003"], states["004"]
@@ -175,7 +159,7 @@ class AcceptanceJudge(unittest.TestCase):
             sent.append((crit[len("CRITERION: "):], code))
             return True, "x"
         with mock.patch.object(fc.fc_config, "ENV_FILE", proj / "none.env"), mock.patch.object(fc.fc_models, "jev_ask", return_value=reply), \
-                mock.patch.object(fc.fc_models, "confirm_call", side_effect=confirm_call):
+                mock.patch.object(fc.fc_accept.fc_ledger, "counted", lambda repo, proj, meta, rows: rows), mock.patch.object(fc.fc_models, "confirm_call", side_effect=confirm_call):
             res = fc.fc_accept.jev_acceptance({}, proj, hunk("a.py", "x"), repo=repo)  # raises IsADirectoryError if a directory is read
         whole = "==== a.py ====\n" + "A" * 50000
         a = sorted((code for crit, code in sent if crit.startswith("a")), key=len)
@@ -198,8 +182,8 @@ class PrettierOptIn(unittest.TestCase):
             (top / f).parent.mkdir(parents=True, exist_ok=True); (top / f).write_text(t)
         prettier.parent.mkdir(parents=True)
         prettier.write_text(f'#!/bin/sh\necho "$@" >> "{log}"\nprintf "pretty\\n\\n" > "$2"\n'); prettier.chmod(0o755)
-        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=wt, check=True)
-        fc.fc_format.format_files(wt, ["web/a.js"], "HEAD")
+        with git_show({}):
+            fc.fc_format.format_files(wt, ["web/a.js"], "HEAD")
         self.assertEqual((log.read_text().replace(str(wt), "<wt>") if log.exists() else "", (wt / "web" / "a.js").read_text()), (calls, text))
         return fc.fc_format.prettier_opted_in(wt, wt / "web" / "a.js")
 

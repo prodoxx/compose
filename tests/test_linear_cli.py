@@ -73,7 +73,8 @@ class LinearStates(unittest.TestCase):
         self.proj = Path(tempfile.mkdtemp())
         (self.proj / "linear.json").write_text(json.dumps({"feature": "ENG-1"}))
         self.lin = FakeLinear()
-        for mod, name, value in ((fc.fc_config, "LINEAR_KEY", KEY), (fc.fc_linear, "linear_gql", self.lin), (fc.fc_core, "say", lambda m: None)):
+        for mod, name, value in ((fc.fc_config, "LINEAR_KEY", KEY), (fc.fc_linear, "linear_gql", self.lin), (fc.fc_core, "say", lambda m: None),
+                           (fc.fc_core, "sh", lambda *a, **k: subprocess.CompletedProcess([], 0, "", "")), (fc.fc_core, "checkout", lambda p: None)):
             p = mock.patch.object(mod, name, value); p.start(); self.addCleanup(p.stop)
         fc.fc_linear._linear_warned.clear()
 
@@ -257,15 +258,6 @@ class SyncFromLinear(unittest.TestCase):
             with self.subTest(err=repr(err)):
                 self.assertIn(f"sync: Linear failed (boom); compose sync --stdin still works ({fc.fc_tasks.SYNC_SHAPE})", self.fails(gql))
         self.assertFalse((self.proj / "results" / "tasks.json").exists())
-
-    def test_cli_takes_stdin_and_rejects_from_linear(self):
-        def run(flag):
-            return subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / "bin" / "compose"), "sync", flag, "--project", "x",
-                                   "--repo", str(self.proj)], capture_output=True, text=True, stdin=subprocess.DEVNULL)
-        old = run("--from-linear")
-        self.assertEqual(old.returncode, 2); self.assertIn("--from-linear", old.stderr)
-        new = run("--stdin")
-        self.assertNotEqual(new.returncode, 2); self.assertNotIn("unrecognized arguments", new.stderr)
 
 class LinearErrors(unittest.TestCase):
     """linear_gql with urlopen faked: an HTTP error whose body holds Linear's `errors` gives the text a 200 reply gives."""

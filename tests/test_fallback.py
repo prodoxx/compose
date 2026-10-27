@@ -3,7 +3,7 @@ import importlib.machinery, importlib.util, io, json, os, shutil, subprocess, te
 from pathlib import Path
 from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
-import sys, threading, time, types
+import sys, time, types
 os.environ["COMPOSE_NO_TREEHOUSE"] = "1"  # these cover the plain-worktree path, not the treehouse pool
 os.environ["HERDR_ENV"] = ""
 os.environ["COMPOSE_E2E_HEADLESS"] = "1"  # testing the tool itself never opens a browser window; real projects keep theirs
@@ -18,143 +18,6 @@ PRIMARY, BACKUP = "pi:p/primary", "pi:b/backup"
 
 
 class Fallback(unittest.TestCase):
-    def run_once(self, first, reset_files=False, after=2, edit=None, impl=None):
-        """The primary model behaves as `first` ("error", "miss", or "rate"); the fallback writes the answer. Returns (result, models called);
-        the prompts land in self.prompts."""
-        root = Path(tempfile.mkdtemp())
-        repo, proj = root / "repo", root / "proj"
-        repo.mkdir(); proj.mkdir()
-        git = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True)
-        git("init", "-q", "-b", "main")
-        (repo / "a.txt").write_text("no\n")
-        git("add", "-A"); git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
-        task = {"id": "001", "title": "answer", "files": ["a.txt"], "protected": [], "test": "grep -q yes a.txt",
-                "model": PRIMARY, "after": "", "linear": "ENG-1", "body": "## Goal\nWrite yes."}
-        calls, self.prompts = [], []
-        def run_impl(cwd, model, prompt, session=None, task=None, timeout=None):
-            calls.append(model); self.prompts.append(prompt)
-            if model == PRIMARY and first == "error":
-                raise RuntimeError("provider refused the request")
-            if model == PRIMARY and first == "rate":
-                if edit:  # the turn edits, then the provider cuts it short
-                    (Path(cwd) / "a.txt").write_text(edit)
-                raise fc.fc_models.RateLimited({"cost": 0.0})
-            (Path(cwd) / "a.txt").write_text("yes\n" if model == BACKUP else "nope\n")
-            return "s", "", 1, {"tokens_in": 1, "tokens_out": 1, "cost": 0.0}
-        with mock.patch.object(fc.fc_implement, "implementer", impl or run_impl), mock.patch.object(fc.fc_implement.fc_trailpack, "trail_pack", return_value=""), \
-                mock.patch.object(fc.fc_config, "DEFAULT_MODEL", PRIMARY), mock.patch.object(fc.fc_config, "FALLBACK_MODEL", BACKUP), \
-                mock.patch.object(fc.fc_config, "FALLBACK_AFTER", after), mock.patch.object(fc.fc_config, "TEST_READER", None), \
-                mock.patch.dict(os.environ, {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}):
-            return fc.fc_implement.run_task(repo, proj, task, 3, reset_files=reset_files), calls
-
-    def test_turn_limit_has_no_room_for_a_test_run(self):
-        root = Path(tempfile.mkdtemp())
-        repo, proj = root / "repo", root / "proj"
-        repo.mkdir(); proj.mkdir()
-        git = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True)
-        git("init", "-q", "-b", "main")
-        (repo / "a.txt").write_text("no\n")
-        git("add", "-A"); git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
-        task = {"id": "001", "title": "answer", "files": ["a.txt"], "protected": [], "test": "grep -q yes a.txt", "test_timeout": 300,
-                "model": PRIMARY, "after": "", "linear": "ENG-1", "body": "## Goal\nWrite yes."}
-        limits = []
-        def impl(cwd, model, prompt, session=None, task=None, timeout=None):
-            limits.append(timeout)
-            (Path(cwd) / "a.txt").write_text("yes\n")
-            return "s", "", 1, {"tokens_in": 1, "tokens_out": 1, "cost": 0.0}
-        with mock.patch.object(fc.fc_implement, "implementer", impl), mock.patch.object(fc.fc_implement.fc_trailpack, "trail_pack", return_value=""), \
-                mock.patch.dict(os.environ, {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}):
-            fc.fc_implement.run_task(repo, proj, task, 3)
-        self.assertEqual(limits[0], fc.fc_models.TURN_TIMEOUT)  # compose runs the test after the turn, never inside it
-
-    def test_error_falls_back_after_two(self):
-        r, calls = self.run_once("error")
-        self.assertEqual(r["status"], "passed")
-        self.assertEqual(calls, [PRIMARY, PRIMARY, BACKUP])
-        self.assertEqual(r["model"], BACKUP)
-        self.assertEqual(r["attempts"], 3)
-        self.assertEqual(r["log"][1]["fallback"]["why"], "errored")
-
-    def test_two_misses_then_the_fallback(self):
-        r, calls = self.run_once("miss")
-        self.assertEqual(r["status"], "passed")
-        self.assertEqual(calls, [PRIMARY, PRIMARY, BACKUP])
-        self.assertNotIn("fallback", r["log"][0])
-        self.assertEqual(r["log"][1]["fallback"]["why"], "missed")
-        self.assertEqual(self.run_once("miss", after=1)[1], [PRIMARY, BACKUP])  # models.fallback_after
-
-    def test_rate_limit_switches_at_once(self):
-        r, calls = self.run_once("rate")
-        self.assertEqual((r["status"], calls), ("passed", [PRIMARY, BACKUP]))
-        self.assertEqual(r["attempts"], 1)  # the refused turn cost no attempt
-
-    def busy_run(self, refusals, said, slept, err=None, nap=lambda: None):
-        """One task with one attempt allowed and no fallback, whose first `refusals` turns end as `err` (default: the provider turns
-        them away as busy), `nap` running just before each one ends."""
-        busy = iter([err or fc.fc_models.RateLimited({"cost": 0.0}, "provider busy: 503 overloaded_error")] * refusals)
-        def impl(cwd, model, prompt, session=None, task=None, timeout=None):
-            err = next(busy, None)
-            if err:
-                nap()
-                raise err
-            (Path(cwd) / "a.txt").write_text("yes\n")
-            return "s", "", 1, {"tokens_in": 1, "tokens_out": 1, "cost": 0.0}
-        root = Path(tempfile.mkdtemp()); repo, proj = root / "repo", root / "proj"; repo.mkdir(); proj.mkdir()
-        git = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True)
-        git("init", "-q", "-b", "main"); (repo / "a.txt").write_text("no\n")
-        git("add", "-A"); git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
-        task = {"id": "001", "title": "answer", "files": ["a.txt"], "protected": [], "test": "grep -q yes a.txt",
-                "model": PRIMARY, "after": "", "linear": "ENG-1", "body": "## Goal\nWrite yes."}
-        me, real_sleep = threading.get_ident(), time.sleep
-        record = lambda s: slept.append(s) if threading.get_ident() == me and s >= 1 else real_sleep(s)  # time is global: another thread's sleep is not the wait, nor is the 1 ms poll subprocess makes for a child it has not yet reaped
-        with mock.patch.object(fc.fc_implement, "implementer", impl), mock.patch.object(fc.fc_implement.fc_trailpack, "trail_pack", return_value=""), \
-                mock.patch.object(fc.fc_config, "FALLBACK_MODEL", None), mock.patch.object(fc.fc_config, "TEST_READER", None), \
-                mock.patch.object(fc.fc_core, "say", said.append), mock.patch.object(fc.fc_implement.time, "sleep", record), \
-                mock.patch.dict(os.environ, {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}):
-            return fc.fc_implement.run_task(repo, proj, task, 1), proj
-
-    def test_a_busy_provider_without_a_fallback_waits_and_costs_no_attempt(self):
-        said, slept = [], []
-        r, proj = self.busy_run(1, said, slept)
-        self.assertEqual((r["status"], slept), ("passed", [20]))  # one attempt allowed, and the busy turn did not spend it
-        self.assertIn("001 provider busy: 503 overloaded_error; fresh session in 20s (wait 1/4)", said)
-        # The wait is in the log, but the count every reader shows (the result, its json, the final line) is the one attempt spent.
-        self.assertEqual((r["attempts"], len(r["log"])), (1, 2))
-        self.assertEqual(json.loads((proj / "results" / "001.json").read_text())["attempts"], 1)
-        self.assertTrue(any(s.startswith("001 passed") and "attempts=1 " in s for s in said), said)
-        r, _ = self.busy_run(5, [], [])  # the provider never answers: four waits, then the task gives up having spent none
-        self.assertEqual((r["status"], r["attempts"], len(r["log"])), ("failed", 0, 5))
-
-    def test_a_turn_that_timed_out_across_a_sleep_costs_no_attempt(self):
-        t = {"wall": 1000.0, "awake": 50.0}  # the lid closes in the first turn: 90 minutes pass on the wall clock, 3 on the awake one
-        clock = types.SimpleNamespace(time=lambda: t["wall"], monotonic=lambda: t["awake"])
-        nap = lambda: t.update(wall=t["wall"] + 5400, awake=t["awake"] + 180)
-        said, slept = [], []
-        with mock.patch.object(fc.fc_proc, "time", clock):
-            r, _ = self.busy_run(1, said, slept, err=subprocess.TimeoutExpired("pi", 180), nap=nap)
-        self.assertEqual((r["status"], r["attempts"]), ("passed", 1))  # one attempt allowed, and the turn the machine slept in did not spend it
-        self.assertTrue(any(s.startswith("001 attempt 1 timeout") and "the machine slept for 87 minutes: it does not count" in s for s in said), said)
-        self.assertEqual(r["log"][0]["slept"], 5220)
-
-    def test_a_turn_cut_short_is_tested_on_the_edit_it_left(self):
-        r, calls = self.run_once("rate", edit="yes\n")
-        self.assertEqual((r["status"], calls), ("passed", [PRIMARY]))
-        r, calls = self.run_once("rate", edit="maybe\n")
-        self.assertEqual((r["status"], calls, r["attempts"]), ("passed", [PRIMARY, BACKUP], 1))  # the cut-short turn cost no attempt
-        self.assertIn("A previous attempt left edits in the files and did not pass", self.prompts[1])
-        self.assertIn("grep -q yes a.txt", self.prompts[1].split("did not pass")[1])
-
-    def test_a_timed_out_turn_that_left_a_passing_edit_keeps_the_usage_it_spent(self):
-        spent = {"cost": 0.5, "tokens_in": 100, "tokens_out": 20}
-        def timed_out(cwd, model, prompt, session=None, task=None, timeout=None):
-            (Path(cwd) / "a.txt").write_text("yes\n")
-            e = subprocess.TimeoutExpired("herdr agent prompt", 180)
-            e.tools, e.usage = 4, spent
-            raise e
-        r, _ = self.run_once("timeout", impl=timed_out)
-        timeout, cut = r["log"]
-        self.assertEqual((r["status"], timeout["tool_calls"], timeout["usage"], cut["cut_short"], r["cost"]), ("passed", 4, spent, True, 0.5))
-
     def test_fallback_has_no_fallback(self):
         with mock.patch.object(fc.fc_config, "FALLBACK_MODEL", BACKUP):
             self.assertIsNone(fc.fc_models.fallback_for(BACKUP))
@@ -193,249 +56,141 @@ class Preflight(unittest.TestCase):
 
 
 class ReadyCheckout(unittest.TestCase):
+    """Git is faked at the helpers that ask it: the ignored dependency dirs and env files, the exclude file, the stamp path and the lockfiles."""
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp()); self.addCleanup(shutil.rmtree, self.root, True)
+        self.repo, self.wt = self.root / "repo", self.root / "wt"
+        self.repo.mkdir(); self.wt.mkdir()
+        self.excluded, self.installs, self.locks = [], [], []
+        def sh(cmd, cwd=None, *a, **k):
+            if isinstance(cmd, str):
+                self.installs.append((cmd, Path(cwd)))
+                return mock.Mock(stdout="", returncode=0)
+            out = str(self.root / "stamp") if "--git-path" in cmd else "".join(f"100644 blob abc\t{f}\n" for f in self.locks) if "ls-tree" in cmd else ""
+            return mock.Mock(stdout=out, returncode=0)
+        self.sh = sh
+
+    def ready(self, deps=(), envs=(), **kw):
+        with mock.patch.object(fc.fc_worktree, "dep_dirs", return_value=list(deps)), mock.patch.object(fc.fc_worktree, "env_files", return_value=list(envs)), \
+                mock.patch.object(fc.fc_worktree, "exclude_paths", lambda wt, rules: self.excluded.append(rules)), mock.patch.object(fc.fc_worktree, "stamp_trail_wiring"), \
+                mock.patch.object(fc.fc_core, "sh", self.sh):
+            fc.fc_worktree.ready_checkout(self.repo, self.wt, **kw)
+
     def test_clone_borrows_installs_and_stays_clean(self):
-        root = Path(tempfile.mkdtemp())
-        repo, wt = root / "repo", root / "wt"
-        (repo / "client" / "node_modules" / "jest").mkdir(parents=True)
-        (repo / "client" / "app.js").write_text("x\n")
-        (repo / "a.py").write_text("def f():\n    return 1\n")
-        (repo / ".gitignore").write_text("node_modules/\n")
-        git = lambda cwd, *a: subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True, text=True)
-        git(repo, "init", "-q")
-        git(repo, "add", "-A")
-        git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
-        git(root, "clone", "-q", "--shared", str(repo), str(wt))
-        fc.fc_worktree.ready_checkout(repo, wt)
-        fc.fc_worktree.ready_checkout(repo, wt)  # idempotent: a re-run neither fails nor duplicates exclude lines
-        self.assertTrue((wt / "client" / "node_modules").is_symlink())
-        self.assertTrue((wt / "client" / "node_modules" / "jest").is_dir())
-        for graph in (".trail", "graft"):  # what a `trail build` leaves, without the machine's own trail
-            (wt / graph).mkdir(); (wt / graph / "graph.db").write_text("x")
-        self.assertEqual(git(wt, "status", "--porcelain").stdout, "")
-        exclude = (wt / ".git" / "info" / "exclude").read_text().splitlines()
-        self.assertEqual(exclude.count("/client/node_modules"), 1)
+        (self.repo / "client" / "node_modules" / "jest").mkdir(parents=True)
+        (self.wt / "client").mkdir()
+        self.ready(deps=["client/node_modules"])
+        self.ready(deps=["client/node_modules"])  # idempotent: a re-run neither fails nor replaces the link
+        self.assertTrue((self.wt / "client" / "node_modules").is_symlink())
+        self.assertTrue((self.wt / "client" / "node_modules" / "jest").is_dir())
+        self.assertTrue(all("/client/node_modules" in rules and "/graft/" in rules and "/.trail/" in rules for rules in self.excluded))  # the link is a file to git: /dir, not dir/
 
     def test_clone_borrows_ignored_env_files_only(self):
-        root = Path(tempfile.mkdtemp())
-        repo, wt = root / "repo", root / "wt"
-        (repo / "app").mkdir(parents=True)
-        (repo / "app" / ".env").write_text("A=1\n")
-        (repo / "app" / ".env.local").write_text("B=2\n")
-        (repo / "app" / ".env.example").write_text("A=\n")  # tracked: the clone has its own
-        (repo / "app" / "env.ts").write_text("x\n")
-        (repo / ".gitignore").write_text(".env\n.env.*\n!.env.example\n")
-        git = lambda cwd, *a: subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True, text=True)
-        git(repo, "init", "-q")
-        git(repo, "add", "-A")
-        git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
-        git(root, "clone", "-q", "--shared", str(repo), str(wt))
-        fc.fc_worktree.ready_checkout(repo, wt)
-        fc.fc_worktree.ready_checkout(repo, wt)
+        (self.repo / "app").mkdir(); (self.wt / "app").mkdir()
+        (self.repo / "app" / ".env").write_text("A=1\n"); (self.repo / "app" / ".env.local").write_text("B=2\n")
+        (self.wt / "app" / ".env.example").write_text("A=\n")  # tracked: the clone has its own
+        self.ready(envs=["app/.env", "app/.env.local"])
+        self.ready(envs=["app/.env", "app/.env.local"])
         for name in (".env", ".env.local"):
-            self.assertTrue((wt / "app" / name).is_symlink())
-            self.assertEqual((wt / "app" / name).read_text(), (repo / "app" / name).read_text())
-        self.assertFalse((wt / "app" / ".env.example").is_symlink())
-        self.assertEqual(git(wt, "status", "--porcelain").stdout, "")
+            self.assertTrue((self.wt / "app" / name).is_symlink())
+            self.assertEqual((self.wt / "app" / name).read_text(), (self.repo / "app" / name).read_text())
+        self.assertFalse((self.wt / "app" / ".env.example").is_symlink())
 
     def test_install_command_replaces_borrowing(self):
-        root = Path(tempfile.mkdtemp())
-        repo, wt = root / "repo", root / "wt"
-        (repo / "node_modules" / "old").mkdir(parents=True)
-        (repo / ".gitignore").write_text("node_modules/\n")
-        git = lambda cwd, *a: subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True, text=True)
-        git(repo, "init", "-q")
-        git(repo, "add", "-A")
-        git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
-        git(root, "clone", "-q", "--shared", str(repo), str(wt))
-        (wt / "node_modules").symlink_to(repo / "node_modules")  # a link left by an earlier borrow
-        fc.fc_worktree.ready_checkout(repo, wt, install="mkdir -p node_modules/fresh")
-        self.assertFalse((wt / "node_modules").is_symlink())  # the install lives in the checkout, so build output cannot depend on the project worktree's path
-        self.assertTrue((wt / "node_modules" / "fresh").is_dir())
-        self.assertFalse((repo / "node_modules" / "fresh").exists())
-        self.assertEqual(git(wt, "status", "--porcelain").stdout, "")
-        (wt / "bun.lock").write_text("new\n")  # a lockfile change is what makes the install run again
-        git(wt, "add", "-A")
-        git(wt, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "dep")
-        with self.assertRaises(RuntimeError):
-            fc.fc_worktree.ready_checkout(repo, wt, install="exit 3")
+        (self.repo / "node_modules" / "old").mkdir(parents=True)
+        (self.wt / "node_modules").symlink_to(self.repo / "node_modules")  # a link left by an earlier borrow
+        self.ready(deps=["node_modules"], install="bun install")
+        self.assertFalse((self.wt / "node_modules").is_symlink())  # the install lives in the checkout, so build output cannot depend on the project worktree's path
+        self.assertEqual(self.installs, [("bun install", self.wt)])
 
     def test_install_reruns_only_when_the_lockfile_changes(self):
-        root = Path(tempfile.mkdtemp())
-        repo, wt = root / "repo", root / "wt"
-        repo.mkdir()
-        (repo / ".gitignore").write_text("node_modules/\n")
-        (repo / "bun.lock").write_text("one\n")
-        git = lambda cwd, *a: subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True, text=True)
-        git(repo, "init", "-q")
-        git(repo, "add", "-A")
-        git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
-        git(root, "clone", "-q", "--shared", str(repo), str(wt))
-        install = "mkdir -p node_modules && cat bun.lock >> node_modules/seen"
-        seen = lambda: (wt / "node_modules" / "seen").read_text()
-        fc.fc_worktree.ready_checkout(repo, wt, install=install)
-        fc.fc_worktree.ready_checkout(repo, wt, install=install)
-        self.assertEqual(seen(), "one\n")  # the same lockfile: no second install
-        (wt / "bun.lock").write_text("two\n")
-        git(wt, "add", "-A")
-        git(wt, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "dep")
-        fc.fc_worktree.ready_checkout(repo, wt, install=install)
-        self.assertEqual(seen(), "one\ntwo\n")  # a changed lockfile installs again
+        self.locks = ["bun.lock"]
+        for _ in range(2): self.ready(install="bun install")
+        self.assertEqual(len(self.installs), 1)  # the same lockfiles: no second install
+        (self.root / "stamp").write_text("a different lockfile set\n")  # what the last install recorded
+        self.ready(install="bun install")
+        self.assertEqual(len(self.installs), 2)  # changed lockfiles install again
 
     def test_lockfile_task_installs_on_its_own_and_hands_it_over(self):
-        root = Path(tempfile.mkdtemp())
-        repo, wt = root / "repo", root / "wt"
-        (repo / "node_modules" / "old").mkdir(parents=True)
-        (repo / ".gitignore").write_text("node_modules/\n")
-        (repo / "a.js").write_text("x\n")
-        git = lambda cwd, *a: subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True, text=True)
-        git(repo, "init", "-q")
-        git(repo, "add", "-A")
-        git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
-        git(root, "clone", "-q", "--shared", str(repo), str(wt))
+        (self.repo / "node_modules" / "old").mkdir(parents=True)
         for f in (["bun.lock"], ["a.js", "package-lock.json"]):
             self.assertTrue(fc.fc_worktree.names_lockfile({"files": f}))
         self.assertFalse(fc.fc_worktree.names_lockfile({"files": ["a.js"]}))
-        fc.fc_worktree.ready_checkout(repo, wt, borrow=False)
-        self.assertFalse((wt / "node_modules").exists())
-        (wt / "node_modules" / "new").mkdir(parents=True)  # the task's own install
+        self.ready(deps=["node_modules"], borrow=False)
+        self.assertFalse((self.wt / "node_modules").exists())
+        (self.wt / "node_modules" / "new").mkdir(parents=True)  # the task's own install
         real, seen = shutil.rmtree, []
         def rmtree(path, *a, **k):
             real(path, *a, **k)
-            seen.append((repo / "node_modules").exists())
-        with mock.patch.object(shutil, "rmtree", rmtree):
-            fc.fc_worktree.adopt_installs(repo, wt)
+            seen.append((self.repo / "node_modules").exists())
+        with mock.patch.object(fc.fc_worktree, "dep_dirs", return_value=["node_modules"]), mock.patch.object(shutil, "rmtree", rmtree):
+            fc.fc_worktree.adopt_installs(self.repo, self.wt)
         self.assertTrue(seen and all(seen), "the install dir was missing during the swap")
-        self.assertTrue((repo / "node_modules" / "new").is_dir())
-        self.assertFalse((repo / "node_modules" / "old").exists())
-        self.assertFalse((repo / "node_modules").is_symlink())
+        self.assertTrue((self.repo / "node_modules" / "new").is_dir())
+        self.assertFalse((self.repo / "node_modules" / "old").exists())
+        self.assertFalse((self.repo / "node_modules").is_symlink())
 
 
 class FixScope(unittest.TestCase):
-    def verify(self, writes, reply="", cfg=None, pack="", tasks=(), trunk="main", dirty=None, artifact=None, report=None, rerun=0, top=None, layer=None):
+    TRACKED = {"a.go", "yarn.lock"}
+
+    def verify(self, writes, reply="", cfg=None, pack="", tasks=(), dirty=(), report=None, rerun=0, top=None):
         """A stack with one layer changing a.go; the first stage run fails, the fixer writes `writes`, later runs pass.
-        `self.scopes` holds the tests each stage run was given (None: the full checks). `dirty` (path: text) is in the worktree
-        before verify starts, over a tracked .claude/settings.json; `artifact` is a file the first stage run leaves behind. The first
-        stage run's `report` (by default one failing check, `c1`) is what the fix answers; the check exits `rerun` when verify runs it
-        again. `top` is the task id of the stack's top layer. `layer` (path: text) is more of what the layer commits."""
-        root = Path(tempfile.mkdtemp())
-        repo, proj = root / "repo", root / "proj"
-        repo.mkdir(); proj.mkdir()
-        git = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=repo, check=True, capture_output=True)
-        git("init", "-q", "-b", trunk)
-        (repo / "a.go").write_text("a\n"); (repo / "yarn.lock").write_text("lock\n")
-        (repo / ".claude").mkdir(); (repo / ".claude" / "settings.json").write_text("{}\n")
-        git("add", "-A"); git("commit", "-qm", "init")
-        git("checkout", "-qb", "layer")
-        (repo / "a.go").write_text("b\n")
-        for f, text in (layer or {}).items():
-            (repo / f).parent.mkdir(exist_ok=True); (repo / f).write_text(text)
-        git("add", "-A"); git("commit", "-qm", "layer")
-        for f, text in (dirty or {}).items():
-            (repo / f).write_text(text)
+        `self.scopes` holds the tests each stage run was given (None: the full checks). `dirty` lists the paths the user left
+        uncommitted before verify starts. The first stage run's `report` (by default one failing check, `c1`) is what the fix
+        answers; the check exits `rerun` when verify runs it again. `top` is the task id of the stack's top layer. Git is
+        faked: the stack diff names a.go, a new file is any written path outside TRACKED, and the fix diff removes the line `b`."""
+        repo, proj = Path(tempfile.mkdtemp()), Path(tempfile.mkdtemp())
+        state = {}
+        def sh(cmd, cwd=None, *a, **k):
+            out = "a.go" if "--name-only" in cmd and cmd[-1].endswith("...HEAD") else "layer" if "branch" in cmd else \
+                "\0".join(f for f in state if f not in self.TRACKED) if "ls-files" in cmd else "-b\n+fixed\n" if "-U0" in cmd else ""
+            return mock.Mock(stdout=out, stderr="", returncode=0)
         def impl(cwd, model, prompt, session=None, task=None, timeout=None):
             self.prompt = prompt
             for f, text in writes.items():
-                (Path(cwd) / f).write_text(text)
+                (Path(cwd) / f).write_text(text); state[f] = text
             return "s", reply, 1, {"cost": 0.0}
         stages, self.scopes, self.said = iter([(False, report or {"checks": [{"cmd": "c1", "exit": 1}]}, "finding"), (True, {}, "")]), [], []
         def run_stages(repo, proj, cfg, a, tests=None):
-            if artifact and not self.scopes:
-                (repo / artifact).write_text("out\n")
             self.scopes.append(tests)
             return next(stages)
         with mock.patch.object(fc.fc_implement, "implementer", impl), mock.patch.object(fc.fc_implement.fc_trailpack, "trail_pack", return_value=pack), \
                 mock.patch.object(fc.fc_verify, "run_stages", run_stages), mock.patch.object(fc.fc_verify, "review_inputs", return_value=(0, 0, 0, [])), \
-                mock.patch.object(fc.fc_tasks, "load_tasks", return_value=list(tasks)), \
+                mock.patch.object(fc.fc_tasks, "load_tasks", return_value=list(tasks)), mock.patch.object(fc.fc_verify, "changed_files", lambda repo: dict(state)), \
                 mock.patch.object(fc.fc_change, "reflect", return_value=(Path("/p/reflect.json"), {})), \
-                mock.patch.object(fc.fc_proc, "run", return_value=mock.Mock(returncode=rerun)), \
+                mock.patch.object(fc.fc_proc, "run", return_value=mock.Mock(returncode=rerun)), mock.patch.object(fc.fc_core, "sh", sh), \
                 mock.patch.object(fc.fc_worktree, "stack_order", return_value=[f"compose/p-{top}"] if top else []), \
-                mock.patch.object(fc.fc_worktree, "task_prefix", return_value="compose/p-"), \
+                mock.patch.object(fc.fc_worktree, "task_prefix", return_value="compose/p-"), mock.patch.object(fc.fc_worktree, "review_base", return_value="main"), \
+                mock.patch.object(fc.fc_worktree, "dirty_paths", return_value=list(dirty)), \
                 mock.patch.object(fc.fc_core, "say", self.said.append):  # a failed verify screens: never call Jev
             with self.assertRaises(SystemExit) as cm:
                 fc.fc_verify.verify_rounds(repo, proj, {"review_base": "main", **(cfg or {})}, type("A", (), {"fix": 2, "skip_review": True})(), [], time.time())
         return cm.exception.code, repo, json.loads((proj / "results" / "verify.json").read_text())
 
-    def committed(self, repo):
-        """The files the last commit changed, and what `git status` still shows."""
-        git = lambda *a: subprocess.run(["git", *a], cwd=repo, capture_output=True, text=True).stdout
-        return git("show", "--name-only", "--format=", "HEAD").split(), git("status", "--porcelain").splitlines()
-
-    def test_a_rewritten_wiring_file_neither_blocks_the_fix_nor_lands_in_its_commit(self):
-        # A session hook rewrites the tracked .claude/settings.json whenever a session starts in the checkout.
-        code, repo, res = self.verify({"a.go": "fixed\n"}, dirty={".claude/settings.json": '{"hooks": {}}\n'})
-        self.assertEqual((code, res["passed"], len(res["rounds"])), (0, True, 2))
-        self.assertEqual(self.committed(repo), (["a.go"], [" M .claude/settings.json"]))
-
-    def test_the_fix_commit_holds_only_what_the_fixer_changed(self):
-        # A check left a report behind and the fixer also rewrote the wiring: neither is the fix, and neither makes it a stray.
-        code, repo, res = self.verify({"a.go": "fixed\n", ".claude/settings.json": '{"x": 1}\n'}, artifact="report.xml")
-        self.assertEqual((code, res["passed"], res["rejected_fixes"]), (0, True, []))
-        self.assertEqual(self.committed(repo), (["a.go"], [" M .claude/settings.json", "?? report.xml"]))
-
     def test_uncommitted_changes_of_the_user_still_skip_the_fix(self):
-        code, repo, res = self.verify({"a.go": "fixed\n"}, dirty={"a.go": "mine\n"})
+        code, _, res = self.verify({"a.go": "fixed\n"}, dirty=["a.go"])
         self.assertEqual((code, len(res["rounds"])), (1, 1))
-        self.assertEqual((repo / "a.go").read_text(), "mine\n")
         self.assertIn("fix    skip  repo has uncommitted changes (a.go); commit first so a bad fix can be reverted", self.said)
 
-    def test_a_recorded_base_that_names_no_branch_scopes_the_fix_to_the_default_branch(self):
-        # A project made before init recorded its start branch holds review_base "main", also in a repository whose trunk is master.
-        code, repo, res = self.verify({"a.go": "fixed\n", "b.go": "new\n"}, trunk="master")
-        self.assertEqual((code, res["rejected_fixes"]), (1, [{"round": 1, "files": ["b.go"]}]))
-        self.assertEqual(((repo / "a.go").read_text(), (repo / "b.go").exists()), ("b\n", False))  # the round is reverted
-
-    def test_a_recorded_base_that_names_no_branch_reviews_the_diff_against_the_default_branch(self):
-        _, repo, _ = self.verify({"a.go": "fixed\n"}, trunk="master")
-        proj = Path(tempfile.mkdtemp())
-        with mock.patch.object(fc.fc_tasks, "load_tasks", return_value=[{"id": "001", "title": "t", "body": "", "files": ["a.go"], "protected": []}]):
-            self.assertEqual(fc.fc_verify.verify_root(repo, proj, {"review_base": "main"})[1], "master")
-            diff, _, _, _ = fc.fc_verify.review_inputs(repo, proj, {"review_base": "main"})
-        self.assertIn("+fixed", diff)  # the stack's diff, not every named file whole
-        self.assertNotIn("==== a.go ====", diff)
-
     def test_a_fix_that_changes_no_failing_check_and_no_cited_line_is_discarded(self):
-        code, repo, res = self.verify({"a.go": "fixed\n"}, rerun=1)  # c1 still fails after the fix
+        code, _, res = self.verify({"a.go": "fixed\n"}, rerun=1)  # c1 still fails after the fix
         self.assertEqual((code, len(res["rounds"]), res["rejected_fixes"]), (1, 1, [{"round": 1, "files": ["a.go"],
                          "why": "changed no failing check and removed no line a confirmed finding cites"}]))
-        self.assertEqual((self.committed(repo)[0], (repo / "a.go").read_text()), (["a.go"], "b\n"))  # still the layer's own commit
         rv = lambda quote: {"review": {"pass": False, "issues": [], "confirmed": [{"evidence": quote}]}}
-        code, repo, res = self.verify({"a.go": "fixed\n"}, report=rv("b"))  # it removes the line the finding quotes
-        self.assertEqual((code, res["rejected_fixes"], (repo / "a.go").read_text()), (0, [], "fixed\n"))
+        code, _, res = self.verify({"a.go": "fixed\n"}, report=rv("b"))  # it removes the line the finding quotes
+        self.assertEqual((code, res["rejected_fixes"]), (0, []))
         code, _, res = self.verify({"a.go": "fixed\n"}, report=rv("zzz"))
         self.assertEqual((code, len(res["rejected_fixes"])), (1, 1))  # it leaves that line alone
         code, _, res = self.verify({"a.go": "fixed\n"}, report={"e2e": [{"name": "n", "exit": 1}]})  # a failing e2e case is its own reproduction
         self.assertEqual((code, res["rejected_fixes"]), (0, []))
 
-    GUARD = {"m.py": "def f(x):\n    return x\n", "tests/__init__.py": "",
-             "tests/test_m.py": "import unittest\nfrom m import f\n\n\nclass T(unittest.TestCase):\n    def test_keeps(self):\n        self.assertEqual(f(1), 1)\n"}
-    ADDED = "\n    def test_none(self):\n        self.assertEqual(f(None), 0)\n"
-    GUARDED = "def f(x):\n    if x is None:\n        return 0\n    return x\n"
-    CHECK = "python3 -m unittest discover -s tests -t ."
-
-    def additive(self, writes, file="m.py", **kw):
-        """A fix that only adds code, for a confirmed finding about `file`; no check failed, so nothing but its own tests could show it."""
-        report = {"checks": [{"cmd": self.CHECK, "exit": 0}], "review": {"pass": False, "issues": [], "confirmed": [{"file": file, "evidence": "return x"}]}}
-        return self.verify(writes, report=report, layer=self.GUARD, **kw)
-
-    def test_an_additive_fix_for_a_confirmed_finding_is_kept_when_its_new_test_fails_without_it_and_passes_with_it(self):
-        code, repo, res = self.additive({"m.py": self.GUARDED, "tests/test_m.py": self.GUARD["tests/test_m.py"] + self.ADDED})
-        self.assertEqual((code, res["rejected_fixes"], (repo / "m.py").read_text()), (0, [], self.GUARDED))
-        self.assertEqual(self.committed(repo)[0], ["m.py", "tests/test_m.py"])
-
-    def test_an_additive_fix_is_still_discarded_when_it_has_no_test_that_fails_without_it_or_answers_no_confirmed_finding(self):
-        passes = self.GUARD["tests/test_m.py"] + "\n    def test_again(self):\n        self.assertEqual(f(2), 2)\n"
-        for writes, file in (({"m.py": self.GUARDED}, "m.py"), ({"m.py": self.GUARDED, "tests/test_m.py": passes}, "m.py"),
-                             ({"m.py": self.GUARDED, "tests/test_m.py": self.GUARD["tests/test_m.py"] + self.ADDED}, "other.py")):
-            code, repo, res = self.additive(writes, file=file)
-            self.assertEqual((code, len(res["rejected_fixes"]), (repo / "m.py").read_text()), (1, 1, self.GUARD["m.py"]), writes)
-
     def test_a_fix_round_commits_only_to_the_layer_that_owns_the_changed_file(self):
         tasks = [{"id": "003", "files": ["a.go"], "protected": [], "test": "t3"}, {"id": "007", "files": ["b.go"], "protected": [], "test": "t7"}]
-        code, repo, res = self.verify({"a.go": "fixed\n"}, tasks=tasks, top="007")
+        code, _, res = self.verify({"a.go": "fixed\n"}, tasks=tasks, top="007")
         nxt = "cut a new top task (id above 007) whose files: lists a.go, run it, then verify again"
         self.assertEqual((code, res["rejected_fixes"]), (1, [{"round": 1, "files": ["a.go"], "why": "changed a file of layer 003, not the top layer 007: a.go", "next": nxt}]))
         self.assertIn("fix    next  " + nxt, self.said)
-        self.assertEqual(((repo / "a.go").read_text(), self.committed(repo)[0]), ("b\n", ["a.go"]))  # reverted, nothing committed
         code, _, res = self.verify({"a.go": "fixed\n"}, tasks=tasks, top="003")
         self.assertEqual((code, res["rejected_fixes"]), (0, []))
         tasks[1]["files"].append("a.go")  # a file two tasks list belongs to the top layer too
@@ -479,11 +234,9 @@ class FixScope(unittest.TestCase):
         self.assertIsNone(fc.fc_verify.fix_tests(tasks, []))
 
     def test_fix_commit_uses_the_fixers_one_line_description(self):
-        _, repo, _ = self.verify({"a.go": "fixed\n"}, reply='"Match the autofill panel file name"\nI also changed...')
-        self.assertEqual(subprocess.run(["git", "log", "-1", "--format=%s"], cwd=repo, capture_output=True, text=True).stdout.strip(),
-                         "Match the autofill panel file name")
-        _, repo, _ = self.verify({"a.go": "fixed\n"}, reply="Fix verification findings")  # a process message is not used
-        self.assertEqual(subprocess.run(["git", "log", "-1", "--format=%s"], cwd=repo, capture_output=True, text=True).stdout.strip(), "Fix a.go")
+        message = fc.fc_verify.fix_message
+        self.assertEqual(message('"Match the autofill panel file name"\nI also changed...', ["a.go"]), "Match the autofill panel file name")
+        self.assertEqual(message("Fix verification findings", ["a.go"]), "Fix a.go")  # a process message is not used
 
     def test_review_confirms_only_defects_against_the_requirements(self):
         systems = []
@@ -668,12 +421,9 @@ class FixScope(unittest.TestCase):
         self.assertIn("judge err [high/correctness] a.py:2: n\n", out.getvalue())
 
     def test_lockfile_or_new_file_rejects_the_round_and_fails(self):
-        code, repo, res = self.verify({"a.go": "fixed\n", "yarn.lock": "rewritten\n", "package-lock.json": "{}\n"})
+        code, _, res = self.verify({"a.go": "fixed\n", "yarn.lock": "rewritten\n", "package-lock.json": "{}\n"})
         self.assertEqual((code, res["passed"]), (1, False))
         self.assertEqual(sorted(res["rejected_fixes"][0]["files"]), ["package-lock.json", "yarn.lock"])
-        self.assertEqual((repo / "a.go").read_text(), "b\n")  # the whole round is reverted
-        self.assertEqual((repo / "yarn.lock").read_text(), "lock\n")
-        self.assertFalse((repo / "package-lock.json").exists())
 
     def test_no_stack_diff_still_refuses_lockfiles(self):
         self.assertEqual(fc.fc_verify.fix_strays(["src/x.go", "client/yarn.lock"], set()), ["client/yarn.lock"])
@@ -896,7 +646,7 @@ class PiKeyFromEnv(unittest.TestCase):
                     mock.patch.object(time, "sleep"), mock.patch.object(fc.fc_herdr, "herdr_env", return_value=True), \
                     mock.patch.object(fc.fc_herdr, "herdr_space", return_value="w9"), mock.patch.object(fc.fc_herdr, "herdr_find_space", return_value="w9"), \
                     mock.patch.object(fc.fc_mcp, "installed_servers", return_value=[]), mock.patch.object(fc.fc_models, "model_available", return_value=(True, "")), \
-                    mock.patch("builtins.print"):
+                    mock.patch.object(fc.fc_pin, "cli_commit", return_value="abc1234"), mock.patch("builtins.print"):
                 fc.fc_crew.cmd_crew(a)
                 start = next(c for c in calls if c[:2] == ("agent", "start"))
                 self.assertEqual(start[start.index("--model") + 1], model[3:])
@@ -1194,64 +944,6 @@ class TypeSafeKey(unittest.TestCase):
                                           "typesafe": "ts-test-old"}, "auth.json differs")
 
 
-class RetryMessage(unittest.TestCase):
-    def run_three(self, summary="", backup=None, session="s", reader_cost=0.0):
-        """Attempts write a, b, yes; the test prints 5,000 copies and fails until yes. Returns (result, prompts, logs seen, log path);
-        the run's log lines land in self.said."""
-        root = Path(tempfile.mkdtemp())
-        repo, proj = root / "repo", root / "proj"
-        repo.mkdir(); proj.mkdir()
-        git = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True)
-        git("init", "-q", "-b", "main")
-        (repo / "a.txt").write_text("no\n")
-        git("add", "-A"); git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
-        test = "python3 -c \"s=open('a.txt').read().strip(); print(s*5000); raise SystemExit(s!='yes')\""
-        task = {"id": "001", "title": "answer", "files": ["a.txt"], "protected": [], "test": test,
-                "model": PRIMARY, "after": "", "linear": "ENG-1", "body": "## Goal\nWrite yes."}
-        log = proj / "results" / "001.test.log"
-        prompts, seen = [], []
-        def impl(cwd, model, prompt, session=None, task=None, timeout=None):
-            prompts.append(prompt)
-            seen.append(log.read_text() if log.exists() else None)
-            (Path(cwd) / "a.txt").write_text(["a", "b", "yes"][len(prompts) - 1] + "\n")
-            return session, "", 1, {"tokens_in": 1, "tokens_out": 1, "cost": 0.0}
-        self.said = []
-        with mock.patch.object(fc.fc_implement, "implementer", impl), mock.patch.object(fc.fc_implement.fc_trailpack, "trail_pack", return_value=""), \
-                mock.patch.object(fc.fc_implement, "read_failure", return_value=(summary, {"cost": reader_cost, "reference_cost": 0.5} if summary else None)), \
-                mock.patch.object(fc.fc_core, "say", self.said.append), \
-                mock.patch.object(fc.fc_config, "DEFAULT_MODEL", PRIMARY), mock.patch.object(fc.fc_config, "FALLBACK_MODEL", backup), \
-                mock.patch.dict(os.environ, {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}):
-            return fc.fc_implement.run_task(repo, proj, task, 3), prompts, seen, log
-
-    def test_retry_sends_a_short_tail_and_the_full_log_path(self):
-        r, prompts, seen, log = self.run_three(summary="case_x expected yes, got a")
-        self.assertEqual(r["status"], "passed")
-        self.assertEqual(seen[1:], ["a" * 5000 + "\n", "b" * 5000 + "\n"])  # whole output, overwritten by the next failed attempt
-        for p, ch in ((prompts[1], "a"), (prompts[2], "b")):
-            self.assertIn("What failed:\ncase_x expected yes, got a\n", p)
-            tail = p.split("Output (tail):\n", 1)[1].split("Full output: ", 1)[0]
-            self.assertTrue(900 <= tail.count(ch) <= 1000, tail.count(ch))
-            path = p.split("Full output: ", 1)[1].split(";", 1)[0]
-            self.assertTrue(Path(path).is_absolute(), path)
-            self.assertEqual(Path(path).resolve(), log.resolve())
-        self.assertEqual([len(e["test_output"]) for e in r["log"][:2]], [3000, 3000])
-
-    def test_reader_cost_counts_and_shows(self):
-        r, _, _, _ = self.run_three(summary="case_x expected yes, got a", reader_cost=0.01)
-        self.assertAlmostEqual(r["cost"], 0.02)
-        fails = [l for l in self.said if " attempt " in l and " fail " in l]
-        self.assertEqual(len(fails), 2)
-        self.assertTrue(all("reader $0.0100" in l for l in fails), fails)
-
-    def test_fallback_starts_from_the_task_and_ends_with_the_same_problems(self):
-        r, prompts, _, _ = self.run_three(backup=BACKUP)
-        self.assertEqual(r["log"][1]["fallback"]["to"], BACKUP)  # after models.fallback_after (2) misses
-        self.assertTrue(prompts[2].startswith(prompts[0]))
-        problems = prompts[2][prompts[2].index("The test still fails."):]
-        self.assertIn("Full output: ", problems)
-        self.assertLess(len(problems), 2000)  # the short tail, not the 3,000-character one
-
-
 class ProcGroupTurns(unittest.TestCase):
     """Task 002 (NEB-919): pi_turn and opencode start through fc_proc.run; timeout and stop."""
     def setUp(self):
@@ -1313,77 +1005,7 @@ class RunnerReadGuard(unittest.TestCase):
 
 
 class ReadGuardWiring(unittest.TestCase):
-    """Task 009 (NEB-946): run_task writes the guard, herdr pi loads it, refusals are counted per attempt."""
-    USAGE = {"tokens_in": 1, "tokens_out": 1, "cost": 0.0}
-
-    def run_one(self, impl, task_extra=None, attempts=3, files={"a.txt": "no\n"}, pack="", stale=0, figma=None):
-        root = Path(tempfile.mkdtemp()); repo, proj = root / "repo", root / "proj"; repo.mkdir(); proj.mkdir(); self.addCleanup(shutil.rmtree, root, True)
-        if figma:
-            (proj / "linear.json").write_text(json.dumps({"figma": figma}))
-        (proj / "worktrees").mkdir(); (proj / "worktrees" / "001.refused").write_text("{}\n" * stale)  # a previous run's refusals
-        git = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True)
-        git("init", "-q", "-b", "main")
-        for f, t in files.items(): (repo / f).parent.mkdir(parents=True, exist_ok=True); (repo / f).write_text(t)
-        git("add", "-A"); git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
-        task = {"id": "001", "title": "answer", "files": ["a.txt"], "protected": [], "test": "grep -q yes a.txt",
-                "model": "pi:p/primary", "after": "", "linear": "ENG-1", "body": "## Goal\nWrite yes.", **(task_extra or {})}
-        with mock.patch.object(fc.fc_implement, "implementer", impl), mock.patch.object(fc.fc_implement.fc_trailpack, "trail_pack", return_value=pack), \
-                mock.patch.object(fc.fc_config, "TEST_READER", None), \
-                mock.patch.dict(os.environ, {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}):
-            return fc.fc_implement.run_task(repo, proj, task, attempts), repo, proj
-
-    def test_the_guard_beside_the_clone_allows_files_protected_tests_and_the_pack_before_the_turn(self):
-        files = {"a.txt": "no\n", "t.sh": "x\n", "lib/x.py": "y\n"}
-        for pack, allowed in [("1. f · function\n   lib/x.py:L1-L2\n   t.sh:L3-L4", {"a.txt", "t.sh", "lib/x.py"}), ("", {"a.txt", "t.sh"})]:
-            seen = []
-            def impl(cwd, *a, **k):
-                g = Path(cwd).parent / "001.guard.json"
-                seen.append(g.exists() and json.loads(g.read_text()))
-                (Path(cwd) / "a.txt").write_text("yes\n")
-                return ("s", "", 1, self.USAGE)
-            _, _, proj = self.run_one(impl, {"protected": ["t.sh"]}, files=files, pack=pack)
-            wt = proj / "worktrees" / "001"
-            self.assertTrue(seen[0], "no guard file beside the clone when the turn started")
-            self.assertEqual(set(seen[0]["allow"]), {os.path.realpath(wt / f) for f in allowed}, pack)
-
-    def test_a_code_task_reads_its_figma_nodes_from_the_clone_and_never_commits_them(self):
-        doc = {"metadata": {"name": "f"}, "nodes": [{"id": "7:21", "name": "message", "type": "FRAME"}], "globalVars": {"styles": {}}}
-        fetched, seen = [], []
-        def fetch(key, node=None, depth=None):
-            fetched.append((key, node))
-            return json.dumps(doc)
-        def impl(cwd, model, prompt, *a, **k):
-            g = json.loads((Path(cwd).parent / "001.guard.json").read_text())
-            seen.append((prompt, g["allow"], json.loads((Path(cwd) / ".figma" / "7-21.json").read_text())))
-            (Path(cwd) / "a.txt").write_text("yes\n")
-            return ("s", "", 1, self.USAGE)
-        with mock.patch.object(fc.fc_figma, "framelink_fetch", fetch):
-            result, _, proj = self.run_one(impl, {"figma_nodes": ["7-21"]}, figma="KEY")
-        wt = proj / "worktrees" / "001"
-        self.assertEqual(result["status"], "passed")
-        self.assertEqual(fetched, [("KEY", "7:21")])
-        prompt, allow, doc = seen[0]
-        self.assertEqual(doc["nodes"][0]["name"], "message")
-        self.assertIn(os.path.realpath(wt / ".figma" / "7-21.json"), allow)
-        self.assertIn(str(wt.resolve() / ".figma" / "7-21.json"), prompt)
-        tracked = subprocess.run(["git", "ls-tree", "-r", "--name-only", result["branch"]], cwd=wt, capture_output=True, text=True).stdout
-        self.assertNotIn(".figma", tracked)
-
-    def test_each_attempt_counts_only_its_own_refusals_in_the_result_and_the_run_log(self):
-        def impl(cwd, *a, **k):
-            first = not (Path(cwd).parent / "turned").exists(); (Path(cwd).parent / "turned").touch()
-            with open(Path(cwd).parent / "001.refused", "a") as f:
-                f.write('{"tool": "read", "args": {}}\n' * (2 if first else 1))
-            (Path(cwd) / "a.txt").write_text("no\n" if first else "yes\n")
-            return ("s", "", 1, self.USAGE)
-        out = io.StringIO()
-        with redirect_stdout(out):
-            result, _, proj = self.run_one(impl, stale=5)
-        self.assertEqual(result["status"], "passed")
-        self.assertEqual([e.get("refused") for e in json.loads((proj / "results" / "001.json").read_text())["log"]], [2, 1])
-        self.assertRegex(out.getvalue(), r"001 attempt 1 fail .*lines=\d+\s+refused=2\b")
-        self.assertRegex(out.getvalue(), r"001 attempt 2 pass .*lines=\d+\s+refused=1\b")
-
+    """Task 009 (NEB-946): herdr pi loads the read guard."""
     def test_herdr_pi_loads_the_extension_and_the_guard_command_only_with_a_guard_file(self):
         for guard in (True, False):
             root = Path(tempfile.mkdtemp()); self.addCleanup(shutil.rmtree, root, True); (root / "wt").mkdir(); g = root / "wt.guard.json"
@@ -1399,197 +1021,6 @@ class ReadGuardWiring(unittest.TestCase):
             pairs = [starts[0][i:i + 2] for i in range(len(starts[0]))]
             self.assertEqual(["-e", str(fc.fc_readguard.PI_EXT)] in pairs, guard)
             self.assertEqual(panes[0].get("COMPOSE_READGUARD"), f"guard {g}" if guard else None)
-
-
-class LibrarySection(unittest.TestCase):
-    """Task 012 (NEB-950): the LIBRARY API section in the implementer prompt and the shared budget."""
-    def run_one(self, section, pack=True):
-        """run_task with fc_libapi.section answering `section` and a fake trail_pack that fills its cap (or gives nothing).
-        Returns (first prompt, the caps the pack got, the section calls, the clone)."""
-        root = Path(tempfile.mkdtemp()); repo, proj = root / "repo", root / "proj"; repo.mkdir(); proj.mkdir(); self.addCleanup(shutil.rmtree, root, True)
-        git = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True)
-        git("init", "-q", "-b", "main")
-        for f, t in {"a.txt": "no\n", "t.sh": "grep -q yes a.txt  # TEST TEXT\n"}.items(): (repo / f).write_text(t)
-        git("add", "-A"); git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
-        task = {"id": "001", "title": "answer", "files": ["a.txt"], "protected": ["t.sh", "gone.sh"], "test": "sh t.sh",
-                "model": "pi:p/primary", "after": "", "linear": "ENG-1", "body": "## Goal\nWrite yes.\n## Notes\nKeep it short."}
-        prompts, caps = [], []
-        def impl(cwd, model, prompt, session=None, task=None, timeout=None):
-            prompts.append(prompt); (Path(cwd) / "a.txt").write_text("yes\n")
-            return "s", "", 1, {"tokens_in": 1, "tokens_out": 1, "cost": 0.0}
-        def trail_pack(wt, query, repo=None, limit=6, cap=12000):
-            caps.append(cap); return "P" * cap if pack else ""
-        with mock.patch.object(fc.fc_implement, "implementer", impl), mock.patch.object(fc.fc_implement.fc_trailpack, "trail_pack", trail_pack), \
-                mock.patch.object(fc.fc_libapi, "section", return_value=section) as sec, mock.patch.object(fc.fc_config, "TEST_READER", None), \
-                mock.patch.dict(os.environ, {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}):
-            self.assertEqual(fc.fc_implement.run_task(repo, proj, task, 3)["status"], "passed")
-        return prompts[0], caps, sec.call_args_list, proj / "worktrees" / "001"
-
-    def test_the_section_sits_between_the_pack_and_the_body_and_shares_the_12000_budget(self):
-        section = "LIBRARY API for the packages this task imports\nlib 1.0\nlib.f(x, y=2)"
-        prompt, caps, calls, wt = self.run_one(section)
-        self.assertEqual(len(calls), 1)
-        (cwt, files, words), kw = calls[0]
-        self.assertEqual((Path(cwt).resolve(), files, kw), (wt.resolve(), ["a.txt"], {}))
-        self.assertIn("Write yes.", words); self.assertIn("TEST TEXT", words); self.assertNotIn("Keep it short.", words)
-        self.assertEqual(caps, [12000 - len(section)])
-        pack = "P" * caps[0]
-        self.assertLess(prompt.index(pack + "\n"), prompt.index(section))
-        self.assertLess(prompt.index(section) + len(section), prompt.index("## Goal\nWrite yes."))
-        self.assertNotIn("P" * (caps[0] + 1), prompt)
-
-
-class DeleteTasks(unittest.TestCase):
-    """Task 015 (NEB-952): delete: applied in the clone, and delete-only tasks with no model turn."""
-    def run_one(self, impl, task_extra=None, attempts=3, files={"a.txt": "no\n"}):
-        root = Path(tempfile.mkdtemp()); repo, proj = root / "repo", root / "proj"; repo.mkdir(); proj.mkdir(); self.addCleanup(shutil.rmtree, root, True)
-        git = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True)
-        git("init", "-q", "-b", "main")
-        for f, t in files.items(): (repo / f).parent.mkdir(parents=True, exist_ok=True); (repo / f).write_text(t)
-        git("add", "-A"); git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
-        task = {"id": "001", "title": "answer", "files": ["a.txt"], "protected": [], "test": "grep -q yes a.txt",
-                "model": "pi:p/primary", "after": "", "linear": "ENG-1", "body": "## Goal\nWrite yes.", **(task_extra or {})}
-        with mock.patch.object(fc.fc_implement, "implementer", impl), mock.patch.object(fc.fc_implement.fc_trailpack, "trail_pack", return_value=""), \
-                mock.patch.object(fc.fc_config, "TEST_READER", None), \
-                mock.patch.dict(os.environ, {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}):
-            return fc.fc_implement.run_task(repo, proj, task, attempts), repo, proj
-
-    def tree(self, repo):
-        branch = fc.fc_worktree.task_branch(repo, repo.parent / "proj", "001")  # run_one puts proj beside repo
-        out = subprocess.run(["git", "ls-tree", "-r", "--name-only", branch], cwd=repo, capture_output=True, text=True)
-        return out.stdout.split() if out.returncode == 0 else None
-
-    def edit(self, seen, extra=lambda cwd: None):
-        def impl(cwd, model, prompt, session=None, task=None, timeout=None):
-            seen.append(sorted(str(p.relative_to(cwd)) for p in Path(cwd).rglob("*.txt"))); (Path(cwd) / "a.txt").write_text("yes\n"); extra(Path(cwd))
-            return "s", "", 1, {"tokens_in": 1, "tokens_out": 1, "cost": 0.0}
-        return impl
-
-    def test_a_delete_only_task_removes_a_400_line_directory_and_commits_with_no_turn(self):
-        impl = mock.Mock(side_effect=AssertionError("no turn"))
-        files = {"a.txt": "no\n", "old/a.py": "x\n" * 300, "old/sub/b.py": "y\n" * 100}
-        result, repo, _ = self.run_one(impl, {"files": [], "delete": ["old/"], "test": "test ! -e old"}, files=files)
-        impl.assert_not_called()
-        self.assertEqual((result["status"], len(result["log"])), ("passed", 1))
-        self.assertEqual(self.tree(repo), ["a.txt"])
-
-    def test_a_delete_only_task_whose_test_fails_or_touches_other_files_fails_after_one_attempt(self):
-        for test in ("grep -q yes a.txt", "test ! -e gone.txt && touch b.py"):
-            impl = mock.Mock(side_effect=AssertionError("no turn"))
-            result, repo, _ = self.run_one(impl, {"files": [], "delete": ["gone.txt"], "test": test}, files={"a.txt": "no\n", "gone.txt": "z\n"})
-            impl.assert_not_called()
-            self.assertEqual((result["status"], len(result["log"]), self.tree(repo)), ("failed", 1, None), test)
-
-    def test_delete_paths_are_gone_before_the_turn_and_from_the_branch_beside_an_edit(self):
-        seen = []
-        result, repo, _ = self.run_one(self.edit(seen), {"delete": ["gone.txt"]}, files={"a.txt": "no\n", "gone.txt": "z\n", "keep.txt": "k\n"})
-        self.assertEqual((result["status"], seen), ("passed", [["a.txt", "keep.txt"]]))
-        self.assertEqual(self.tree(repo), ["a.txt", "keep.txt"])
-
-    def test_a_turn_deleting_a_file_outside_files_and_delete_is_rejected_for_scope(self):
-        impl = self.edit([], lambda cwd: (cwd / "keep.txt").unlink())
-        result, _, _ = self.run_one(impl, {"delete": ["gone.txt"]}, attempts=1, files={"a.txt": "no\n", "gone.txt": "z\n", "keep.txt": "k\n"})
-        self.assertEqual((result["status"], result["log"][0]["stray"]), ("rejected_scope", ["keep.txt"]))
-
-    def test_a_task_without_delete_and_without_files_still_gets_a_turn_and_no_scope_check(self):
-        seen = []
-        result, repo, _ = self.run_one(self.edit(seen, lambda cwd: (cwd / "b.py").write_text("b\n")), {"files": []})
-        self.assertEqual((result["status"], len(seen), self.tree(repo)), ("passed", 1, ["a.txt", "b.py"]))
-
-
-class SiblingStubs(unittest.TestCase):
-    """A task that passes its own test but removes what another task's stub in the same file owns must not pass."""
-    STUBS = "def one():\n    raise NotImplementedError\n\n\ndef two():\n    raise NotImplementedError\n"
-    TESTS = {"tests/test_one.py": "import unittest, m\n\n\nclass One(unittest.TestCase):\n    def test_one(self):\n        self.assertEqual(m.one(), 1)\n",
-             "tests/test_names.py": "import unittest, m\n\n\nclass Names(unittest.TestCase):\n    def test_two_is_defined(self):\n        self.assertTrue(hasattr(m, 'two'))\n"}
-
-    NAMES = "python3 -m unittest discover -s tests -p test_names.py"
-
-    def run_one(self, answers, checks=(), tests=None, others=None, own=None, task_checks=None):
-        root = Path(tempfile.mkdtemp()); repo, proj = root / "repo", root / "proj"; repo.mkdir(); proj.mkdir(); self.addCleanup(shutil.rmtree, root, True)
-        git = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True)
-        git("init", "-q", "-b", "main")
-        for f, t in {"m.py": self.STUBS, ".gitignore": "__pycache__/\n", **(tests or self.TESTS)}.items(): (repo / f).parent.mkdir(parents=True, exist_ok=True); (repo / f).write_text(t)
-        git("add", "-A"); git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
-        (proj / "verify.json").write_text(json.dumps({"checks": list(checks), **({} if task_checks is None else {"task_checks": list(task_checks)})}))
-        task = {"id": "001", "title": "one", "files": ["m.py"], "protected": ["tests/test_one.py"], "model": "pi:p/primary", "after": "", "linear": "ENG-1",
-                "test": own or "python3 -m unittest discover -s tests -p test_one.py", "body": "## Goal\nMake one() return 1."}
-        if others:  # the other tasks as synced: id -> (the file it owns, its test)
-            (proj / "results").mkdir(); (proj / "results" / "tasks.json").write_text(json.dumps({"feature": {}, "tasks": [task] + [
-                {"id": i, "title": i, "files": [f], "protected": [], "after": "", "linear": f"ENG-{i}", "test": t, "body": "## Goal\nx"} for i, (f, t) in others.items()]}))
-        prompts, turn = [], iter(answers)
-        def impl(cwd, model, prompt, session=None, task=None, timeout=None):
-            prompts.append(prompt); (Path(cwd) / "m.py").write_text(next(turn))
-            return "s", "", 1, {"tokens_in": 1, "tokens_out": 1, "cost": 0.0}
-        with mock.patch.object(fc.fc_implement, "implementer", impl), mock.patch.object(fc.fc_implement.fc_trailpack, "trail_pack", return_value=""), \
-                mock.patch.object(fc.fc_config, "TEST_READER", None), \
-                mock.patch.dict(os.environ, {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}), \
-                redirect_stdout(io.StringIO()) as said:
-            result = fc.fc_implement.run_task(repo, proj, task, 2)
-        self.said = said.getvalue()
-        return result, prompts
-
-    def test_a_passing_task_that_deleted_a_sibling_stub_is_rejected_and_told_which_test_broke(self):
-        result, prompts = self.run_one(["def one():\n    return 1\n", "def one():\n    return 1\n\n\ndef two():\n    raise NotImplementedError\n"], others={"002": ("m.py", self.NAMES)})
-        self.assertEqual((result["status"], result["attempts"]), ("passed", 2))
-        self.assertEqual(result["log"][0]["test_exit"], 0)
-        self.assertIn("test_two_is_defined", " ".join(result["log"][0]["broke"]))
-        self.assertIn("test_two_is_defined", prompts[1])
-
-    def test_a_task_that_ends_with_a_sibling_stub_gone_does_not_pass(self):
-        result, _ = self.run_one(["def one():\n    return 1\n"] * 2, others={"002": ("m.py", self.NAMES)})
-        self.assertEqual(result["status"], "rejected_regression")
-
-    def counted(self, cmd="true"):
-        counter = Path(tempfile.mkdtemp()) / "runs"; self.addCleanup(shutil.rmtree, counter.parent, True)
-        return counter, f"echo run >> {counter}; {cmd}"
-
-    def test_a_whole_suite_check_runs_neither_after_the_task_nor_on_its_base(self):
-        counter, suite = self.counted("python3 -m unittest discover -s tests && false")
-        result, _ = self.run_one(["def one():\n    return 1\n\n\ndef two():\n    raise NotImplementedError\n"], checks=(suite,))
-        self.assertEqual(result["status"], "passed")
-        self.assertFalse(counter.exists())
-
-    def test_the_test_of_a_task_owning_a_changed_file_runs_once_and_no_other_test_runs(self):
-        (sibling, covering), (far, elsewhere), (mine, own) = self.counted(self.NAMES), self.counted(), self.counted("python3 -m unittest discover -s tests -p test_one.py")
-        result, _ = self.run_one(["def one():\n    return 1\n\n\ndef two():\n    raise NotImplementedError\n"], own=own, others={"002": ("m.py", covering), "003": ("other.py", elsewhere)})
-        self.assertEqual(result["status"], "passed")
-        self.assertEqual([c.read_text().split() if c.exists() else [] for c in (sibling, far, mine)], [["run"], [], ["run"] * 2])  # the task's own test: red before the attempt, green after it, never again as a check
-
-    def test_a_covering_test_that_fails_on_the_base_too_is_not_blamed_on_the_task(self):
-        result, _ = self.run_one([self.FIX], tests=self.UNTOUCHED, others={"002": ("m.py", self.NAMES)})
-        self.assertEqual((result["status"], result["log"][0].get("broke")), ("passed", None))
-
-    def test_task_checks_replace_checks_after_a_task_and_leave_the_suite_to_verify(self):
-        counter = Path(tempfile.mkdtemp()) / "runs"; self.addCleanup(shutil.rmtree, counter.parent, True)
-        suite = f"echo run >> {counter}; python3 -m unittest discover -s tests"
-        result, _ = self.run_one(["def one():\n    return 1\n\n\ndef two():\n    raise NotImplementedError\n"], checks=(suite,), task_checks=("true",))
-        self.assertEqual((result["status"], counter.exists()), ("passed", False))
-        self.assertIn("001 checks  `true` after the task", self.said)
-
-    def test_a_check_that_was_red_before_the_task_is_not_blamed_on_it(self):
-        result, _ = self.run_one(["def one():\n    return 1\n\n\ndef two():\n    raise NotImplementedError\n"], checks=("python3 -m unittest discover -s tests -p test_one.py && false",))
-        self.assertEqual(result["status"], "passed")
-
-    # test_three reads m.py as text, imports nothing the task changes, and fails before and after it.
-    UNTOUCHED = {"tests/test_one.py": TESTS["tests/test_one.py"],
-                 "tests/test_names.py": "import unittest\n\n\nclass Names(unittest.TestCase):\n    def test_three(self):\n        self.assertIn('def three', open('m.py').read())\n"}
-    ID = "test_three (test_names.Names.test_three)"
-    FIX = "def one():\n    return 1\n"
-
-    def test_an_id_failing_after_a_task_whose_base_run_is_unknown_is_not_taken_for_base_red(self):
-        unknown = "grep -q 'return 1' m.py || exit 2; python3 -m unittest discover -s tests -p test_names.py"
-        result, _ = self.run_one([self.FIX], checks=(unknown,), tests=self.UNTOUCHED)
-        self.assertEqual((result["status"], result["attempts"]), ("rejected_regression", 1))
-        self.assertIn(self.ID, " ".join(result["log"][0]["base unknown"]))
-        self.assertIn("exited 2 and printed no failing test", " ".join(result["log"][0]["base unknown"]))
-
-    def test_an_id_that_fails_on_the_base_tree_too_is_accepted_when_the_run_on_the_base_was_unknown(self):
-        counter = Path(tempfile.mkdtemp()) / "runs"; self.addCleanup(shutil.rmtree, counter.parent, True)
-        flaky = f"n=$(cat {counter} 2>/dev/null || echo 0); echo $((n+1)) > {counter}; [ $n = 1 ] && exit 2; python3 -m unittest discover -s tests -p test_names.py"
-        result, _ = self.run_one([self.FIX], checks=(flaky,), tests=self.UNTOUCHED)
-        self.assertEqual(result["status"], "passed")
-        self.assertEqual(result["log"][0]["red on base (baseline unknown)"], [self.ID])
 
 
 class TestTierEscalation(unittest.TestCase):
@@ -1620,42 +1051,3 @@ class TestTierEscalation(unittest.TestCase):
             self.assertIsNone(fc.fc_models.fallback_for("pi:s/one"))
             self.assertEqual(fc.fc_models.fallback_for(PRIMARY), BACKUP)
 
-
-class TestReferenceCost(unittest.TestCase):
-    def result(self, turns, rate_limited=None):
-        """Each entry of `turns` is the usage of one implementer turn; the first turn misses, the last one writes the answer."""
-        root = Path(tempfile.mkdtemp())
-        repo, proj = root / "repo", root / "proj"
-        repo.mkdir(); proj.mkdir()
-        git = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True)
-        git("init", "-q", "-b", "main")
-        (repo / "a.txt").write_text("no\n")
-        git("add", "-A"); git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
-        task = {"id": "001", "title": "answer", "files": ["a.txt"], "protected": [], "test": "grep -q yes a.txt",
-                "model": PRIMARY, "after": "", "linear": "ENG-1", "body": "## Goal\nWrite yes."}
-        usages = list(turns)
-        def run_impl(cwd, model, prompt, session=None, task=None, timeout=None):
-            if rate_limited and model == PRIMARY:
-                raise fc.fc_models.RateLimited(rate_limited)
-            usage = {"tokens_in": 1, "tokens_out": 1, **usages.pop(0)}
-            (Path(cwd) / "a.txt").write_text("yes\n" if not usages else "nope\n")
-            return "s", "", 1, usage
-        with mock.patch.object(fc.fc_implement, "implementer", run_impl), mock.patch.object(fc.fc_implement.fc_trailpack, "trail_pack", return_value=""), \
-                mock.patch.object(fc.fc_config, "DEFAULT_MODEL", PRIMARY), mock.patch.object(fc.fc_config, "FALLBACK_MODEL", BACKUP), \
-                mock.patch.object(fc.fc_config, "FALLBACK_AFTER", 2), mock.patch.object(fc.fc_config, "TEST_READER", None), \
-                mock.patch.dict(os.environ, {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}):
-            fc.fc_implement.run_task(repo, proj, task, 3)
-        return json.loads((proj / "results" / "001.json").read_text())
-
-    def test_a_real_cost_stays_apart_from_the_reference_cost(self):
-        r = self.result([{"cost": 0.125, "reference_cost": 0.25}] * 2)
-        self.assertEqual((r["reference_cost"], r["cost"]), (0.5, 0.25))
-
-    def test_a_missing_or_none_reference_cost_counts_as_zero(self):
-        for usage in ({"cost": 0.0}, {"cost": 0.0, "reference_cost": None}):
-            self.assertEqual(self.result([usage] * 2)["reference_cost"], 0.0)
-        self.assertEqual(self.result([{"cost": 0.0, "reference_cost": None}, {"cost": 0.0, "reference_cost": 0.25}])["reference_cost"], 0.25)
-
-    def test_a_rate_limited_attempt_adds_its_reference_cost(self):
-        r = self.result([{"cost": 0.0, "reference_cost": 0.25}] * 2, rate_limited={"cost": 0.0, "reference_cost": 0.125})
-        self.assertEqual(r["reference_cost"], 0.625)

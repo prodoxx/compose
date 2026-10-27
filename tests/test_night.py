@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import inspect, json, os, subprocess, tempfile, time, unittest, unittest.mock
+import json, os, subprocess, tempfile, time, unittest, unittest.mock
 from pathlib import Path
 import importlib.machinery, importlib.util, sys
 # tests/test_modules.py fails a test file without the next line
@@ -22,7 +22,7 @@ BIN = Path(__file__).resolve().parents[1] / "bin"
 class Limits(unittest.TestCase):
     def setUp(self):
         self.repo = Path(tempfile.mkdtemp()).resolve()
-        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
+        p = unittest.mock.patch.object(fc_core, "worktree_branches", lambda repo: [(self.repo, "main")]); p.start(); self.addCleanup(p.stop)  # the one checkout git would list
 
     def make_proj(self, slug):
         (self.repo / ".compose" / slug / "results").mkdir(parents=True)
@@ -63,7 +63,7 @@ class Limits(unittest.TestCase):
         self.assertEqual(ns.notes_tail(self.repo), "first\nsecond\n")
         self.assertEqual(ns.notes_tail(self.repo, 7), "second\n")
         self.assertEqual(ns.notes_path(self.repo).name, "night-notes.md")
-        with unittest.mock.patch.object(ns, "subprocess") as sp:  # the module's own name only, so git still runs
+        with unittest.mock.patch.object(ns, "subprocess") as sp:  # the module's own name only
             p = sp.Popen; p.return_value.pid = 4242
             self.assertEqual(ns.spawn_once(self.repo, ["status"], "x.log"), 4242)
         self.assertEqual(p.call_args[0][0][1:], [str(BIN / "compose.py"), "status"])
@@ -117,7 +117,7 @@ class UsageWaits(unittest.TestCase):
         self.read = lambda name: self.panes.get(name, "")
         self.prompt = lambda name, text: self.prompted.append((name, text)) or True
         self.repo = Path(tempfile.mkdtemp()).resolve()
-        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
+        p = unittest.mock.patch.object(fc_core, "worktree_branches", lambda repo: [(self.repo, "main")]); p.start(); self.addCleanup(p.stop)  # the one checkout git would list
 
     def test_reset_times_parse_to_the_next_occurrence_plus_a_minute(self):
         at = time.mktime((2026, 10, 27, 1, 10, 0, 0, 0, -1))
@@ -242,7 +242,7 @@ class UsageWaits(unittest.TestCase):
 class Answerer(unittest.TestCase):
     def setUp(self):
         self.repo = Path(tempfile.mkdtemp()).resolve()
-        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
+        p = unittest.mock.patch.object(fc_core, "worktree_branches", lambda repo: [(self.repo, "main")]); p.start(); self.addCleanup(p.stop)  # the one checkout git would list
         self.proj = self.repo / ".compose" / "sign-in"
         (self.proj / "results" / "crew").mkdir(parents=True)
         (self.proj / "verify.json").write_text("{}")
@@ -486,7 +486,7 @@ def rd(ident, ready=True, specced=True, error=None):
 class Prep(unittest.TestCase):
     def setUp(self):
         self.repo = Path(tempfile.mkdtemp()).resolve()
-        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
+        p = unittest.mock.patch.object(fc_core, "worktree_branches", lambda repo: [(self.repo, "main")]); p.start(); self.addCleanup(p.stop)  # the one checkout git would list
         self.state = {"night": ns.new_night(100.0, 1e12, 10.0, None), "prep": {}}
         st.save_state(self.repo, {"mode": "night", "night": self.state["night"]})
         self.out, self.events, self.gone, self.pids = [], [], set(), iter(range(7000, 7100))
@@ -810,8 +810,8 @@ class Prep(unittest.TestCase):
 class Digest(unittest.TestCase):
     def setUp(self):
         self.repo = Path(tempfile.mkdtemp()).resolve() / "neb"
+        p = unittest.mock.patch.object(fc_core, "worktree_branches", lambda repo: [(self.repo, "main")]); p.start(); self.addCleanup(p.stop)  # the one checkout git would list
         self.repo.mkdir()
-        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
         self.since = time.mktime((2026, 10, 26, 23, 0, 0, 0, 0, -1))
         self.state = {"night": ns.new_night(self.since, self.since + 8 * 3600, 20.0, None), "prep": {},
                       "dispatched": {"NEB-10": {"feature": "NEB-9", "project": "sign-in", "kind": "story", "at": self.since}}}
@@ -1020,8 +1020,8 @@ class Night(unittest.TestCase):
         self.argparse, self.fcntl = argparse, fcntl
         d = tempfile.TemporaryDirectory(); self.addCleanup(d.cleanup)
         self.repo = Path(d.name).resolve() / "neb"
+        p = unittest.mock.patch.object(fc_core, "worktree_branches", lambda repo: [(self.repo, "main")]); p.start(); self.addCleanup(p.stop)  # the one checkout git would list
         self.repo.mkdir()
-        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
         for slug, feature in (("sign-in", "NEB-9"), ("billing", "NEB-20")):
             self.make(slug, feature)
         self.sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])

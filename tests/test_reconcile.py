@@ -115,6 +115,7 @@ class Reconcile(unittest.TestCase):
         for mod, name, value in ((fc.fc_config, "LINEAR_KEY", "lin_api_x"), (fc.fc_linear, "linear_gql", self.linear.gql)):
             p = mock.patch.object(mod, name, value); p.start(); self.addCleanup(p.stop)
         p = mock.patch.object(Path, "home", return_value=self.tmp); p.start(); self.addCleanup(p.stop)
+        p = mock.patch.object(fc.fc_core, "worktree_branches", return_value=[(self.repo, "")]); p.start(); self.addCleanup(p.stop)  # the one checkout git would list
 
     def args(self, action, **kw):
         return SimpleNamespace(repo=str(self.repo), action=action, file=kw.get("file"), go=kw.get("go"), project=kw.get("project"))

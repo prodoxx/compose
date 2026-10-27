@@ -1,16 +1,18 @@
 import hermetic  # first: no test sees the real home
-import importlib.machinery, importlib.util, io, json, os, subprocess, tempfile, threading, time, unittest
+import importlib.machinery, importlib.util, io, json, os, tempfile, threading, time, unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
-import sys
+import fnmatch, sys
 os.environ["HERDR_ENV"] = ""
 
 _spec = importlib.util.spec_from_loader("fc", importlib.machinery.SourceFileLoader("fc", str(Path(__file__).resolve().parents[1] / "bin" / "compose.py")))
 fc = importlib.util.module_from_spec(_spec)
 for _m in [m for m in sys.modules if m.startswith("fc_") and m not in ("fc_cost", "fc_mcp", "fc_sessions")]: del sys.modules[_m]
 _spec.loader.exec_module(fc)
+import fc_ledger  # noqa: E402
+NO_REPO = Path(tempfile.mkdtemp())  # a folder with no .git above it: compose asks git nothing about it
 
 MAP = """## Destination
 Drafts survive a reload.
@@ -24,6 +26,10 @@ Drafts survive a reload.
 ## Not yet specified
 - Conflict handling
 """
+
+
+def setUpModule():
+    p = mock.patch.object(fc_ledger, "run_events", return_value=[]); p.start(); unittest.addModuleCleanup(p.stop)  # the evidence a run records reads task branches from git
 
 
 def project(description=MAP):
@@ -190,6 +196,12 @@ class Reflect(unittest.TestCase):
 
 
 class WatchReflect(unittest.TestCase):
+    def setUp(self):
+        for mod, name, value in ((fc.fc_status, "project_head", lambda repo, proj: ""), (fc.fc_core, "current_branch", lambda repo: "main"),
+                            (fc.fc_worktree, "task_prefix", lambda repo, proj: "compose/hw-"), (fc.fc_worktree, "heads", lambda repo: set()),
+                            (fc.fc_worktree, "task_branches", lambda repo, proj: {})):
+            p = mock.patch.object(mod, name, value); p.start(); self.addCleanup(p.stop)
+
     def snap(self, reflects):
         return {"tasks": {}, "agents": {}, "run": False, "verify": None, "crew": {}, "reflects": reflects}
 
@@ -223,10 +235,10 @@ class WatchReflect(unittest.TestCase):
                 mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "ts-test"}):
             path, _ = fc.fc_change.reflect(proj, "task:001", "x")
         with mock.patch.object(fc.fc_herdr, "herdr", return_value={}):
-            self.assertEqual(fc.fc_watch.watch_snapshot(Path("."), proj)["reflects"][str(path)]["counts"], (1, 0))
+            self.assertEqual(fc.fc_watch.watch_snapshot(NO_REPO, proj)["reflects"][str(path)]["counts"], (1, 0))
             fc.fc_change.changes_dir(proj).mkdir(parents=True)
             (fc.fc_change.changes_dir(proj) / "C1.json").write_text(json.dumps({"id": "C1", "done_at": "2999-01-01 00:00:00"}))
-            self.assertEqual(fc.fc_watch.watch_snapshot(Path("."), proj)["reflects"], {})
+            self.assertEqual(fc.fc_watch.watch_snapshot(NO_REPO, proj)["reflects"], {})
 
     def test_the_snapshot_drops_screens_a_dismissal_answered(self):
         proj = project()
@@ -236,12 +248,12 @@ class WatchReflect(unittest.TestCase):
         with open(proj / "results" / "evidence.jsonl", "a") as f:
             f.write(json.dumps({"at": "2999-01-01 00:00:00", "trigger": "dismissed", "text": "a false alarm", "cut": True}) + "\n")
         with mock.patch.object(fc.fc_herdr, "herdr", return_value={}):
-            self.assertEqual(fc.fc_watch.watch_snapshot(Path("."), proj)["reflects"], {})
+            self.assertEqual(fc.fc_watch.watch_snapshot(NO_REPO, proj)["reflects"], {})
 
     def test_a_screen_written_between_two_watches_is_reported_by_the_next(self):
         proj = project()
         def watch(now):
-            out, a = [], SimpleNamespace(repo=".", now=now, from_=None, timeout=0.05, interval=0.01, stall=10_000)
+            out, a = [], SimpleNamespace(repo=str(NO_REPO), now=now, from_=None, timeout=0.05, interval=0.01, stall=10_000)
             with mock.patch.object(fc.fc_core, "project_dir", return_value=proj), mock.patch.object(fc.fc_herdr, "herdr", return_value={}), \
                     mock.patch("builtins.print", out.append), mock.patch.dict(os.environ, {"COMPOSE_ROLE": "orchestrator"}):
                 try:
@@ -290,10 +302,10 @@ def run_all(proj, status=None, during=None, reflect=None, parallel=1):
         return {"id": meta["id"], "title": meta["title"], "status": st, "attempts": 1, "seconds": 0.0, "cost": 0.0, "branch": "-", "log": log}
     out = io.StringIO()
     with mock.patch.object(fc.fc_implement, "run_task", fake), mock.patch.object(fc.fc_run, "preflight", lambda m: None), \
-            mock.patch.object(fc.fc_worktree, "stack_order", lambda r, p: []), mock.patch.object(fc.fc_herdr, "herdr_space", lambda p: None), \
+            mock.patch.object(fc.fc_worktree, "stack_order", lambda r, p: []), mock.patch.object(fc.fc_core, "worktree_branches", lambda r: []), mock.patch.object(fc.fc_herdr, "herdr_space", lambda p: None), \
             mock.patch.object(fc.fc_run, "triage", lambda *x: None), mock.patch.object(fc.fc_change, "reflect", reflect), redirect_stdout(out):
         try:
-            fc.fc_run.run_tasks(Path("."), proj, fc.fc_tasks.load_tasks(proj), SimpleNamespace(trunk="main", parallel=parallel, attempts=1, no_stack=True))
+            fc.fc_run.run_tasks(NO_REPO, proj, fc.fc_tasks.load_tasks(proj), SimpleNamespace(trunk="main", parallel=parallel, attempts=1, no_stack=True))
         except SystemExit:
             pass
     return calls, out.getvalue(), reflect
@@ -346,30 +358,6 @@ class Holds(unittest.TestCase):
             self.hold(only="002", reason="D2 broken")
         self.assertEqual(seen, [{"002"}])
 
-    def test_a_task_held_while_the_run_prepares_it_never_starts_and_goes_back_to_pending(self):
-        root = Path(tempfile.mkdtemp())
-        repo = root / "repo"
-        repo.mkdir()
-        git = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True)
-        git("init", "-q", "-b", "main")
-        (repo / "001.txt").write_text("no\n")
-        git("add", "-A"); git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
-        before = json.dumps({"id": "001", "status": "failed", "attempts": 3})  # its last run's result
-        (self.proj / "results" / "001.json").write_text(before)
-        ready, turns, moves = fc.fc_worktree.ready_checkout, [], []
-        def install(*a, **kw):  # the hold lands while the run clones and installs, after it submitted the task
-            ready(*a, **kw)
-            self.hold(only="001", reason="D2 broken")
-        with mock.patch.object(fc.fc_worktree, "ready_checkout", install), mock.patch.object(fc.fc_implement.fc_trailpack, "trail_pack", return_value=""), \
-                mock.patch.object(fc.fc_implement, "implementer", lambda *a, **kw: turns.append(a)), \
-                mock.patch.object(fc.fc_linear, "linear_event", lambda proj, meta, event, result=None: moves.append(event)):
-            r = fc.fc_implement.run_task(repo, self.proj, {**task("001"), "test": "grep -q yes 001.txt"}, 3)
-        self.assertEqual((r["status"], turns, moves), ("held", [], []))
-        self.assertEqual((self.proj / "results" / "001.json").read_text(), before)
-        self.assertFalse((self.proj / "worktrees" / "001").exists())
-        self.assertIn("001 held    before its first turn: D2 broken", self.said)
-        self.assertNotIn("001 start", " ".join(self.said))
-
     def test_a_task_handed_back_held_waits_like_any_held_task(self):
         calls, table, _ = run_all(self.proj, status={"004": "held"}, during=lambda tid: tid == "004" and self.hold(only="004", reason="x"))
         self.assertEqual(calls, ["001", "002", "003", "004"])
@@ -393,7 +381,7 @@ class Holds(unittest.TestCase):
         self.assertIn("003 held    after held 002", self.said)
         self.assertNotIn("blocked_by", table)
         with mock.patch.object(fc.fc_core, "sh", return_value=SimpleNamespace(returncode=1, stdout="")):
-            row = fc.fc_status.task_state(Path("."), self.proj, fc.fc_tasks.load_tasks(self.proj)[1], "HEAD")
+            row = fc.fc_status.task_state(NO_REPO, self.proj, fc.fc_tasks.load_tasks(self.proj)[1], "HEAD")
         self.assertEqual((row["state"], row["note"]), ("held", "waits on ENG-90 (In Progress)"))
 
     def test_a_failure_still_blocks_what_waits_on_it(self):
@@ -431,43 +419,11 @@ class Holds(unittest.TestCase):
     def test_status_shows_held_with_the_reason(self):
         self.hold(only="002", reason="D2 broken")
         with mock.patch.object(fc.fc_core, "sh", return_value=SimpleNamespace(returncode=1, stdout="")):
-            row = fc.fc_status.task_state(Path("."), self.proj, task("002", "001"), "HEAD")
+            row = fc.fc_status.task_state(NO_REPO, self.proj, task("002", "001"), "HEAD")
         self.assertEqual((row["state"], row["note"]), ("held", "D2 broken"))
 
 
 class ImplementerContradiction(unittest.TestCase):
-    def run_with(self, reply):
-        """One task whose test can never pass, with an implementer that always answers `reply`. Returns (result, prompts)."""
-        root = Path(tempfile.mkdtemp())
-        repo, proj = root / "repo", root / "proj"
-        repo.mkdir(); proj.mkdir()
-        git = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True)
-        git("init", "-q", "-b", "main")
-        (repo / "a.txt").write_text("no\n")
-        git("add", "-A"); git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
-        meta = {"id": "001", "title": "answer", "files": ["a.txt"], "protected": [], "test": "grep -q yes a.txt",
-                "model": "pi:p/primary", "after": "", "linear": "ENG-1", "body": "## Goal\nCall answer() from a.txt."}
-        prompts = []
-        def impl(cwd, model, prompt, session=None, task=None, timeout=None):
-            prompts.append(prompt)
-            return "s", reply, 1, {"tokens_in": 1, "tokens_out": 1, "cost": 0.0}
-        with mock.patch.object(fc.fc_implement, "implementer", impl), mock.patch.object(fc.fc_implement.fc_trailpack, "trail_pack", return_value=""), \
-                mock.patch.object(fc.fc_core, "say", lambda m: None), mock.patch.object(fc.fc_config, "TEST_READER", None), \
-                mock.patch.dict(os.environ, {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}):
-            return fc.fc_implement.run_task(repo, proj, meta, 3), prompts
-
-    def test_a_contradiction_ends_the_task_without_more_attempts(self):
-        found = "the brief says a.txt exports answer() / a.txt is plain text, a.txt:1"
-        r, prompts = self.run_with(f"Read a.txt.\nCONTRADICTION: {found}")
-        self.assertEqual((r["status"], r["attempts"], len(prompts)), ("contradiction", 1, 1))
-        self.assertEqual(r["log"][-1]["contradiction"], found)
-        self.assertIn("CONTRADICTION: <what the brief says>", prompts[0])
-        self.assertIn("contradiction", fc.fc_watch.FINAL_STATES)
-
-    def test_echoing_the_template_is_not_a_contradiction(self):
-        r, prompts = self.run_with("Rules noted.\nCONTRADICTION: <what the brief says> / <what the code shows, file:line>")
-        self.assertEqual((r["status"], len(prompts)), ("failed", 3))
-
     def test_only_a_line_that_starts_with_it_counts(self):
         self.assertIsNone(fc.fc_implement.contradiction("I would write CONTRADICTION: x / y if I found one"))
         self.assertEqual(fc.fc_implement.contradiction("a\nCONTRADICTION: first / one\nCONTRADICTION: last / two"), "last / two")
@@ -565,16 +521,84 @@ def synced(proj, description, issues, ahead=0):
     (proj / "results" / "tasks.json").write_text(json.dumps(cache))
 
 
+class World:
+    """git's branches and refs in memory: the commands the change record and the status read (rev-parse, update-ref, branch, for-each-ref,
+    merge-base --is-ancestor, commit-tree, worktree add). Called as `git(...)` it answers like the command line; `sh` is what fc_core.sh becomes."""
+    def __init__(self, branches):
+        self.parents, self.refs, self.held, self.n = {}, {}, set(), 0
+        self.refs["refs/heads/main"] = self.commit()
+        for b in branches:
+            self.refs[f"refs/heads/fast/hw/{b}"] = self.refs["refs/heads/main"]
+
+    def commit(self, parent=None):
+        self.n += 1
+        self.parents[f"{self.n:040x}"] = parent
+        return f"{self.n:040x}"
+
+    def resolve(self, name):
+        name = name.split("^")[0]
+        return self.refs.get(name) or self.refs.get(f"refs/heads/{name}") or (self.refs["refs/heads/main"] if name in ("HEAD", "main") else None) or (name if name in self.parents else None)
+
+    def descends(self, sha, ancestor):
+        while sha:
+            if sha == ancestor:
+                return True
+            sha = self.parents.get(sha)
+        return False
+
+    def sh(self, cmd, cwd=None, *a, check=True, **k):
+        verb, args = cmd[1], [x for x in cmd[2:] if x not in ("--verify", "-q")]
+        out, code = "", 0
+        if verb == "rev-parse":
+            out = self.resolve(args[-1]) or ""
+            code = 0 if out else 1
+        elif verb == "update-ref":
+            self.refs[args[0]] = args[1]
+        elif verb == "commit-tree":
+            out = self.commit(self.resolve(args[args.index("-p") + 1]))
+        elif verb == "worktree":
+            self.held.add(args[-1])
+        elif verb == "merge-base":
+            code = 0 if self.descends(self.resolve(args[-1]), self.resolve(args[-2])) else 1
+        elif verb == "branch" and args[0] == "-f":
+            if args[1] in self.held:
+                raise RuntimeError(f"fatal: cannot force update the branch '{args[1]}' used by worktree at '/elsewhere'")
+            self.refs[f"refs/heads/{args[1]}"] = args[2]
+        elif verb == "branch" and args[0] == "--list":
+            out = "\n".join(r.removeprefix("refs/heads/") for r in self.refs if r.startswith("refs/heads/") and fnmatch.fnmatch(r.removeprefix("refs/heads/"), *args[1:] or ["*"]))
+        elif verb == "branch" and args[0] == "--show-current":
+            out = "main"
+        elif verb == "branch":
+            self.refs[f"refs/heads/{args[0]}"] = self.resolve(args[1])
+        elif verb == "for-each-ref":
+            fmt = next(x for x in args if x.startswith("--format=")).removeprefix("--format=")
+            pats = [x for x in args if x.startswith("refs/")]
+            into = next((self.resolve(x.split("=", 1)[1]) for x in args if x.startswith(("--merged=", "--no-merged="))), None)
+            want = not any(x.startswith("--no-merged") for x in args)
+            match = lambda r, p: r == p or r.startswith(p.rstrip("/") + "/") or fnmatch.fnmatch(r, p + "*" if p.endswith("/") else p)
+            out = "\n".join(fmt.replace("%(refname)", r).replace("%(objectname)", sha) for r, sha in self.refs.items()
+                            if any(match(r, p) for p in pats) and (into is None or self.descends(into, sha) == want))
+        else:
+            raise AssertionError(f"World does not answer: git {' '.join(cmd[1:])}")
+        if code and check:
+            raise RuntimeError(f"git {verb} failed")
+        return SimpleNamespace(stdout=out + "\n" if out else "", stderr="", returncode=code)
+
+    def __call__(self, *args):
+        args = list(args)
+        while args[0] == "-c":
+            del args[:2]
+        return self.sh(["git", *args]).stdout.strip()
+
+
 def git_repo(branches):
-    """A repo with one commit and a task branch fast/hw/<id> for each id. Returns (path, git)."""
-    repo = Path(tempfile.mkdtemp())
-    git = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
-    git("init", "-q", "-b", "main")
-    (repo / "a.txt").write_text("1\n")
-    git("add", "-A"); git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
-    for b in branches:
-        git("branch", f"fast/hw/{b}")
-    return repo, git
+    """A folder with no .git above it, standing for a repo with one commit and a task branch fast/hw/<id> for each id, and the World that answers git for it.
+    The test starts the patch with `fake_git(self, world)`. Returns (path, world)."""
+    return Path(tempfile.mkdtemp()), World(branches)
+
+
+def fake_git(test, world):
+    p = mock.patch.object(fc.fc_core, "sh", world.sh); p.start(); test.addCleanup(p.stop)
 
 
 def change(proj, repo, action, cid=None, why=None, files=None):
@@ -588,6 +612,7 @@ class Changes(unittest.TestCase):
     def setUp(self):
         self.proj = project()
         self.repo, self.git = git_repo(("003", "004"))
+        fake_git(self, self.git)
         for mod, name, value in ((fc.fc_core, "say", lambda m: None), (fc.fc_config, "LINEAR_KEY", None)):
             p = mock.patch.object(mod, name, value); p.start(); self.addCleanup(p.stop)
         synced(self.proj, MAP, BEFORE)
@@ -691,6 +716,7 @@ class SettlePaused(unittest.TestCase):
     def setUp(self):
         self.proj = project()
         self.repo, self.git = git_repo(("004", "005", "006"))
+        fake_git(self, self.git)
         for mod, name, value in ((fc.fc_core, "say", lambda m: None), (fc.fc_config, "LINEAR_KEY", None)):
             p = mock.patch.object(mod, name, value); p.start(); self.addCleanup(p.stop)
         synced(self.proj, MAP, {f"ENG-{n}": issue(t, "Goal.") for n, t in ((4, "004"), (5, "005"), (6, "006"))})
@@ -845,6 +871,7 @@ class Undo(unittest.TestCase):
     def setUp(self):
         self.proj = project()
         self.repo, self.git = git_repo(("003", "004"))
+        fake_git(self, self.git)
         self.lin = LinearIssues(AFTER, MAP_AFTER)
         for mod, name, value in ((fc.fc_core, "say", lambda m: None), (fc.fc_config, "LINEAR_KEY", "lin_test"), (fc.fc_linear, "linear_gql", self.lin),
                             (fc.fc_stack, "register_stack", lambda *a, **k: None)):
@@ -957,6 +984,7 @@ class BranchNames(unittest.TestCase):
     def setUp(self):
         self.proj = project()
         self.repo, self.git = git_repo(())
+        fake_git(self, self.git)
         for mod, name, value in ((fc.fc_core, "say", lambda m: None), (fc.fc_config, "LINEAR_KEY", None),
                                  (fc.fc_stack, "register_stack", lambda *a, **k: None)):
             p = mock.patch.object(mod, name, value); p.start(); self.addCleanup(p.stop)
