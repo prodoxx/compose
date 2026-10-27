@@ -447,6 +447,24 @@ class Reenter(unittest.TestCase):
         self.assertIn(str(crew / "hw-designer.brief.md"), out)
         self.assertNotIn("hw-crew", out)
 
+    def test_no_role_or_a_headless_session_prints_nothing(self):
+        for env in ({k: v for k, v in self.env.items() if k != "COMPOSE_ROLE"}, {**self.env, "CLAUDE_CODE_ENTRYPOINT": "sdk-cli"}):
+            out, pd = self.reenter(env)
+            self.assertEqual(out, "")
+            pd.assert_not_called()
+
+    def test_the_plugin_runs_it_on_a_compaction(self):
+        root = Path(fc.__file__).resolve().parents[1]
+        hooks = json.loads((root / "hooks" / "hooks.json").read_text())["hooks"]
+        cmds = lambda ev, m=None: [h["command"] for e in hooks.get(ev, []) if e.get("matcher") == m for h in e["hooks"]]
+        self.assertTrue(any(c.endswith(" reenter") for c in cmds("SessionStart", "compact")), hooks.get("SessionStart"))
+        self.assertTrue(cmds("PreToolUse", "Write|Edit|MultiEdit|NotebookEdit|Bash")[0].endswith(" guard"))
+        self.assertTrue(cmds("PreToolUse", "mcp__plugin_figma_figma__.*|mcp__claude_ai_Figma__.*")[0].endswith(" guard"))  # the Figma connector: writes only
+        self.assertTrue(cmds("PostToolUse", "Skill")[0].endswith(" skillcheck"))
+        self.assertTrue(cmds("UserPromptSubmit")[0].endswith(" skillcheck"))
+        self.assertTrue(cmds("Stop")[0].endswith(" rewake"))
+
+
 class Detach(unittest.TestCase):
     """run, verify, and resume work in their own session: a closed herdr tab or a dead Claude session ends only the
     follower that streams their log, never the work."""

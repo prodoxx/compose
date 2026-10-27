@@ -141,9 +141,22 @@ def edit_paths(ev):
             at_start = w in SEPARATORS
     return [str(Path(ev.get("cwd") or ".") / p) for p in found if p]
 
+FIGMA_SERVERS = ("plugin_figma_figma", "claude_ai_Figma")  # the official Figma connector, under either of its names
+FIGMA_WRITES = ("use_figma", "create_session")  # its write, and the session a write needs: every other call on it is a read
+
+def figma_decision(tool, role):
+    """None to allow, else why not: in a compose session (any role) the official Figma connector takes writes only, `use_figma` and
+    the `create_session` it needs; every read goes through Framelink, whose REST calls stay off the connector's daily cap."""
+    m = re.fullmatch(r"mcp__(%s)__(\w+)" % "|".join(map(re.escape, FIGMA_SERVERS)), tool or "")
+    if not role or not m or m.group(2) in FIGMA_WRITES:
+        return None
+    return (f"compose: the Figma connector is for writes only (`use_figma`, and the `create_session` it needs); `{m.group(2)}` is a read. "
+            "Read through Framelink: `mcp__framelink-figma__get_figma_data` for a node tree, `mcp__framelink-figma__download_figma_images` for images, "
+            "or `compose figma tree`.")
+
 def cmd_guard(a):
-    """Claude Code PreToolUse hook (the plugin's hooks.json): deny the team lead's file edits inside a repository, and a crew
-    session's branch switch in the shared project worktree."""
+    """Claude Code PreToolUse hook (the plugin's hooks.json): deny the team lead's file edits inside a repository, a crew
+    session's branch switch in the shared project worktree, and any compose session's read on the Figma connector."""
     try:
         ev = json.load(sys.stdin)
     except json.JSONDecodeError:
@@ -153,6 +166,7 @@ def cmd_guard(a):
     role = os.environ.get("COMPOSE_ROLE")
     why = (switch_decision(ti.get("command"), ev.get("cwd"), role, os.environ.get("COMPOSE_REPO")) if ev.get("tool_name") == "Bash" else None)
     why = why or next(filter(None, (guard_decision(ev.get("tool_name"), p, role) for p in edit_paths(ev))), None)
+    why = why or figma_decision(ev.get("tool_name"), role)
     if why:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": why}}))
 

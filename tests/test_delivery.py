@@ -174,7 +174,7 @@ class Reconcile(Fake):
         self.nodes = [node("NEB-7", "Done"), node("NEB-9", "Todo", ("NEB-7", "Done")), node("NEB-12", "Todo", ("NEB-5", "Todo"), ("NEB-40", "Todo")),
                       node("NEB-5", "Todo"), node("NEB-30", "Todo")]
         self.comments = []
-        self.mark = mock.Mock(side_effect=lambda ident: [{"id": "NEB-10", "title": "T NEB-10"}] if ident == "NEB-9" else [])
+        self.mark = mock.Mock(side_effect=lambda ident, marked=None: [{"id": "NEB-10", "title": "T NEB-10"}] if ident == "NEB-9" else [])
         self.blocked_by = mock.Mock()
         for name, value in (("linear_issue", self.issue), ("linear_blocked_by", self.blocked_by), ("linear_mark_ready", self.mark),
                             ("linear_comment", lambda issue, body: self.comments.append((issue["identifier"], body)))):
@@ -197,6 +197,8 @@ class Reconcile(Fake):
         self.assertEqual(self.comments, [("NEB-12", "Product delivery plan reconcile: now blocked by NEB-9; no longer blocked by NEB-5. "
                                           "The plan wins over Linear; change the plan to change this: u/doc")])
         self.assertEqual([c.args[0] for c in self.mark.call_args_list], ["NEB-9", "NEB-5", "NEB-12"])  # open plan features, in plan order
+        marked = [c.kwargs["marked"] for c in self.mark.call_args_list]
+        self.assertTrue(isinstance(marked[0], set) and all(m is marked[0] for m in marked), marked)  # one set for the run: an epic's children are read and marked once
         self.assertIn("NEB-30 T NEB-30 is an open feature the plan does not name: add it to a track, or cancel it.", r["proposed"])
         self.assertEqual(json.loads(fc.fc_delivery.state_path(self.repo).read_text())["removed"], [["NEB-5", "NEB-12"]])
         self.assertEqual(fc.fc_delivery.last_reconcile(self.repo)["added"], [["NEB-9", "NEB-12"]])

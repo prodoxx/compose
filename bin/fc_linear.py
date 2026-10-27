@@ -1,7 +1,7 @@
-import json, os, re, sys, threading, time, urllib.error, urllib.request
+import json, re, sys
 from pathlib import Path
 from typing import Callable, Optional
-import fc_core, fc_config, fc_plan, fc_tasks
+import fc_core, fc_config, fc_linearapi, fc_plan, fc_tasks
 
 
 # A connection costs its `first` times what it holds, and the API key's hour is 3,000,000 points shared by the whole fleet: 50 relations and 20
@@ -12,15 +12,21 @@ LINEAR_FEATURE = "query($id: String!) { issue(id: $id) { %s } }" % LINEAR_TREE_F
 LINEAR_CHILDREN = """query($id: String!, $after: String) { issue(id: $id) { children(first: 50, after: $after) {
   pageInfo { hasNextPage endCursor } nodes { %s } } } }""" % LINEAR_TREE_FIELDS
 
-def linear_children(ident):
-    """Every child of an issue with the sync fields, all pages."""
+def linear_pages(query, variables, *path):
+    """Every node of the connection at `path` in the query's answer, all pages: the query pages on `$after`."""
     nodes, after = [], None
     while True:
-        page = linear_gql(LINEAR_CHILDREN, {"id": ident, "after": after})["issue"]["children"]
+        page = linear_gql(query, {**variables, "after": after})
+        for key in path:
+            page = page[key]
         nodes += page["nodes"]
         if not page["pageInfo"]["hasNextPage"]:
             return nodes
         after = page["pageInfo"]["endCursor"]
+
+def linear_children(ident):
+    """Every child of an issue with the sync fields, all pages."""
+    return linear_pages(LINEAR_CHILDREN, {"id": ident}, "issue", "children")
 
 def linear_sync_payload(proj):
     """The payload `sync` takes on stdin, read from Linear (read-only) for the feature in linear.json: the feature, its
@@ -59,87 +65,15 @@ def linear_sync_payload(proj):
 
 
 # ---------- Linear: the CLI keeps the state table true, so the team lead spends no model turn on it ----------
-# The key is the active workspace's `linear_api_key`; it goes in a header,
-# never argv or a results file. Every call is best effort: a Linear outage prints one line and the run goes on.
-LINEAR_URL = "https://api.linear.app/graphql"
+# Every call goes through fc_linearapi: paced with every other compose process on the machine, and a rate limit holds the
+# fleet as long as Linear says. Every call here is best effort: a Linear outage prints one line and the run goes on.
 LINEAR_ISSUE = """query($id: String!) { issue(id: $id) { id identifier description state { name type }
   team { states { nodes { id name type } } } parent { identifier } children { nodes { identifier state { name type } } } } }"""
 _linear_warned = []
 
-LINEAR_RETRIES = 5     # waits before a rate-limited call gives up
-LINEAR_MAX_WAIT = 300  # the doubling pause stops growing here
-LINEAR_CALL_SECONDS = 120  # one call, its rate-limit waits and slow replies included, never takes longer: it fails naming the time, so no caller waits silently
-
-class LinearRateLimited(RuntimeError):
-    def __init__(self, message, wait):
-        super().__init__(message)
-        self.wait = wait
-
-def _rate_limit_wait(headers, attempt):
-    """Seconds to wait: Retry-After, else the sooner reset header (UTC epoch seconds or milliseconds), else a doubling pause."""
-    h = headers or {}
-    try:
-        if h.get("Retry-After"):
-            return max(1, float(h["Retry-After"]))
-        resets = [float(h[k]) for k in ("X-RateLimit-Complexity-Reset", "X-RateLimit-Requests-Reset") if h.get(k)]
-    except ValueError:
-        resets = []
-    resets = [r / 1000 if r > 1e11 else r for r in resets]
-    return max(1, min(resets) - time.time()) if resets else min(LINEAR_MAX_WAIT, 10 * 2 ** attempt)
-
-def _linear_post(query, variables, attempt):
-    req = urllib.request.Request(os.environ.get("LINEAR_URL") or LINEAR_URL, data=json.dumps({"query": query, "variables": variables}).encode(),
-                                 headers={"Content-Type": "application/json", "Authorization": fc_config.LINEAR_KEY})
-    try:
-        with urllib.request.urlopen(req, timeout=20) as r:
-            out, headers = json.load(r), getattr(r, "headers", None)
-    except urllib.error.HTTPError as e:
-        try:
-            out = json.loads(e.read().decode(errors="replace"))
-        except ValueError:
-            out = None
-        headers = e.headers
-        e.close()
-        if not (isinstance(out, dict) and out.get("errors")):
-            if e.code == 429:
-                raise LinearRateLimited("Linear rate limit (HTTP 429)", _rate_limit_wait(headers, attempt))
-            raise
-    if out.get("errors"):
-        message = "; ".join(x.get("message", "?") for x in out["errors"])[:300]
-        if any((x.get("extensions") or {}).get("code") == "RATELIMITED" for x in out["errors"]):
-            raise LinearRateLimited(message, _rate_limit_wait(headers, attempt))
-        raise RuntimeError(message)
-    return out["data"]
-
-def _within(seconds, fn):
-    """fn() run in a thread of its own and given up on after `seconds`: a reply that trickles in keeps urlopen's per-read timeout from ever firing."""
-    box = {}
-    def work():
-        try:
-            box["out"] = fn()
-        except BaseException as e:  # noqa: BLE001  re-raised in the caller
-            box["err"] = e
-    t = threading.Thread(target=work, daemon=True)
-    t.start()
-    t.join(max(0, seconds))
-    if t.is_alive():
-        raise RuntimeError(f"Linear gave no answer within {LINEAR_CALL_SECONDS}s; a write may still have gone through, so read the issue before repeating it")
-    if "err" in box:
-        raise box["err"]
-    return box["out"]
-
 def linear_gql(query, variables):
-    """One GraphQL call, bounded by LINEAR_CALL_SECONDS. A rate-limited call did not run, so it waits as long as Linear says
-    (while that fits in the time left) and runs again, saying so on stderr."""
-    deadline = time.monotonic() + LINEAR_CALL_SECONDS
-    for attempt in range(LINEAR_RETRIES + 1):
-        try:
-            return _within(deadline - time.monotonic(), lambda: _linear_post(query, variables, attempt))
-        except LinearRateLimited as e:
-            if e.wait > deadline - time.monotonic() or attempt == LINEAR_RETRIES:
-                raise RuntimeError(f"{e} (Linear lets calls through again in about {int(e.wait)}s; run it again then)") from None
-            print(f"Linear rate limit: waiting {int(e.wait)}s, then retry {attempt + 1} of {LINEAR_RETRIES}", file=sys.stderr)
-            time.sleep(e.wait)
+    """fc_linearapi.linear_gql, the one name every read and write here goes through (and a test replaces)."""
+    return fc_linearapi.linear_gql(query, variables)
 
 def linear_issue(ident):
     issue = linear_gql(LINEAR_ISSUE, {"id": ident})["issue"]
@@ -414,28 +348,56 @@ def open_questions(description):
     items = [b.group(1) for b in map(re.compile(r"^\s*[-*]\s+(.*\S)").match, (m.group(1) if m else "").splitlines()) if b]
     return [i for i in items if i.strip().rstrip(".").lower() != "none"]
 
-LINEAR_READY_TREE = """query($id: String!) { issue(id: $id) { identifier team { labels { nodes { id name } } }
-  children { nodes { ...ReadyNode } } parent { identifier children { nodes { ...ReadyNode } } }
-  inverseRelations(first: 50) { nodes { type issue { identifier state { name } labels { nodes { name } } } } } } }
-fragment ReadyNode on Issue { id identifier title description state { name } labels { nodes { id name } }
-  children { nodes { identifier state { name } inverseRelations(first: 50) { nodes { type issue { identifier state { name } labels { nodes { name } } parent { identifier parent { identifier } } } } } } }
-  inverseRelations(first: 250) { nodes { type issue { identifier state { name } labels { nodes { name } } parent { identifier } } } } }"""
+# The Ready marks and the delivery plan read a feature or epic as flat pages, never a nested tree: a connection costs its `first`
+# times what it holds, so a page of 50 children with 25 relations of 10 labels stays near 20,000 points where the same tree
+# nested two levels deep cost millions, most of the key's 3,000,000 points an hour, in one call.
+READY_NODE = """fragment ReadyNode on Issue { id identifier title url description state { name } labels(first: 10) { nodes { id name } }
+  inverseRelations(first: 25) { nodes { type issue { identifier state { name } labels(first: 10) { nodes { name } } parent { identifier parent { identifier } } } } } }"""
+LINEAR_READY_ROOT = """query($id: String!) { issue(id: $id) { id identifier title url description project { id } labels(first: 10) { nodes { name } }
+  team { labels(first: 5, filter: { name: { eqIgnoreCase: "Ready" } }) { nodes { id name } } }
+  parent { id identifier title url description project { id } labels(first: 10) { nodes { name } } }
+  inverseRelations(first: 25) { nodes { type issue { identifier state { name } labels(first: 10) { nodes { name } } } } } } }"""
+LINEAR_READY_CHILDREN = """query($id: String!, $after: String) { issue(id: $id) { children(first: 50, after: $after) {
+  pageInfo { hasNextPage endCursor } nodes { ...ReadyNode } } } }
+""" + READY_NODE
+LINEAR_READY_GRANDCHILDREN = """query($id: ID!, $after: String) { issues(first: 50, after: $after, filter: { parent: { parent: { id: { eq: $id } } } }) {
+  pageInfo { hasNextPage endCursor } nodes { ...ReadyNode parent { identifier } } } }
+""" + READY_NODE
 
-def linear_mark_ready(feature):
+def linear_group(ident, uuid):
+    """An issue's children (ReadyNode each), each with its own children under `children.nodes`: the children paged by the
+    identifier, the grandchildren paged by the issue's uuid in one filtered query, and stitched together here."""
+    nodes = linear_pages(LINEAR_READY_CHILDREN, {"id": ident}, "issue", "children")
+    kids = {}
+    for g in linear_pages(LINEAR_READY_GRANDCHILDREN, {"id": uuid}, "issues") if nodes else []:
+        kids.setdefault(g["parent"]["identifier"], []).append(g)
+    for n in nodes:
+        n["children"] = {"nodes": kids.get(n["identifier"], [])}
+    return nodes
+
+def linear_mark_ready(feature, marked=None):
     """Set the team's Ready label on the feature's children that can start now and take it off the rest, the same for the
-    epic's children when the feature has one; one read, then one update per issue whose labels change. A story with no task
-    that is not Canceled has nothing to start, so it is not ready; a feature needs no story. Returns the ready issues, the
-    feature's children first. No story is ready while a feature that blocks this one is not built yet; a sibling verified (In Review) blocks nothing. An issue with open questions waits."""
-    tree = linear_gql(LINEAR_READY_TREE, {"id": feature})["issue"]
-    ready_label = next((l["id"] for l in tree["team"]["labels"]["nodes"] if l["name"].lower() == "ready"), None)
+    epic's children when the feature has one; one read per group, then one update per issue whose labels change. A story with
+    no task that is not Canceled has nothing to start, so it is not ready; a feature needs no story. Returns the ready issues,
+    the feature's children first. No story is ready while a feature that blocks this one is not built yet; a sibling verified
+    (In Review) blocks nothing. An issue with open questions waits. `marked`, a set, names the features and epics whose
+    children this run marked already: their group is skipped, and each group marked here is added, so a reconcile over
+    every feature reads each epic once."""
+    root = linear_gql(LINEAR_READY_ROOT, {"id": feature})["issue"]
+    if not root:
+        raise RuntimeError(f"no issue {feature}")
+    ready_label = next((l["id"] for l in root["team"]["labels"]["nodes"] if l["name"].lower() == "ready"), None)
     if not ready_label:
         raise RuntimeError("team has no label 'Ready'; compose linear labels --create Ready makes it")
     update = "mutation($id: String!, $labels: [String!]!) { issueUpdate(id: $id, input: {labelIds: $labels}) { success } }"
     out = []
     waiting = any(r["type"] == "blocks" and not fc_plan.base_built(r["issue"]["state"]["name"] or "", [l["name"] for l in r["issue"]["labels"]["nodes"]])
-                  for r in tree["inverseRelations"]["nodes"])
-    groups = [(tree["children"]["nodes"], True, tree.get("identifier")), *([(tree["parent"]["children"]["nodes"], False, tree["parent"].get("identifier"))] if tree["parent"] else [])]
-    for group, stories, parent in groups:
+                  for r in root["inverseRelations"]["nodes"])
+    for node, stories in ((root, True), (root["parent"], False)):
+        if not node or (marked is not None and node["identifier"] in marked):
+            continue
+        parent = node["identifier"]
+        group = linear_group(parent, node["id"])
         cut = {n["identifier"] for n in group if any((c["state"]["name"] or "").lower() != "canceled" for c in n["children"]["nodes"])}
         asking = {n["identifier"] for n in group if open_questions(n.get("description"))}
         ready = {i for i in ready_ids(group, parent) if (i in cut or not stories) and i not in asking and not (stories and waiting)}
@@ -449,28 +411,31 @@ def linear_mark_ready(feature):
             elif ready_label in have:
                 linear_gql(update, {"id": n["id"], "labels": [l for l in have if l != ready_label]})
                 fc_core.say(f"linear {n['identifier']} -> not Ready")
+        if marked is not None:
+            marked.add(parent)
     return out
 
-LINEAR_PLAN_TREE = """query($id: String!) { issue(id: $id) { ...PlanNode parent { ...PlanNode } } }
-fragment PlanNode on Issue { id identifier title url description labels { nodes { name } } project { id documents(first: 250) { nodes { id title content url } } }
-  children { nodes { ...PlanChild children { nodes { ...PlanChild } } } } }
-fragment PlanChild on Issue { id identifier title url state { name } labels { nodes { name } }
-  inverseRelations(first: 250) { nodes { type issue { identifier state { name } labels { nodes { name } } } } } }"""
+LINEAR_PROJECT_DOCS = """query($id: String!, $after: String) { project(id: $id) { documents(first: 50, after: $after) {
+  pageInfo { hasNextPage endCursor } nodes { id title url } } } }"""
+LINEAR_DOCUMENT = "query($id: String!) { document(id: $id) { id title url content } }"
 
 def linear_plan(feature):
-    """Keep the map's delivery plan document in step: create and link it once, then rewrite only its data sections."""
-    tree = linear_gql(LINEAR_PLAN_TREE, {"id": feature})["issue"]
-    parent = tree["parent"]
+    """Keep the map's delivery plan document in step: create and link it once, then rewrite only its data sections. The map is
+    the feature's epic when it has one (its features are the lanes, their stories each lane's), else the feature (one lane)."""
+    root = linear_gql(LINEAR_READY_ROOT, {"id": feature})["issue"]
+    parent = root["parent"]
     names = lambda n: [l["name"] for l in n["labels"]["nodes"]]
     epic = bool(parent) and "epic" in [x.lower() for x in names(parent)]
     story = lambda n: {"id": n["identifier"], "title": n["title"], "url": n["url"], "state": n["state"]["name"], "labels": names(n),
                        "blockers": [{"id": r["issue"]["identifier"], "state": r["issue"]["state"]["name"], "labels": names(r["issue"])}
                                     for r in n["inverseRelations"]["nodes"] if r["type"] == "blocks"]}
-    lane = lambda n: {"id": n["identifier"], "title": n["title"], "url": n["url"], "stories": [story(c) for c in n["children"]["nodes"]]}
-    map_ = parent if epic else tree
-    lanes = [lane(n) for n in map_["children"]["nodes"] if "feature" in [x.lower() for x in names(n)]] if epic else [lane(tree)]
+    lane = lambda n, kids: {"id": n["identifier"], "title": n["title"], "url": n["url"], "stories": [story(c) for c in kids]}
+    map_ = parent if epic else root
+    group = linear_group(map_["identifier"], map_["id"])
+    lanes = [lane(n, n["children"]["nodes"]) for n in group if "feature" in [x.lower() for x in names(n)]] if epic else [lane(root, group)]
     title = f"{map_['identifier']}: delivery plan"
-    doc = next((d for d in map_["project"]["documents"]["nodes"] if d["title"] == title), None)
+    found = next((d for d in linear_pages(LINEAR_PROJECT_DOCS, {"id": map_["project"]["id"]}, "project", "documents") if d["title"] == title), None)
+    doc = linear_gql(LINEAR_DOCUMENT, {"id": found["id"]})["document"] if found else None
     if not doc:
         doc = linear_gql("mutation($title: String!, $content: String!, $project: String!) { documentCreate(input: {title: $title, content: $content, projectId: $project}) { success document { id title url content } } }",
                          {"title": title, "content": fc_plan.plan_skeleton(), "project": map_["project"]["id"]})["documentCreate"]["document"]

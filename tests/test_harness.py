@@ -1098,6 +1098,15 @@ class CodexGuard(unittest.TestCase):
         self.assertIsNone(self.denied("Write", {"file_path": str(self.repo / "a.go")}, "crew"))
         self.assertIsNone(self.denied("Read", {"file_path": str(self.repo / "a.go")}))
 
+    def test_figma_connector_reads_are_denied_in_a_compose_session_and_its_writes_pass(self):
+        why = self.denied("mcp__plugin_figma_figma__get_screenshot", {"fileKey": "K", "nodeId": "1:2"}, "crew")
+        self.assertIn("`get_screenshot` is a read", why or ""); self.assertIn("mcp__framelink-figma__get_figma_data", why or "")
+        self.assertIn("`get_design_context` is a read", self.denied("mcp__claude_ai_Figma__get_design_context", {"fileKey": "K"}, "orchestrator") or "")
+        for tool in ("mcp__plugin_figma_figma__use_figma", "mcp__plugin_figma_figma__create_session", "mcp__claude_ai_Figma__use_figma", "mcp__framelink-figma__get_figma_data"):
+            self.assertIsNone(self.denied(tool, {"fileKey": "K"}, "crew"), tool)
+        for role in (None, ""):
+            self.assertIsNone(self.denied("mcp__plugin_figma_figma__get_screenshot", {"fileKey": "K"}, role), role)
+
     def test_edit_paths_resolves_relative_paths_against_cwd(self):
         ev = {"tool_name": "apply_patch", "cwd": str(self.repo), "tool_input": self.patch("*** Add File: a", "*** Update File: b", "*** Delete File: /x/c", "*** Move to: d")}
         self.assertEqual({os.path.realpath(p) for p in fc.fc_hooks.edit_paths(ev)}, {os.path.realpath(self.repo / n) for n in "abd"} | {os.path.realpath("/x/c")})

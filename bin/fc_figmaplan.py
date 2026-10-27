@@ -1,14 +1,24 @@
-import json, re, sys, urllib.error, urllib.request
+import json, re, sys, time, urllib.error, urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-import fc_steps
+import fc_pace, fc_steps
 
 
 FIGMA_API = "https://api.figma.com/v1"
 
+# Figma's REST tier for files, nodes and images allows 10 calls a minute on the starter plan (15 professional, 20 organization),
+# per token: every compose process and the designer's Framelink reads share it, so the fleet keeps the starter pace.
+FIGMA_PER_MINUTE = 10
+FIGMA_CALL_SECONDS = 120  # one call, its turn in the pace and a rate-limit wait included, never takes longer: it fails naming the time
+
+def figma_pace(s, now):
+    """fc_pace's policy for Figma: an even FIGMA_PER_MINUTE, whatever the state says."""
+    return 0, 60 / FIGMA_PER_MINUTE
+
 def figma_api(path, env_file=None, setup=""):
     """JSON from one Figma REST GET with the Framelink token (the library endpoints Framelink's CLI does not wrap); `setup` is the error when
-    there is no token. Never echoes the token."""
+    there is no token. The call takes its turn in the fleet's Figma pace; a 429 holds the fleet as long as Retry-After says and runs
+    once more when that fits in FIGMA_CALL_SECONDS. Never echoes the token."""
     env_file = Path(env_file or fc_steps.FRAMELINK_ENV)
     token = ""
     if env_file.exists():
@@ -16,13 +26,24 @@ def figma_api(path, env_file=None, setup=""):
     if not token:
         raise RuntimeError(setup or f"no FIGMA_API_KEY in {env_file}")
     name = path.split("?")[0]
-    try:
-        with urllib.request.urlopen(urllib.request.Request(FIGMA_API + path, headers={"X-Figma-Token": token}), timeout=60) as r:
-            return json.load(r)
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"figma api {name} failed: HTTP {e.code}" + (" (the token needs the library_content:read scope)" if e.code == 403 else ""))
-    except (OSError, ValueError) as e:
-        raise RuntimeError(f"figma api {name} failed: {e}")
+    deadline = time.monotonic() + FIGMA_CALL_SECONDS
+    for attempt in (1, 2):
+        fc_pace.wait("figma", figma_pace, deadline - time.monotonic(), "Figma")
+        try:
+            with urllib.request.urlopen(urllib.request.Request(FIGMA_API + path, headers={"X-Figma-Token": token}), timeout=60) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                retry = fc_pace.retry_after(e.headers, 60)
+                fc_pace.hold("figma", retry)
+                if attempt == 1 and retry <= deadline - time.monotonic():
+                    print(f"Figma rate limit: waiting {int(retry)}s, then one retry", file=sys.stderr)
+                    time.sleep(retry)
+                    continue
+                raise RuntimeError(f"figma api {name} failed: HTTP 429 (Figma lets calls through again in about {fc_pace.about(retry)}; run it again then)")
+            raise RuntimeError(f"figma api {name} failed: HTTP {e.code}" + (" (the token needs the library_content:read scope)" if e.code == 403 else ""))
+        except (OSError, ValueError) as e:
+            raise RuntimeError(f"figma api {name} failed: {e}")
 
 # What each plan tier gates that the design flow uses; None is no limit. A prediction: the probe (PROBE_STEPS) measures the real numbers.
 PLAN_LIMITS = {"starter": {"pages": 3, "modes": 1, "library_publish": False, "code_connect": False},
