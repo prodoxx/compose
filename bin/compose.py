@@ -358,9 +358,9 @@ def main():
         if name == "figma":
             s.add_argument("action", choices=("check", "tree", "judge", "publish"))
             s.add_argument("--figma", help="check: the target Figma file's url or key, stored in linear.json")
-            s.add_argument("--plan", help="check: the plan tier whoami shows (starter, pro, org, enterprise): stores the limits compose's design flow depends on")
-            s.add_argument("--pages", help="check: pages per file the probe measured (a count or unlimited), replacing the tier's predicted limit")
-            s.add_argument("--modes", help="check: modes per collection the probe measured (a count or unlimited), replacing the tier's predicted limit")
+            s.add_argument("--plan", help="check: a plan tier the product owner names (starter, pro, org, enterprise): stores the limits compose's design flow depends on, as predicted")
+            s.add_argument("--pages", help="check: pages per file the probe measured (a count or unlimited); with --modes and no --plan it sets the tier too")
+            s.add_argument("--modes", help="check: modes per collection the probe measured (a count or unlimited); with --pages and no --plan it sets the tier too")
             s.add_argument("--need-pages", type=int, help="check: pages per file the design needs; BLOCKED when the plan allows fewer")
             s.add_argument("--need-modes", type=int, help="check: modes per collection the design needs (default 2, Light and Dark; 1 when a decision says light only); BLOCKED when the plan allows fewer")
             s.add_argument("--library", help="publish: the library file's url or key (stored after the first use)")

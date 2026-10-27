@@ -4,6 +4,7 @@ PLAN_LIMITS
 DESIGN_SYSTEM_MODES
 plan_tier
 limit_value
+probe_tier
 figma_caps
 caps_line
 caps_blockers

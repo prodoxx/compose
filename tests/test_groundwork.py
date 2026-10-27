@@ -802,8 +802,11 @@ class DesignerBrief(unittest.TestCase):
     def test_brief_splits_figma_writes_from_framelink_reads(self):
         brief = " ".join(self.brief().split())
         for text in ("WRITES ONLY", "never a read-only script", "returns the facts it set", "mcp__framelink-figma__get_figma_data", "download_figma_images",
-                     "never `get_screenshot`, `get_metadata`, or `get_design_context`", "Never use another `plugin:*figma*`", "compose figma tree --project p --only NNN"):
+                     "never `get_screenshot`, `get_metadata`, or `get_design_context`", "Never use another `plugin:*figma*`", "compose figma tree --project p --only NNN",
+                     "never a read-only script, and never `whoami`, `get_libraries`, `search_design_system`, or `create_new_file`",
+                     "A `use_figma` script that sets nothing is a read, even when it only measures layout, sizes, or positions: measure from Framelink tree data"):
             self.assertIn(text, brief)
+        self.assertNotIn("stay on the official connector", brief)
 
     def test_design_task_nodes_are_page_and_name_pairs_one_page_per_task(self):
         brief = " ".join(self.brief().split())
@@ -845,8 +848,11 @@ class DesignCrews(unittest.TestCase):
             self.assertIn(text, out)
         self.assertEqual((out.count("====="), started, space.call_count), (2, [], 0))
         flat = " ".join(out.split())
-        for text in ("WRITES ONLY", "mcp__framelink-figma__get_figma_data", "compose figma tree --project p --only 001", "never a read-only `use_figma` script", "Never use another `plugin:*figma*`"):
+        for text in ("WRITES ONLY", "mcp__framelink-figma__get_figma_data", "compose figma tree --project p --only 001", "never a read-only `use_figma` script", "Never use another `plugin:*figma*`",
+                     "`use_figma` (and the `create_session` it needs)", "A `use_figma` script that sets nothing is a read, even when it only measures layout, sizes, or positions: measure from Framelink tree data"):
             self.assertIn(text, flat)
+        for text in ("whoami", "get_libraries", "search_design_system"):  # named once each, in the ban on them
+            self.assertEqual(flat.count(text), 2)  # one builder brief per open task, two tasks
 
     def test_default_pace_is_three_builders_at_once(self):
         def issue(n):
