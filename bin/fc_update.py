@@ -36,7 +36,7 @@ def live_work():
 def live_on(proj, repo, kinds):
     """The runs and verifies of `kinds` alive on this project, other than this process. The hold file is matched by project name and
     by the repository, whichever of its checkouts the work was started from."""
-    common = lambda path: fc_core.sh(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], path, check=False).stdout.strip()
+    common = lambda path: (c := fc_core.checkout(path)) and c.common
     mine = common(repo)
     return [w for w in live_work()
             if w.get("kind") in kinds and w.get("project") == Path(proj).name and w["pid"] != os.getpid() and mine and common(w["repo"]) == mine]

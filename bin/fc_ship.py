@@ -101,7 +101,7 @@ def layer_checks(repo, proj, layers, trunk, wt, fresh=False):
     if not checks:
         fc_core.say("layers no checks in verify.json: the layers are not checked before submit")
         return ""
-    roots = (repo, fc_core.worktrees(repo)[0])
+    roots = (repo, fc_core.main_checkout(repo))
     checks = fc_verify.at_root(checks, roots, wt)
     kept = Path(proj) / "results" / "layer-checks.json"
     seen = json.loads(kept.read_text()) if kept.exists() else {}

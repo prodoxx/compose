@@ -67,15 +67,10 @@ def task_state(repo, proj, meta, trunk_head, facts=None):
             "linear": str(meta.get("linear") or ""), "workflow": wf, "depth": dp,
             "escalations": n["escalations"], "fix_rounds": n["fix_rounds"]}
 
-_git_dirs = {}
-
 def git_dirs(repo):
-    """(git dir, common dir) of a checkout, asked once per process: the refs live in the common dir, HEAD in the git dir."""
-    repo = Path(repo).resolve()
-    if repo not in _git_dirs:
-        out = fc_core.sh(["git", "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"], repo, check=False).stdout.split("\n")
-        _git_dirs[repo] = (Path(out[0]), Path(out[1])) if len(out) > 1 and out[0] else (repo / ".git", repo / ".git")
-    return _git_dirs[repo]
+    """(git dir, common dir) of a checkout: the refs live in the common dir, HEAD in the git dir."""
+    c = fc_core.checkout(repo)
+    return (c.git_dir, c.common) if c else (Path(repo).resolve() / ".git",) * 2
 
 def board_stamp(repo, proj):
     """Everything the board is computed from, as stat results: the project's state files, whether its run is alive, and the

@@ -54,8 +54,8 @@ def guard_decision(tool, path, role):
 
 def toplevel(path):
     """The worktree root `path` is in, or None."""
-    top = fc_core.sh(["git", "rev-parse", "--show-toplevel"], path, check=False).stdout.strip() if Path(path).is_dir() else ""
-    return Path(top).resolve() if top else None
+    c = fc_core.checkout(path)
+    return c.top if c else None
 
 def switch_decision(command, cwd, role, shared):
     """None to allow, else why not. A crew session started without its own worktree runs in the project worktree `shared` with the

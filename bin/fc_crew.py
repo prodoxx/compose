@@ -480,7 +480,7 @@ def finish_clean_after_turn(proj, name):
     it, waits for the team lead to settle, then runs clean again, which closes the tab and removes the worktree and branch.
     Outside herdr there is no turn to wait for: one line says how to finish it."""
     wt = fc_herdr.project_worktree(proj)
-    main = fc_core.worktrees(wt)[0]
+    main = fc_core.main_checkout(wt)
     c = crew_record(proj, name)
     if not c or not c.get("tab") or not fc_herdr.herdr_env():
         print(f"clean  {proj.name}: run `compose clean --repo {main} --project {proj.name}` from outside {wt} to remove it and its branch")

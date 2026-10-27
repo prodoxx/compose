@@ -304,7 +304,7 @@ def abandon_project(main_repo, name, wt, proj, force=False, dry=False):
 
 def cmd_clean(a):
     main_repo = Path(a.repo).resolve()
-    main_repo = fc_core.worktrees(main_repo)[0]
+    main_repo = fc_core.main_checkout(main_repo)
     if getattr(a, "abandon", False):
         projects = fc_core.all_projects(main_repo)
         if a.project not in projects or a.delete_unmerged:

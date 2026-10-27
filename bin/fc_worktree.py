@@ -96,7 +96,7 @@ def rename_legacy_branches(repo, proj):
         if isinstance(v, list):
             return [rename(x) for x in v]
         return values.get(v, v) if isinstance(v, str) else v
-    stack_state = Path(fc_core.sh(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], repo).stdout.strip()) / "gh-stack"
+    stack_state = fc_core.checkout(repo).common / "gh-stack"
     for f in [*proj.glob("*.json"), *(proj / "results").rglob("*.json"), stack_state]:
         try:
             data = json.loads(f.read_text())
@@ -231,7 +231,7 @@ def pool_shortfall(repo, need):
     if need <= 0:
         return None
     entries = json.loads(treehouse(repo, "status", "--json", check=False).stdout or "[]")
-    cfg = Path(fc_core.sh(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], repo).stdout.strip()).parent / "treehouse.toml"
+    cfg = fc_core.checkout(repo).common.parent / "treehouse.toml"
     m = re.search(r"^\s*max_trees\s*=\s*(\d+)", cfg.read_text(), re.M) if cfg.exists() else None
     cap = int(m.group(1)) if m else 16
     free = sum(e.get("status") == "available" for e in entries) + max(0, cap - len(entries))
@@ -301,20 +301,21 @@ def clear_leftovers(path):
 
 def common_dir(path):
     """The git common dir of the checkout at `path`, None when it is not in one: every worktree of a repository shares it."""
-    p = fc_core.sh(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], path, check=False) if Path(path).is_dir() else None
-    return Path(p.stdout.strip()).resolve() if p and p.returncode == 0 else None
+    c = fc_core.checkout(path)
+    return c.common if c else None
 
 def shared_checkout(path, cli_repo):
     """Why a toolsmith may not commit or edit in `path`, else None: it is the installed copy (~/.compose/src), a main checkout of the
     compose repo `cli_repo` belongs to, or a worktree of it on main, master, or no branch. A path outside that repo is none of this."""
     path = Path(path).resolve()
-    top = fc_core.sh(["git", "rev-parse", "--show-toplevel"], path, check=False).stdout.strip() if path.is_dir() else ""
-    if top and Path(top).resolve() == (Path.home() / ".compose" / "src").resolve():
+    c = fc_core.checkout(path)
+    top = str(c.top) if c else ""
+    if top and c.top == (Path.home() / ".compose" / "src").resolve():
         return f"{top} (the installed copy of compose)"
     theirs = common_dir(path)
     if not top or theirs is None or theirs != common_dir(cli_repo):
         return None
-    if Path(fc_core.sh(["git", "rev-parse", "--path-format=absolute", "--git-dir"], path).stdout.strip()).resolve() == theirs:
+    if c.git_dir == theirs:
         return f"{top} (a main checkout of the compose repo)"
     branch = fc_core.sh(["git", "branch", "--show-current"], path).stdout.strip()
     return f"{top} (on {branch or 'no branch'})" if branch in ("", "main", "master") else None

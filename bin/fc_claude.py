@@ -100,9 +100,8 @@ def claude_trusted(path):
         projects = json.loads((Path.home() / ".claude.json").read_text()).get("projects") or {}
     except (OSError, json.JSONDecodeError):
         return None
-    git = fc_core.sh(["git", "-C", str(path), "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"], None, check=False)
-    top, common = map(Path, git.stdout.splitlines()) if git.returncode == 0 else (None, None)
-    main = common.parent if common and common.name == ".git" else top  # a linked worktree's main checkout; a submodule is its own
+    c = fc_core.checkout(path)
+    top, main = (c.top, c.main) if c else (None, None)
     folders = [p for p in (path, *path.parents) if not top or p.is_relative_to(top)] + ([main] if main else [])
     return any((projects.get(str(p)) or {}).get("hasTrustDialogAccepted") for p in folders)
 

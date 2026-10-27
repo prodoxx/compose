@@ -43,6 +43,37 @@ def sh(cmd, cwd, timeout=None, check=True, env=None):
         raise RuntimeError(f"{cmd}\n{p.stdout}\n{p.stderr}")
     return p
 
+class Checkout(tuple):
+    """Where a checkout lives: its worktree root, its own git dir, and the common dir every worktree of the repository shares."""
+    top = property(lambda s: s[0]); git_dir = property(lambda s: s[1]); common = property(lambda s: s[2])
+    @property
+    def main(self):
+        """The main checkout a linked worktree belongs to: the common dir's parent. A submodule's common dir sits under its
+        superproject's .git/modules, and a bare repository has no main checkout, so either is its own."""
+        return self.common.parent if self.common.name == ".git" else self.top
+
+_checkouts = {}
+
+def checkout(path):
+    """The Checkout `path` is in, None outside a git worktree. Asked once per process per path: a directory stays in the checkout
+    it is in for as long as its git dir exists, so only a found one is kept, and a removed one is asked again."""
+    here = Path(path).resolve()
+    c = _checkouts.get(here)
+    if c is None or not c.git_dir.is_dir():
+        p = sh(["git", "rev-parse", "--path-format=absolute", "--show-toplevel", "--absolute-git-dir", "--git-common-dir"], here, check=False) \
+            if here.is_dir() else None
+        lines = p.stdout.splitlines() if p and p.returncode == 0 else []
+        c = Checkout(Path(l).resolve() for l in lines) if len(lines) == 3 else None
+        if c is None:
+            _checkouts.pop(here, None); return None
+        _checkouts[here] = c
+    return c
+
+def main_checkout(path):
+    """The main checkout of the repository `path` is in; outside a git worktree, `path` itself."""
+    c = checkout(path)
+    return c.main if c else Path(path).resolve()
+
 def worktree_branches(repo):
     """Every checkout of this repository (main plus linked worktrees), as [(path, branch)] in the order git lists them, main checkout first, branch empty when detached."""
     out = []
@@ -61,11 +92,10 @@ def repo_link(path):
     """The repo's Linear link, `.compose/linear.json` (SKILL.md step 0): one file in the main checkout that every worktree of
     the repo reads, else the checkout's own (one written in a linked worktree); when neither exists, the main checkout's path,
     where it belongs. Outside a git repo, the folder's own."""
-    here = Path(path).resolve()
-    top = sh(["git", "rev-parse", "--show-toplevel"], here, check=False).stdout.strip() if here.is_dir() else ""
-    if not top:
+    here, c = Path(path).resolve(), checkout(path)
+    if c is None:
         return here / ".compose" / "linear.json"
-    found = [d.resolve() / ".compose" / "linear.json" for d in dict.fromkeys((worktrees(here)[0], Path(top)))]  # git lists the main checkout first
+    found = [d / ".compose" / "linear.json" for d in dict.fromkeys((c.main, c.top))]
     return next((f for f in found if f.exists()), found[0])
 
 def project_config(proj):

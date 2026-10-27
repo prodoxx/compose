@@ -58,6 +58,8 @@ def why_freeable(r):
         return "past its limit"
 
 def tick():
+    if fc_load.off():  # the load gate switched off holds nothing, so there is nothing to shed
+        return []
     d = home()
     d.mkdir(parents=True, exist_ok=True)
     with open(d / "shed.lock", "w") as lock:

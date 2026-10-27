@@ -27,8 +27,8 @@ def _codex_result(p):
     return False, tail[-1] if tail else f"exit {p.returncode}"
 
 def _git_dirs(f):
-    p = fc_core.sh(["git", "rev-parse", "--path-format=absolute", "--git-common-dir", "--absolute-git-dir"], f, check=False) if Path(f).is_dir() else None
-    return [Path(l).resolve() for l in p.stdout.splitlines()[:2]] if p and p.returncode == 0 else []
+    c = fc_core.checkout(f)
+    return [c.common, c.git_dir] if c else []
 
 def _codex_argv(cid, effort, prompt, skill, cwd, results, work=None, more=()):
     argv = ["-c", "check_for_update_on_startup=false"]

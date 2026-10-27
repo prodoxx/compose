@@ -130,15 +130,13 @@ class Faked(unittest.TestCase):
         for target in ("subprocess.run", "subprocess.Popen"):
             patch = mock.patch(target, side_effect=AssertionError("a test with a faked git starts no process"))
             patch.start(); self.addCleanup(patch.stop)
-        patch = mock.patch.object(fc.fc_core, "sh", self.git)
-        patch.start(); self.addCleanup(patch.stop)
+        for name, fake in (("sh", self.git), ("checkout", lambda path: fc.fc_core.Checkout((self.root, self.root / ".git", self.root / ".git")))):
+            patch = mock.patch.object(fc.fc_core, name, fake)
+            patch.start(); self.addCleanup(patch.stop)
 
     def git(self, cmd, cwd=None, **kw):
-        if cmd[1:] == ["rev-parse", "--path-format=absolute", "--git-common-dir"]:
-            out = str(self.root / ".git")
-        else:
-            message, files = self.commits[cmd[-1]]
-            out = "\n".join(files) if "--name-only" in cmd else {"--format=%B": message, "--format=%s": message.split("\n")[0]}.get(cmd[3], "t <t@t> 2026-01-01")
+        message, files = self.commits[cmd[-1]]
+        out = "\n".join(files) if "--name-only" in cmd else {"--format=%B": message, "--format=%s": message.split("\n")[0]}.get(cmd[3], "t <t@t> 2026-01-01")
         return SimpleNamespace(stdout=out + "\n", stderr="", returncode=0)
 
     def config(self, **cfg):

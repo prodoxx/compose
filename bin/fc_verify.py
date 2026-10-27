@@ -367,7 +367,7 @@ def cmd_verify(a):
     if root != repo:
         # Checks and e2e cases (setup, driver, assert, env, every string) may name the main checkout or the project worktree
         # by absolute path; run them against the stack top.
-        olds = (repo, fc_core.worktrees(repo)[0])
+        olds = (repo, fc_core.main_checkout(repo))
         cfg.update({k: at_root(cfg[k], olds, root) for k in ("checks", "e2e", "e2e_setup", "e2e_env") if k in cfg})
         cfg["main_repo"] = repo
     try:

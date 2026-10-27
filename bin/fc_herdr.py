@@ -192,8 +192,8 @@ def agent_ref(slug, ref):
     return agent_name(slug, agent_id(slug, ref) or ref.removeprefix(agent_name(slug, "")))
 
 def herdr_main_repo(wt):
-    common = fc_core.sh(["git", "rev-parse", "--git-common-dir"], wt, check=False).stdout.strip()
-    return str(Path(wt, common).resolve().parent) if common else str(wt)
+    c = fc_core.checkout(wt)
+    return str(c.common.parent) if c else str(wt)
 
 def herdr_find_space(wt):
     """The workspace id whose checkout is this path (`worktree.checkout_path` in `workspace list`)."""

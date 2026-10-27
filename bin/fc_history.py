@@ -21,7 +21,7 @@ def path():
 def main_repo(repo):
     """The repository's main checkout: the same whichever worktree a run started in."""
     try:
-        return str(fc_core.worktrees(repo)[0])
+        return str(fc_core.main_checkout(repo))
     except (OSError, IndexError, RuntimeError):
         return str(repo)
 

@@ -77,6 +77,7 @@ class FakedLand(unittest.TestCase):
         (self.proj / "verify.json").write_text("{}")
         self.calls, self.prs, self.branches, self.view_fail = [], {}, [], ""
         for patch in (mock.patch.object(fc.fc_ship, "gh", self.gh), mock.patch.object(fc.fc_core, "sh", self.sh),
+                      mock.patch.object(fc.fc_core, "checkout", lambda path: fc.fc_core.Checkout((self.repo, self.repo / ".git", Path("/common")))),
                       mock.patch.object(fc.fc_layers, "layer_branches", lambda repo, proj: self.branches),
                       mock.patch.object(fc.fc_stack, "layer_base", lambda repo, proj, trunk: "main"),
                       mock.patch.object(fc.fc_worktree, "stack_worktree", lambda repo, proj, trunk: self.repo),
@@ -122,7 +123,7 @@ class FakedLand(unittest.TestCase):
         return self.done(args, json.dumps({"status": "merged"}))
 
     def sh(self, cmd, cwd, **kw):
-        out = {"worktree": f"worktree {self.repo}\n", "branch": "compose/p\n", "rev-parse": "/common\n" if "--git-common-dir" in cmd else self.tip(cmd[-1])}.get(cmd[1], "")
+        out = {"worktree": f"worktree {self.repo}\n", "branch": "compose/p\n", "rev-parse": self.tip(cmd[-1])}.get(cmd[1], "")
         return self.done(cmd, out, code=1 if cmd[1:3] == ["merge-base", "--is-ancestor"] else 0)  # the layer above is rebased already
 
     def land(self, **kw):
