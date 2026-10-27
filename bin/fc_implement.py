@@ -1,4 +1,4 @@
-import json, os, re, shlex, shutil, signal, subprocess, sys, time, uuid
+import json, os, re, shlex, shutil, subprocess, sys, time, uuid
 from pathlib import Path
 import fc_core, fc_pause, fc_config, fc_providers, fc_readguard, fc_tasks, fc_linear, fc_claude, fc_models, fc_proc, fc_load, fc_harness, fc_herdr, fc_worktree, fc_layers, fc_libapi, fc_green, fc_gate, fc_fast, fc_format, fc_started, fc_figma, fc_trailpack
 
@@ -171,14 +171,7 @@ def timed(cmd, cwd, limit, env=None, stdin=subprocess.DEVNULL, check=True):
             out, err = p.communicate(timeout=limit)
             return subprocess.CompletedProcess(cmd, p.returncode, fc_core.scrub(out), fc_core.scrub(err))
         except subprocess.TimeoutExpired:
-            for sig in (signal.SIGTERM, signal.SIGKILL):
-                try:
-                    os.killpg(p.pid, sig)
-                except (ProcessLookupError, PermissionError):  # the group is already gone (macOS says EPERM)
-                    break
-                time.sleep(0.5)
-                if p.poll() is not None:
-                    break
+            fc_proc.kill_group(p.pid, p)
             out, err = (fc_core.scrub(x or "") for x in p.communicate())
             return subprocess.CompletedProcess(cmd, 124, out[-2000:], (err[-1000:] + "\n" + HANG_HINT.format(limit=limit)).strip())
         finally:
