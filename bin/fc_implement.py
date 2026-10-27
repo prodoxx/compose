@@ -1,6 +1,6 @@
 import json, os, re, shlex, shutil, subprocess, sys, time, uuid
 from pathlib import Path
-import fc_core, fc_pause, fc_config, fc_providers, fc_readguard, fc_tasks, fc_linear, fc_claude, fc_models, fc_proc, fc_load, fc_harness, fc_herdr, fc_worktree, fc_layers, fc_libapi, fc_green, fc_gate, fc_fast, fc_format, fc_started, fc_figma, fc_trailpack
+import fc_core, fc_pause, fc_config, fc_providers, fc_readguard, fc_tasks, fc_linear, fc_claude, fc_models, fc_proc, fc_load, fc_harness, fc_herdr, fc_worktree, fc_layers, fc_libapi, fc_green, fc_gate, fc_fast, fc_format, fc_started, fc_figma, fc_trailpack, fc_attempt
 
 def implementer(cwd, model, prompt, session=None, task=None, timeout=None):
     """Route a turn to the harness named by the model id: `pi:<provider/model>` runs pi (as a named herdr agent when the run
@@ -208,7 +208,7 @@ def run_task(repo, proj, task, attempts, model=None, reset_files=False, tag=""):
     delete = meta.get("delete") or []
     if model:
         meta["model"] = model
-    tid, branch = meta["id"], fc_worktree.task_branch(repo, proj, meta["id"]) + tag
+    tid, branch = meta["id"], fc_attempt.branch_name(fc_worktree.task_prefix(repo, proj), meta["id"], tag)
     wt = proj / "worktrees" / (tid + tag)
     # A separate clone, not a git worktree: opencode links worktrees to the main checkout as "project copies" and
     # resolves edits of existing files there. A clone has its own .git, so nothing can leak. Shared objects keep it cheap.
@@ -236,11 +236,12 @@ def run_task(repo, proj, task, attempts, model=None, reset_files=False, tag=""):
         fc_core.sh(["git", "commit", "-qam", fc_core.typed("reset implementation", "deps", fc_core.commit_convention(proj)) if fc_core.commit_convention(proj) else "bench: reset implementation"], wt, check=False)
     before = fc_core.digests(wt, meta["protected"])
     # Red first: a test that already passes on HEAD means the task is done or the test is vacuous. Do not spend an implementer on it.
-    fast = not (tag or reset_files) and fc_fast.workflow(proj, meta) == "fix-then-regression-test"  # a bench run is never routed: it leaves the real result and Linear alone
+    fast = fc_attempt.fast_route(tag, reset_files, lambda: fc_fast.workflow(proj, meta))  # a bench run is never routed: it leaves the real result and Linear alone
     red = run_test(meta, wt)
-    if fast and red.returncode:
+    state = fc_attempt.base_state(fast, red.returncode, delete)
+    if state == "broken_base":
         return fc_fast.broken_base(proj, meta, red, base_name, branch, wt)
-    if red.returncode == 0 and not fast and not delete:  # a deleting task has its change to make whatever the test says
+    if state == "already_green":
         fc_core.say(f"{tid} skip    test already passes on {base_name}; fix the test or drop the task")
         result = {"id": tid, "title": meta.get("title"), "status": "already_green", "model": meta["model"], "attempts": 0,
                   "seconds": 0.0, "cost": 0.0, "branch": branch, "worktree": str(wt), "diffstat": "", "log": []}
@@ -305,7 +306,7 @@ def run_task(repo, proj, task, attempts, model=None, reset_files=False, tag=""):
     log, session, started, status, cost, reference_cost = [], None, time.time(), "failed", 0.0, 0.0
     original_prompt = prompt
     # The attempts spent: each numbered turn once (a turn and the test of the edits it left are one), never a provider's refusal.
-    spent = lambda: len({e["attempt"] for e in log if "attempt" in e and not e.get("rate_limited") and "payment_required" not in e and "slept" not in e})
+    spent = lambda: fc_attempt.attempts_spent(log)
     def progress(state):  # a parked `watch` and the status board read this while the task runs
         (proj / "results").mkdir(exist_ok=True)
         fc_core.atomic_write(res, json.dumps({"id": tid, "title": meta.get("title"), "status": state, "model": meta["model"],
@@ -314,15 +315,8 @@ def run_task(repo, proj, task, attempts, model=None, reset_files=False, tag=""):
     progress("running")
     # A hold placed while the run cloned, based, and installed lands here, before any turn. `running` is on disk before the
     # holds are read, and `hold` writes the hold before it reads `running`: either this sees the hold, or `hold` says it runs.
-    hold = None if tag else fc_tasks.held(proj).get(tid)
-    if hold:
-        if last is None:
-            res.unlink(missing_ok=True)
-        else:
-            fc_core.atomic_write(res, last)  # the task never started: its last run's result stands
-        shutil.rmtree(wt, ignore_errors=True)
-        fc_core.say(f"{tid} held    before its first turn: {hold.get('reason', '')}")
-        return {"id": tid, "title": meta.get("title"), "status": "held", "attempts": 0, "seconds": 0.0, "cost": 0.0, "branch": "-", "log": []}
+    if held := fc_attempt.hold_before_turn(proj, tag, meta, res, last, wt):
+        return held
     fc_core.say(f"{tid} start   {meta.get('title', '')}  model={meta['model']}")
     if not reset_files and not tag:  # bench runs leave Linear alone
         fc_linear.linear_event(proj, meta, "dispatched")
@@ -339,13 +333,13 @@ def run_task(repo, proj, task, attempts, model=None, reset_files=False, tag=""):
     def failed(why, next_prompt):  # one more failed attempt: the fallback takes over after models.fallback_after of them
         nonlocal fails
         fails += 1
-        if fall() and fails >= fc_config.FALLBACK_AFTER:
+        if fc_attempt.fallback_due(fails, fall(), fc_config.FALLBACK_AFTER):
             switch(why, next_prompt)
             return True
         return False
     def edited():  # a turn cut short may leave edits: they are tested before the next session reads the brief against them
         return bool(meta["files"]) and bool(fc_core.sh(["git", "status", "--porcelain", "--", *meta["files"]], wt, check=False).stdout.strip())
-    only_delete = bool(delete) and not meta["files"]  # the deletion is the whole task: no model turn, one test run decides
+    only_delete = fc_attempt.only_delete(delete, meta["files"])  # the deletion is the whole task: no model turn, one test run decides
     while attempt < attempts:
         if fc_proc.STOP.is_set():
             raise fc_proc.Stopped
@@ -363,7 +357,7 @@ def run_task(repo, proj, task, attempts, model=None, reset_files=False, tag=""):
                 fc_proc.TASK.id = tid  # a hold pauses the turn's commands, not the checks and tests below
                 try:
                     session, reply, tools, usage = implementer(wt, meta["model"], prompt, session, task={"proj": proj, "meta": meta, "space": fc_herdr.HERDR_SPACES.get(proj.name)},
-                                                               timeout=fc_models.TURN_TIMEOUT)
+                                                               timeout=fc_attempt.turn_limit(meta))
                 finally:
                     fc_proc.TASK.id = None
                 if fc_proc.task_paused(tid):  # a harness that swallowed the cut: the turn's edits are kept, never tested or committed
@@ -372,18 +366,16 @@ def run_task(repo, proj, task, attempts, model=None, reset_files=False, tag=""):
             status = "paused"
             break
         except fc_models.RateLimited as e:
-            cost += e.usage["cost"]
-            reference_cost += e.usage.get("reference_cost") or 0
-            if fall():
+            cost, reference_cost = fc_attempt.tally(cost, reference_cost, e.usage)
+            act, rate_waits, wait = fc_attempt.rate_step(fall(), rate_waits)
+            if act == "switch":
                 log.append({"attempt": attempt, "rate_limited": True, "seconds": round(time.time() - t0, 1), "usage": e.usage})
                 switch(e.why, original_prompt)
                 attempt -= 1
+            elif act == "give_up":
+                log.append({"attempt": attempt, "rate_limited": True, "error": f"{e.why}; giving up after 4 waits"})
+                break
             else:
-                rate_waits += 1
-                if rate_waits > 4:
-                    log.append({"attempt": attempt, "rate_limited": True, "error": f"{e.why}; giving up after 4 waits"})
-                    break
-                wait = 20 * rate_waits
                 fc_core.say(f"{tid} {e.why}; fresh session in {wait}s (wait {rate_waits}/4)")
                 log.append({"attempt": attempt, "rate_limited": True, "seconds": round(time.time() - t0, 1), "usage": e.usage})
                 session = None  # the compacted session is dead; restart from the original prompt
@@ -394,20 +386,20 @@ def run_task(repo, proj, task, attempts, model=None, reset_files=False, tag=""):
                 continue
             cut = attempt + 1
         except subprocess.TimeoutExpired as e:
-            if fc_proc.STOP.is_set():
-                raise fc_proc.Stopped
             # A hung implementer (tool call never returning) costs one attempt, not the task: fresh session, same prompt.
             # A turn the machine slept in is no hang: it costs no attempt and no step toward the fallback (the awake clock timed it out).
             nap = fc_proc.slept(clk)
+            step = fc_attempt.timeout_step(fc_proc.STOP.is_set(), nap)
+            if step == "stop":
+                raise fc_proc.Stopped
             fc_core.say(f"{tid} attempt {attempt} timeout  implementer turn did not finish within {fc_core.fmt(time.time() - t0)}"
                         + (f", and {fc_proc.slept_text(nap)}: it does not count" if nap else "") + "; fresh session")
-            cut_usage = getattr(e, "usage", {"cost": 0.0, "tokens_in": 0, "tokens_out": 0})  # what the cut turn cost is counted here, as for a rate limit
-            cost += cut_usage["cost"]
-            reference_cost += cut_usage.get("reference_cost") or 0
-            log.append({"attempt": attempt, "seconds": round(time.time() - t0, 1), "error": "implementer timed out", "tool_calls": getattr(e, "tools", 0), "usage": cut_usage,
+            cut_tools, cut_usage = fc_attempt.cut_of(e)  # what the cut turn cost is counted here, as for a rate limit
+            cost, reference_cost = fc_attempt.tally(cost, reference_cost, cut_usage)
+            log.append({"attempt": attempt, "seconds": round(time.time() - t0, 1), "error": "implementer timed out", "tool_calls": cut_tools, "usage": cut_usage,
                         **({"slept": round(nap)} if nap else {})})
             session, prompt, cut = None, original_prompt, attempt
-            if nap:
+            if step == "refund":
                 attempt -= 1
             else:
                 failed("timed out", original_prompt)
@@ -419,11 +411,12 @@ def run_task(repo, proj, task, attempts, model=None, reset_files=False, tag=""):
             status = "payment_required"
             break
         except Exception as e:  # noqa: BLE001
-            if fc_proc.STOP.is_set():
+            step = fc_attempt.error_step(fc_proc.STOP.is_set(), fall())
+            if step == "stop":
                 raise fc_proc.Stopped
             fc_core.say(f"{tid} error   {str(e)[-300:]}")
             log.append({"attempt": attempt, "error": str(e)[-2000:]})
-            if fall():  # a fresh session on the same model until the fallback takes over
+            if step == "retry":  # a fresh session on the same model until the fallback takes over
                 if not failed("errored", original_prompt):
                     session, prompt = None, original_prompt
                 if not edited():
@@ -434,8 +427,7 @@ def run_task(repo, proj, task, attempts, model=None, reset_files=False, tag=""):
         if cut:
             reply, tools, usage = "", 0, {"cost": 0.0, "tokens_in": 0, "tokens_out": 0}
         n = cut or attempt
-        cost += usage["cost"]
-        reference_cost += usage.get("reference_cost") or 0
+        cost, reference_cost = fc_attempt.tally(cost, reference_cost, usage)
         found = None if cut else contradiction(reply)
         if found:  # the brief states something the code disproves: more attempts would only work around it
             log.append({"attempt": attempt, "seconds": round(time.time() - t0, 1), "tool_calls": tools, "usage": usage,
@@ -463,7 +455,7 @@ def run_task(repo, proj, task, attempts, model=None, reset_files=False, tag=""):
         else:
             cannot = []
         tampered = [f for f, d in fc_core.digests(wt, meta["protected"]).items() if d != before[f]]
-        lines, new_docs, stray = fc_gate.branch_budget(wt, base, allowed=meta["files"] if meta["files"] or delete else None, delete=delete)
+        lines, new_docs, stray = fc_gate.branch_budget(wt, base, allowed=fc_attempt.scope_of(meta["files"], delete), delete=delete)
         entry = {"attempt": n, **({"cut_short": True} if cut else {}), "seconds": round(time.time() - t0, 1), "tool_calls": tools, "usage": usage,
                  "test_exit": test.returncode, "tampered": tampered, **({"broke": broke} if broke else {}), **({"base unknown": cannot} if cannot else {}), **({"red on base (baseline unknown)": red_on_base} if red_on_base else {}), "lines": lines, "new_docs": new_docs, "stray": stray,
                  "refused": fc_readguard.refused(wt) - ref_before,
@@ -473,7 +465,7 @@ def run_task(repo, proj, task, attempts, model=None, reset_files=False, tag=""):
         if isinstance(session, dict):
             fc_herdr.herdr_label(session, f"attempt {attempt}/{attempts}", cost)
         over = lines > fc_config.MAX_DIFF_LINES
-        verdict = "pass" if test.returncode == 0 and not over and not new_docs and not stray and not broke and not cannot else "fail"
+        verdict = fc_attempt.verdict_of(test.returncode, over, new_docs, stray, broke, cannot)
         output, reader = test.stdout + test.stderr, None
         if test.returncode != 0 and not tampered:  # the reader's brief, written before the line so its cost is on it
             (proj / "results").mkdir(parents=True, exist_ok=True)
@@ -482,24 +474,15 @@ def run_task(repo, proj, task, attempts, model=None, reset_files=False, tag=""):
             entry["summary"], reader = read_failure(wt, meta, output, log_path)
             if reader:
                 entry["reader"] = {"model": fc_config.TEST_READER, "usage": reader}
-                cost += reader["cost"]
-                reference_cost += reader.get("reference_cost") or 0
+                cost, reference_cost = fc_attempt.tally(cost, reference_cost, reader)
                 progress("running")
         fc_core.say(f"{tid} attempt {n} {verdict}  {fc_core.fmt(entry['seconds'])}  tools={tools}  lines={lines}  refused={entry['refused']}  ${usage['cost']:.4f}"
             + (f"  reader ${reader['cost']:.4f}" + (f" (list ${reader['reference_cost']:.4f})" if reader.get("reference_cost") else "") if reader else "")
             + (f"  OVER {fc_config.MAX_DIFF_LINES}" if over else "") + (f"  new docs: {', '.join(new_docs)}" if new_docs else "")
             + (f"  outside files: {', '.join(stray)}" if stray else "") + (f"  broke: {', '.join(broke)[:160]}" if broke else "")
             + (f"  cannot tell if red on base: {'; '.join(cannot)[:300]}" if cannot else ""))
-        if tampered:
-            status = "rejected_tampered"
-            break
-        if cannot:  # another attempt cannot change what the base run did
-            status = "rejected_regression"
-            break
-        if verdict == "pass":
-            status = "passed"
-            break
-        if only_delete:  # no turn can fix anything: the one attempt decides
+        if done := fc_attempt.settled(verdict, tampered, cannot, only_delete, status):  # cannot: another attempt cannot change what the base run did; delete-only: no turn can fix anything
+            status = done
             break
         problems = []
         if test.returncode != 0:
@@ -518,7 +501,7 @@ def run_task(repo, proj, task, attempts, model=None, reset_files=False, tag=""):
                             + f"\nFiles you may change: {', '.join(meta['files'])}")
         if broke:
             problems.append(fc_gate.advice(broke))
-        status = ("rejected_size" if over else "rejected_docs" if new_docs else "rejected_scope" if stray else "rejected_regression" if broke else status) if test.returncode == 0 else status
+        status = fc_attempt.miss_status(test.returncode, over, new_docs, stray, broke, status)
         prompt = "\n\n".join(problems) + "\nFix it without editing protected files."
         fresh = original_prompt + "\n\nA previous attempt left edits in the files and did not pass:\n\n" + prompt
         if cut:  # the cut-short turn already counted; its session is gone, so the next one starts from the task and what it left
@@ -558,8 +541,7 @@ def run_task(repo, proj, task, attempts, model=None, reset_files=False, tag=""):
         fc_core.sh(["git", "fetch", "-q", str(wt), f"{branch}:{branch}"], repo)  # the task branch now exists in the main repo: a layer for review, never merged here
         if fc_worktree.names_lockfile(meta):
             fc_worktree.adopt_installs(repo, wt)
-    if fast and status == "passed":
-        status = "unproven"
+    status = fc_attempt.final_status(status, fast)
     diff = fc_core.sh(["git", "diff", base, "--stat"], wt, check=False).stdout
     total = round(time.time() - started, 1)
     fc_core.say(f"{tid} {status:10} total {fc_core.fmt(total)}  attempts={spent()}  ${cost:.4f}")

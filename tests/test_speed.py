@@ -67,6 +67,12 @@ class TaskBranches(unittest.TestCase):
         base, _ = fc.fc_implement.task_base(self.repo, self.proj, {"id": "003", "after": "002"})
         self.assertEqual(base, "compose/proj-001")
 
+    def test_a_bench_tag_follows_the_prefix_and_the_id_in_the_branch_name(self):
+        name = fc.fc_implement.fc_attempt.branch_name
+        self.assertEqual(name("compose/proj-", "001", ""), "compose/proj-001")
+        self.assertEqual(name("compose/proj-", "001", "-bench-x"), "compose/proj-001-bench-x")
+        self.assertEqual(name("team/x-", "001", ""), "team/x-001")  # a recorded project branch
+
 
 class E2EBesideReview(unittest.TestCase):
     def test_e2e_runs_while_review_waits_on_models(self):

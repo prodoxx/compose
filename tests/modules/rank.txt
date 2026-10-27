@@ -81,6 +81,7 @@ fc_gate
 fc_format
 fc_trailpack
 fc_pause
+fc_attempt
 fc_implement
 fc_shrink
 fc_jev
@@ -88,6 +89,8 @@ fc_accept
 fc_reroute
 fc_depth
 fc_review
+fc_detach
+fc_fixround
 fc_verify
 fc_taskreview
 fc_ship

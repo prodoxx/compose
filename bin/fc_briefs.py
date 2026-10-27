@@ -258,10 +258,8 @@ def cmd_testcrews(a):
     blocked = test_blockers(proj, tasks, metas)
     metas = [m for m in metas if m["id"] not in blocked]
     model = "tests" if "tests" in fc_config.CREW_MODELS else "groundwork" if "groundwork" in fc_config.CREW_MODELS else None
-    cap = getattr(a, "parallel", None) or fc_config.PARALLEL  # unset: every writer starts at once
     key, chain = fc_crewpick.crew_chain("tests", model)
-    if not getattr(a, "parallel", None) and (key is None or fc_claude.is_claude(chain[0][0])):  # Claude Code writers are heavy: they stay within claude_parallel whatever `parallel` is, unless --parallel says otherwise
-        cap = min(cap or fc_config.CLAUDE_PARALLEL, fc_config.CLAUDE_PARALLEL)
+    cap = writer_cap(getattr(a, "parallel", None), fc_config.PARALLEL, fc_config.CLAUDE_PARALLEL, key is None or fc_claude.is_claude(chain[0][0]))
     metas, queued = cap_split(proj, tasks, metas, cap)
     if fc_worktree.use_treehouse():  # the whole set fits, or nothing is leased and no teammate starts
         held = fc_worktree.slots(proj)
@@ -298,14 +296,24 @@ def cmd_testcrews(a):
         print(f"not started: {','.join(sorted(failed))}; start them again: compose testcrews --project {proj.name} --only {','.join(sorted(failed))}{again}")
     say_queued()
 
+def writer_cap(parallel, default, claude_cap, claude):
+    """How many test writers may be open at once, 0 for no cap. Unset, every writer starts at once; Claude Code writers are heavy:
+    they stay within claude_parallel whatever `parallel` is, unless --parallel (`parallel`) says otherwise."""
+    cap = parallel or default
+    return min(cap or claude_cap, claude_cap) if not parallel and claude else cap
+
+def split_at_cap(metas, cap, held):
+    """`metas` split into the writers to start now and those queued, when `held` other writers already hold slots of the `cap`."""
+    if not cap:
+        return metas, []
+    room = max(cap - held, 0)
+    return metas[:room], metas[room:]
+
 def cap_split(proj, tasks, metas, cap):
     """`metas` split into the writers to start now and those queued past `cap`. A writer whose branch is open is still writing
     or not collected yet, and holds a slot: the cap counts those too, so --collect never runs more than `cap` at once."""
-    if not cap:
-        return metas, []
     ids = {m["id"] for m in metas}
-    room = max(cap - sum(test_open(proj, o["id"]) for o in tasks if o["id"] not in ids), 0)
-    return metas[:room], metas[room:]
+    return split_at_cap(metas, cap, sum(test_open(proj, o["id"]) for o in tasks if o["id"] not in ids) if cap else 0)
 
 def test_branch(proj, tid):
     return fc_worktree.task_prefix(fc_herdr.project_worktree(proj), proj) + f"tests-{tid}"
@@ -330,28 +338,35 @@ def waiting_writers(proj, update=None):
         fc_core.atomic_write(f, json.dumps(have, indent=2))
     return have
 
+def written_files(paths, test, missing):
+    """The files of `paths` a writer writes: those its `test` command runs by stem (all of them when it names none), and those `missing` from the branch."""
+    ran = [p for p in paths if re.search(rf"(?<![\w-]){re.escape(Path(p).stem)}(?![\w-])", test)]
+    return set(ran or paths) | set(missing)
+
 def test_written(meta, wt):
     """The protected files a task's test writer writes: those not on the project branch yet, and those its test command runs
     (named by path, file name, or module), or every one when the command names none. A file already there that the command
     does not run (groundwork's pins, say) is only read."""
     paths = meta.get("protected") or []
-    ran = [p for p in paths if re.search(rf"(?<![\w-]){re.escape(Path(p).stem)}(?![\w-])", meta.get("test") or "")]
-    return set(ran or paths) | {p for p in paths if fc_core.sh(["git", "cat-file", "-e", f"HEAD:{p}"], wt, check=False).returncode}
+    return written_files(paths, meta.get("test") or "", {p for p in paths if fc_core.sh(["git", "cat-file", "-e", f"HEAD:{p}"], wt, check=False).returncode})
 
 def test_blockers(proj, tasks, starting):
     """The writers each task in `starting` waits for: of the tasks writing one of the files it writes, those whose branch is not
     collected yet, and earlier ones that start now or wait. Started together off one commit, two writers of one file each created
     it, or each appended to it, and the second collect conflicted; one after another, each starts off the project branch that
     holds the test before it. A task whose own branch is open started long ago and waits for nothing."""
-    queued = {m["id"] for m in starting} | set(waiting_writers(proj))
     wt = fc_herdr.project_worktree(proj)
-    written = {o["id"]: test_written(o, wt) for o in tasks}
+    return writer_blockers([m["id"] for m in starting], [o["id"] for o in tasks], {o["id"]: test_written(o, wt) for o in tasks},
+                           {m["id"] for m in starting} | set(waiting_writers(proj)), lambda t: test_open(proj, t))
+
+def writer_blockers(starting, ids, written, queued, is_open):
+    """Writers (task ids) each of `starting` waits for: of `ids`, those writing a file it writes that are open, or earlier and in `queued`.
+    A writer whose own branch is open (`is_open` asks) waits for nothing."""
     out = {}
     for m in starting:
-        by = [o["id"] for o in tasks if o["id"] != m["id"] and written[m["id"]] & written[o["id"]]
-              and ((o["id"] < m["id"] and o["id"] in queued) or test_open(proj, o["id"]))]
-        if by and not test_open(proj, m["id"]):
-            out[m["id"]] = by
+        by = [o for o in ids if o != m and written[m] & written[o] and ((o < m and o in queued) or is_open(o))]
+        if by and not is_open(m):
+            out[m] = by
     return out
 
 def test_ready(report):
@@ -381,6 +396,19 @@ def test_worktree(proj, tid):
     fc_worktree.ready_checkout(wt, path, install=fc_core.project_config(proj).get("install"))
     return path
 
+def not_ready_line(tid, last):
+    """The skip line for a writer whose last report is not test ready."""
+    return f"tests-{tid} skipped: it has not reported test ready (last: {last.get('state', 'nothing')} {last.get('message', '')!r}); its branch and worktree are kept"
+
+def to_pick(picked, log):
+    """The commits to cherry-pick, oldest first: the shas of `log` lines (sha NUL who) whose `who` is not on a `picked` line of the project branch."""
+    seen = {l.split("\0")[1] for l in picked}
+    return [c for c, who in (l.split("\0") for l in log) if who not in seen]
+
+def conflict_line(tid, sha, branch, out):
+    """The conflict report naming the writer's task, the commit, and the branch kept, with the tail of git's output."""
+    return f"tests-{tid}: {sha[:7]} conflicts with the project branch; its branch {branch} is kept.\n{out[-600:]}"
+
 def collect_tests(proj, only=None, force=False):
     """Cherry-pick the own commits of every test-writing teammate that reported its test ready onto the project branch in task order,
     remove their worktrees and branches, then start the writers that waited for them. A writer not yet ready, or on a turn again, is skipped: returning
@@ -404,22 +432,21 @@ def collect_tests_locked(proj, wt, only, force):
         writer = fc_herdr.agent_name(proj.name, f"tests-{tid}")
         last = (fc_crew.crew_reports(proj, writer) or [{}])[-1]
         if not test_ready(last):
-            fc_core.say(f"tests-{tid} skipped: it has not reported test ready (last: {last.get('state', 'nothing')} {last.get('message', '')!r}); its branch and worktree are kept")
+            fc_core.say(not_ready_line(tid, last))
             continue
         if fc_testred.gate(proj, by_id[tid], writer):  # a test that cannot load goes back to its writer once
             continue
         # a commit already on the branch is skipped: the same patch, or picked by hand (a cherry-pick keeps the author, the author
         # date, and the subject through a conflict resolution and any later edit, where no patch or content check would match)
         fmt = ["--no-merges", "--date=raw", "--format=%H%x00%an <%ae> %ad %s"]
-        picked = {l.split("\0")[1] for l in fc_core.sh(["git", "log", *fmt, f"{branch}..HEAD"], wt).stdout.splitlines()}
+        picked = fc_core.sh(["git", "log", *fmt, f"{branch}..HEAD"], wt).stdout.splitlines()
         ahead = fc_core.sh(["git", "rev-list", "--count", "--no-merges", f"HEAD..{branch}"], wt).stdout.strip()
-        commits = [l.split("\0") for l in fc_core.sh(["git", "log", "--reverse", "--right-only", "--cherry-pick", *fmt, f"HEAD...{branch}"], wt).stdout.splitlines()]
-        commits = [c for c, who in commits if who not in picked]
+        commits = to_pick(picked, fc_core.sh(["git", "log", "--reverse", "--right-only", "--cherry-pick", *fmt, f"HEAD...{branch}"], wt).stdout.splitlines())
         for c in commits:
             p = fc_core.sh(["git", "cherry-pick", "--allow-empty", c], wt, check=False)
             if p.returncode:
                 fc_core.sh(["git", "cherry-pick", "--abort"], wt, check=False)
-                conflicts.append(f"tests-{tid}: {c[:7]} conflicts with the project branch; its branch {branch} is kept.\n{(p.stdout + p.stderr)[-600:]}")
+                conflicts.append(conflict_line(tid, c, branch, p.stdout + p.stderr))
                 break
         else:
             held = fc_worktree.slots(proj).get(f"tests-{tid}")

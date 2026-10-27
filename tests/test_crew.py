@@ -614,14 +614,19 @@ class Guard(unittest.TestCase):
             here = Path(path).resolve()
             root = next((r for r in (self.repo, self.other) if r == here or r in here.parents), None)
             return fc.fc_core.Checkout((root, root / ".git", root / ".git")) if root else None
-        def sh(cmd, cwd, **kw):  # `rev-parse --is-inside-work-tree`, the one thing the edit guard asks git
-            return SimpleNamespace(returncode=0 if self.repo in Path(cwd).resolve().parents or Path(cwd).resolve() == self.repo else 1, stdout="")
-        for p in (mock.patch.object(fc.fc_core, "checkout", checkout), mock.patch.object(fc.fc_core, "sh", sh)):
-            p.start(); self.addCleanup(p.stop)
+        p = mock.patch.object(fc.fc_core, "checkout", checkout); p.start(); self.addCleanup(p.stop)  # the edit guard asks fc_core.checkout, never git
 
     def test_team_lead_cannot_edit_repo_files(self):
         for f in ("src/app.go", "tests/app_test.go", "README.md", "package.json", ".compose/shop/notes.md"):
             self.assertIsNotNone(fc.fc_hooks.guard_decision("Edit", str(self.repo / f), "orchestrator"), f)
+
+    def test_the_edit_guard_asks_git_nothing_and_lets_a_folder_outside_every_checkout_through(self):
+        with mock.patch.object(fc.fc_core, "sh", side_effect=AssertionError("git asked")), mock.patch.object(fc.fc_core, "checkout", wraps=fc.fc_core.checkout) as asked:
+            for role in ("orchestrator", "planner"):
+                self.assertIsNotNone(fc.fc_hooks.guard_decision("Write", str(self.repo / "src" / "new" / "app.go"), role), role)  # a folder not made yet: its nearest parent is the checkout
+                self.assertIsNotNone(fc.fc_hooks.guard_decision("Write", str(self.other / "app.go"), role), role)
+                self.assertIsNone(fc.fc_hooks.guard_decision("Write", "/nonexistent-dir/brief.txt", role), role)
+            self.assertEqual(asked.call_count, 6)
 
     def test_team_lead_keeps_its_own_files(self):
         for f in (".compose/shop/linear.json", ".compose/shop/verify.json", ".compose/linear.json", ".compose/shop/pr/001-002.md"):

@@ -46,6 +46,256 @@ class Leftovers(unittest.TestCase):
         self.assertIsNone(other.poll())
 
 
+class CleanDecisions(unittest.TestCase):
+    """The rules clean and abandon decide on, as facts in and a decision out."""
+    def test_live_crew_holds_a_clean_unless_the_project_is_named_and_forced(self):
+        c = fc.fc_clean.crew_holds_clean
+        self.assertEqual([c(["a last reported working"], f, e) for f, e in ((0, 0), (1, 0), (0, 1), (1, 1))], [True, True, True, False])
+        self.assertFalse(c([], False, False))
+
+    def test_a_branch_with_no_proof_stays_unless_unmerged_work_is_to_be_deleted(self):
+        f = fc.fc_clean.branch_fate
+        self.assertEqual(f(None, [], {}, False), (None, False))
+        self.assertEqual(f(None, [], {}, True), (None, True))
+        self.assertEqual(f("contained in main", [], {}, False), ("contained in main", True))
+
+    def test_a_task_branch_goes_with_the_layers_that_held_it_only_when_all_are_merged(self):
+        f = fc.fc_clean.branch_fate
+        self.assertEqual(f(None, ["l1", "l2"], {"l1": "PR #3 merged 2026-01-01", "l2": "x"}, False), ("held by l1, l2, merged: PR #3 merged 2026-01-01", True))
+        self.assertEqual(f(None, ["l1", "l2"], {"l1": "x"}, False), (None, False))
+
+    def test_an_empty_project_is_kept_unless_named_or_deleted_as_unmerged(self):
+        f = fc.fc_clean.project_proof
+        self.assertEqual(f("contained in main", False, False, False, {}, {}), (None, False, True))
+        self.assertEqual(f("contained in main", False, True, False, {}, {}), ("contained in main", True, False))
+        self.assertEqual(f("contained in main", False, False, True, {}, {}), ("contained in main", True, False))
+
+    def test_a_project_without_proof_goes_only_on_delete_unmerged_or_when_every_layer_is_merged(self):
+        f = fc.fc_clean.project_proof
+        self.assertEqual(f(None, True, True, False, {}, {}), (None, False, False))
+        self.assertEqual(f(None, True, True, True, {}, {}), ("UNMERGED, removed on --delete-unmerged", False, False))
+        self.assertEqual(f(None, True, False, False, {"l1": ["001"]}, {"l1": "x"}), ("every layer built from it is merged (l1)", True, False))
+        self.assertEqual(f(None, True, False, False, {"l1": ["001"]}, {}), (None, False, False))
+
+    def test_a_run_inside_the_worktree_stands_in_it(self):
+        root = Path("/w/p").resolve()
+        self.assertTrue(fc.fc_clean.runs_inside(root, root))
+        self.assertTrue(fc.fc_clean.runs_inside(root / "src" / "x", root))
+        self.assertFalse(fc.fc_clean.runs_inside(root.parent, root))
+        self.assertFalse(fc.fc_clean.runs_inside(None, root))
+
+    def test_a_team_lead_still_working_keeps_the_worktree_until_it_reports_done(self):
+        f = fc.fc_clean.lead_working
+        rec = {"name": "lead", "tab": "t1"}
+        self.assertTrue(f(rec, {"state": "working"}, False))
+        self.assertTrue(f(rec, {}, False))
+        self.assertFalse(f(rec, {"state": "done"}, False))
+        self.assertFalse(f({**rec, "closed": True}, {"state": "working"}, False))
+        self.assertFalse(f(None, {}, False))
+        self.assertFalse(f(rec, {"state": "working"}, True))
+
+    def test_abandon_refuses_a_live_run_and_live_crew_unless_forced(self):
+        f = fc.fc_clean.live_run_or_crew
+        self.assertEqual(f(None, False, [], False), [])
+        self.assertEqual(f(42, True, [], False), ["a run is live (pid 42): stop it first"])
+        self.assertEqual(f(None, False, ["a last reported working", "b is alive in its herdr space"], False),
+                         ["live crew (a last reported working; b is alive in its herdr space); --force overrides"])
+        self.assertEqual(f(None, False, ["a last reported working"], True), [])
+        self.assertEqual(f(42, True, ["a last reported working"], True), ["a run is live (pid 42): stop it first"])
+
+    def test_abandon_lists_what_goes_and_what_stays_then_stops_when_unsafe(self):
+        proj = Path(tempfile.mkdtemp()) / "p"; wt = proj.parent / "wt"
+        out = io.StringIO()
+        sh = mock.Mock(return_value=mock.Mock(stdout="", returncode=0))
+        with mock.patch.object(fc.fc_clean.fc_core, "sh", sh), mock.patch.object(fc.fc_clean.fc_core, "project_branch", return_value="compose/p"), \
+             mock.patch.object(fc.fc_clean.fc_worktree, "own_branches", return_value=[]), mock.patch.object(fc.fc_clean.fc_worktree, "slots", return_value={}), \
+             mock.patch.object(fc.fc_clean.fc_worktree, "review_base", return_value=None), mock.patch.object(fc.fc_clean.fc_worktree, "is_slot", return_value=False), \
+             mock.patch.object(fc.fc_clean.fc_layers, "layer_prefix", return_value=""), mock.patch.object(fc.fc_clean, "live_crew", return_value=["a last reported working"]), \
+             mock.patch.object(fc.fc_clean.fc_tasks, "run_alive", return_value=False), mock.patch.object(fc.fc_clean, "standing_in", return_value=["this command runs inside it"]), \
+             mock.patch("sys.stdout", out), self.assertRaises(SystemExit) as stop:
+            fc.fc_clean.abandon_project(wt.parent, "p", wt, proj)
+        said = out.getvalue()
+        self.assertIn("abandon  p: removes", said); self.assertIn("abandon  keeps", said); self.assertIn("Linear issues, untouched", said)
+        self.assertIn("live crew (a last reported working); --force overrides; this command runs inside it", str(stop.exception))
+        self.assertIn("nothing removed", str(stop.exception))
+        self.assertEqual([c for c in sh.call_args_list if c.args[0][:2] in (["git", "branch"], ["git", "worktree"])], [])
+
+
+class CleanEnds(unittest.TestCase):
+    """The end of a clean: Linear first, the worktree after."""
+    def test_linear_rolls_up_before_the_worktree_goes(self):
+        order, m = [], mock.Mock()
+        with mock.patch.object(fc.fc_clean.fc_linear, "linear_merged", lambda *a, **k: order.append("linear")), \
+             mock.patch.object(fc.fc_clean.fc_linear, "refresh_ready", lambda *a, **k: order.append("ready")), \
+             mock.patch.object(fc.fc_clean, "remove_project", lambda *a, **k: order.append("remove")), mock.patch("sys.stdout", io.StringIO()):
+            fc.fc_clean.settle_clean("/m", "p", "/w", "/proj", "compose/p", {"feature": "ENG-1"}, {"001": {"id": "001"}}, ["001"], True, True, "line")
+        self.assertEqual(order, ["linear", "ready", "remove"])
+
+    def test_a_kept_worktree_is_not_removed_but_linear_still_rolls_up(self):
+        order = []
+        with mock.patch.object(fc.fc_clean.fc_linear, "linear_merged", lambda *a, **k: order.append("linear")), \
+             mock.patch.object(fc.fc_clean.fc_linear, "refresh_ready", lambda *a, **k: order.append("ready")), \
+             mock.patch.object(fc.fc_clean, "remove_project", lambda *a, **k: order.append("remove")), mock.patch("sys.stdout", io.StringIO()):
+            fc.fc_clean.settle_clean("/m", "p", "/w", "/proj", "compose/p", {}, {}, [], False, False, "line")
+        self.assertEqual(order, ["linear", "ready"])
+
+    def test_a_merged_project_holds_the_code_of_every_finished_task(self):
+        f = fc.fc_clean.merged_by_project
+        self.assertEqual(f({"001": 1, "002": 1, "003": 1, "004": 1}, ["001"], {"001": "done", "002": "done", "003": "already_green", "004": None}, ("done", "already_green")), ["002", "003"])
+
+
+class MergeProof(unittest.TestCase):
+    """A branch counts as merged only with proof; a kept branch names its first unmatched commit."""
+    def test_every_patch_in_the_target_proves_it(self):
+        f = fc.fc_clean.patch_merged
+        self.assertTrue(f("- a\n- b\n"))
+        self.assertFalse(f("- a\n+ b\n"))
+        self.assertFalse(f(""))
+
+    def test_a_merge_that_gives_the_targets_own_tree_proves_a_recut_stack_merged(self):
+        f = fc.fc_clean.changes_nothing
+        self.assertTrue(f("abc123\n", "abc123"))
+        self.assertFalse(f("def456\n", "abc123"))
+        self.assertFalse(f("", "abc123"))
+
+    def test_a_merged_pull_request_proves_a_squash_merge(self):
+        f = fc.fc_clean.pr_evidence
+        self.assertEqual(f(json.dumps([{"number": 7, "mergedAt": "2026-03-04T10:00:00Z"}])), "PR #7 merged 2026-03-04")
+        self.assertIsNone(f("[]")); self.assertIsNone(f("")); self.assertIsNone(f("not json"))
+
+    def test_no_proof_means_not_merged(self):
+        def sh(args, *a, **k):
+            return mock.Mock(returncode=1 if args[1] in ("rev-parse", "merge-base") else 0, stdout="")
+        with mock.patch.object(fc.fc_clean.fc_core, "sh", sh):
+            self.assertIsNone(fc.fc_clean.merge_evidence("/r", "b", ["main"], False))
+            self.assertFalse(fc.fc_clean.merged_into("/r", "b", ["main"]))
+
+    def test_a_squash_merged_branch_is_proved_by_its_pull_request(self):
+        def sh(args, *a, **k):
+            return mock.Mock(returncode=1 if args[1] in ("merge-base", "merge-tree") else 0, stdout="x\n" if args[1] == "cherry" else "")
+        pr = mock.Mock(returncode=0, stdout=json.dumps([{"number": 9, "mergedAt": "2026-05-06T00:00:00Z"}]))
+        with mock.patch.object(fc.fc_clean.fc_core, "sh", sh), mock.patch.object(fc.fc_clean.subprocess, "run", return_value=pr):
+            self.assertEqual(fc.fc_clean.merge_evidence("/r", "b", ["main"], True), "PR #9 merged 2026-05-06")
+            self.assertIsNone(fc.fc_clean.merge_evidence("/r", "b", ["main"], False))
+
+    def test_the_first_unmatched_commit_is_named_with_how_many_follow(self):
+        f = fc.fc_clean.first_plus
+        self.assertEqual(f("- aaa one\n+ bbb two words\n+ ccc three\n"), ("bbb", "two words", 1))
+        self.assertEqual(f("+ bbb two\n"), ("bbb", "two", 0))
+        self.assertIsNone(f("- aaa one\n")); self.assertIsNone(f(""))
+
+    def test_a_kept_branch_names_its_first_unmatched_commit(self):
+        def sh(args, *a, **k):
+            return mock.Mock(returncode=0, stdout={"cherry": "- a one\n+ bbbbbbb fix it\n+ c more\n", "rev-parse": "bbbbbbb\n"}.get(args[1], ""))
+        with mock.patch.object(fc.fc_clean.fc_core, "sh", sh):
+            self.assertEqual(fc.fc_clean.first_unmatched("/r", "b", ["main"]), "first unmatched commit bbbbbbb fix it and 1 more")
+
+
+class BriefDecisions(unittest.TestCase):
+    """Who writes tests when: one file, one writer at a time; the cap; collect order; no collect before test ready."""
+    def test_writers_of_one_test_file_start_one_after_another(self):
+        f = fc.fc_briefs.writer_blockers
+        written = {"001": {"t.py"}, "002": {"t.py"}, "003": {"u.py"}}
+        self.assertEqual(f(["001", "002", "003"], ["001", "002", "003"], written, {"001", "002", "003"}, set().__contains__), {"002": ["001"]})
+
+    def test_a_writer_waits_for_an_open_one_even_when_later(self):
+        f = fc.fc_briefs.writer_blockers
+        written = {"001": {"t.py"}, "002": {"t.py"}}
+        self.assertEqual(f(["001"], ["001", "002"], written, {"001"}, {"002"}.__contains__), {"001": ["002"]})
+
+    def test_a_writer_whose_own_branch_is_open_waits_for_nothing(self):
+        f = fc.fc_briefs.writer_blockers
+        self.assertEqual(f(["002"], ["001", "002"], {"001": {"t"}, "002": {"t"}}, {"002"}, {"001", "002"}.__contains__), {})
+
+    def test_a_waiting_earlier_writer_counts_as_queued(self):
+        f = fc.fc_briefs.writer_blockers
+        self.assertEqual(f(["003"], ["001", "003"], {"001": {"t"}, "003": {"t"}}, {"003", "001"}, set().__contains__), {"003": ["001"]})
+        self.assertEqual(f(["003"], ["001", "003"], {"001": {"t"}, "003": {"t"}}, {"003"}, set().__contains__), {})
+
+    def test_a_writer_writes_the_files_its_test_runs_and_those_not_on_the_branch(self):
+        f = fc.fc_briefs.written_files
+        paths = ["tests/test_a.py", "tests/test_b.py", "tests/pins.py"]
+        self.assertEqual(f(paths, "python -m tests.run test_a.py", set()), {"tests/test_a.py"})
+        self.assertEqual(f(paths, "python -m tests.run test_a.py", {"tests/pins.py"}), {"tests/test_a.py", "tests/pins.py"})
+        self.assertEqual(f(paths, "make", set()), set(paths))
+
+    def test_the_cap_on_started_writers(self):
+        f = fc.fc_briefs.writer_cap
+        self.assertEqual(f(None, 0, 2, False), 0)
+        self.assertEqual(f(None, 5, 2, False), 5)
+        self.assertEqual(f(None, 0, 2, True), 2)
+        self.assertEqual(f(None, 5, 2, True), 2)
+        self.assertEqual(f(None, 1, 2, True), 1)
+        self.assertEqual(f(4, 1, 2, True), 4)
+
+    def test_writers_past_the_cap_are_queued_in_task_order(self):
+        f = fc.fc_briefs.split_at_cap
+        ms = [{"id": "001"}, {"id": "002"}, {"id": "003"}]
+        self.assertEqual(f(ms, 0, 0), (ms, []))
+        self.assertEqual(f(ms, 2, 0), (ms[:2], ms[2:]))
+        self.assertEqual(f(ms, 2, 1), (ms[:1], ms[1:]))
+        self.assertEqual(f(ms, 2, 5), ([], ms))
+
+    def test_a_writer_is_collected_only_after_it_reports_test_ready(self):
+        f = fc.fc_briefs.test_ready
+        self.assertTrue(f({"state": "done"}))
+        self.assertTrue(f({"state": "working", "message": "Test READY"}))
+        self.assertFalse(f({"state": "working", "message": "still going"}))
+        self.assertFalse(f({}))
+        self.assertIn("not reported test ready (last: working 'busy')", fc.fc_briefs.not_ready_line("002", {"state": "working", "message": "busy"}))
+
+    def test_commits_already_picked_by_hand_are_skipped_and_the_rest_keep_their_order(self):
+        sha = lambda c, who: f"{c}\0{who}"
+        picked = [sha("p1", "A <a> 1 s1")]
+        log = [sha("c1", "A <a> 1 s1"), sha("c2", "B <b> 2 s2"), sha("c3", "C <c> 3 s3")]
+        self.assertEqual(fc.fc_briefs.to_pick(picked, log), ["c2", "c3"])
+        self.assertEqual(fc.fc_briefs.to_pick([], []), [])
+
+    def test_a_conflict_names_its_task_and_keeps_its_branch(self):
+        line = fc.fc_briefs.conflict_line("002", "abcdef0123", "compose/p-tests-002", "x" * 700 + "CONFLICT")
+        self.assertTrue(line.startswith("tests-002: abcdef0 conflicts with the project branch; its branch compose/p-tests-002 is kept.\n"))
+        self.assertTrue(line.endswith("CONFLICT")); self.assertLess(len(line), 700)
+
+    def collect(self, states, pick_fail=()):
+        proj = Path(tempfile.mkdtemp()) / "p"; proj.mkdir()
+        picks = []
+        def sh(args, *a, **k):
+            if args[1] == "cherry-pick" and args[2] != "--abort":
+                picks.append(args[-1]); return mock.Mock(returncode=int(args[-1] in pick_fail), stdout="", stderr="boom")
+            out = f"c-{args[-1]}\0w <w> 1 s" if args[1] == "log" and "--right-only" in args else "0" if args[1] == "rev-list" else ""
+            return mock.Mock(returncode=0, stdout=out, stderr="")
+        reports = lambda p, w: [states[w.rsplit("tests-", 1)[1]]] if w.rsplit("tests-", 1)[1] in states else []
+        tasks = [{"id": t} for t in ("003", "001", "002")]
+        say, closed = [], []
+        with mock.patch.object(fc.fc_briefs.fc_core, "sh", sh), mock.patch.object(fc.fc_briefs.fc_tasks, "load_tasks", return_value=tasks), \
+             mock.patch.object(fc.fc_briefs, "test_open", return_value=True), mock.patch.object(fc.fc_briefs.fc_crew, "crew_reports", reports), \
+             mock.patch.object(fc.fc_briefs.fc_testred, "gate", return_value=False), mock.patch.object(fc.fc_briefs.fc_herdr, "project_worktree", return_value=proj), \
+             mock.patch.object(fc.fc_briefs.fc_worktree, "slots", return_value={}), mock.patch.object(fc.fc_briefs.fc_worktree, "use_treehouse", return_value=False), \
+             mock.patch.object(fc.fc_briefs.fc_crew, "write_report"), mock.patch.object(fc.fc_briefs.fc_crew, "close_collected", lambda p, w: closed.append(w)), \
+             mock.patch.object(fc.fc_briefs.fc_core, "say", say.append), mock.patch.object(fc.fc_briefs, "test_branch", lambda p, t: f"b-{t}"):
+            try:
+                fc.fc_briefs.collect_tests_locked(proj, proj, None, False)
+                err = None
+            except SystemExit as e:
+                err = str(e)
+        return picks, say, closed, err
+
+    def test_collect_lands_ready_writers_in_task_order_and_skips_the_rest(self):
+        ready, working = {"state": "done"}, {"state": "working", "message": "x"}
+        picks, say, closed, err = self.collect({"001": ready, "002": working, "003": ready})
+        self.assertEqual([c.rsplit("b-", 1)[1] for c in picks], ["001", "003"])
+        self.assertTrue(any(l.startswith("tests-002 skipped") for l in say))
+        self.assertEqual(len(closed), 2)
+        self.assertIsNone(err)
+
+    def test_a_conflict_is_named_at_the_end_while_the_rest_are_collected(self):
+        ready = {"state": "done"}
+        picks, say, closed, err = self.collect({"001": ready, "002": ready, "003": ready}, pick_fail=("c-HEAD...b-001",))
+        self.assertEqual([c.rsplit("b-", 1)[1] for c in picks], ["001", "002", "003"])
+        self.assertEqual(len(closed), 2)
+        self.assertIn("tests-001:", err)
+
+
 class SharedSpaceClean(unittest.TestCase):
     """In the space compose was started from, clean closes the project's tabs, never the space, and other agents there are not its crew."""
     def herdr(self, *args, check=False, timeout=120):

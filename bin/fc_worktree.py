@@ -26,6 +26,10 @@ def refs_stamp(common):
     dirs = [d for sub in ("heads", "remotes") for d, _, _ in os.walk(Path(common) / "refs" / sub)]
     return (st(Path(common) / "packed-refs"), *(st(d) for d in dirs))
 
+def choose_prefix(rec, name, legacy_refs, branch):
+    """The task prefix from verify.json's record `rec`, else `fast/<name>/` when `legacy_refs` (the project's legacy refs git listed) is not empty, else `<branch>-`."""
+    return rec["task_prefix"] if rec.get("task_prefix") else f"fast/{name}/" if legacy_refs else branch + "-"
+
 def task_prefix(repo, proj):
     """What every task, bench and test-writer branch of the project starts with: verify.json `task_prefix` when recorded, else
     `fast/<project>/` while such branches exist (recorded once), else the project branch plus `-`."""
@@ -43,15 +47,11 @@ def task_prefix(repo, proj):
     if hit and hit[0] == stamp():
         return hit[1]
     rec = json.loads(f.read_text()) if f.exists() else {}
-    if rec.get("task_prefix"):
-        answer = rec["task_prefix"]
-    elif fc_core.sh(["git", "for-each-ref", "--format=%(refname)", f"refs/heads/fast/{proj.name}/", f"refs/remotes/*/fast/{proj.name}/*"],
-                    repo, check=False).stdout.strip():
-        if f.exists():
-            fc_core.atomic_write(f, json.dumps({**rec, "task_prefix": f"fast/{proj.name}/"}, indent=2))
-        answer = f"fast/{proj.name}/"
-    else:
-        answer = fc_core.project_branch(proj) + "-"
+    legacy = "" if rec.get("task_prefix") else fc_core.sh(["git", "for-each-ref", "--format=%(refname)", f"refs/heads/fast/{proj.name}/", f"refs/remotes/*/fast/{proj.name}/*"],
+                                                          repo, check=False).stdout.strip()
+    answer = choose_prefix(rec, proj.name, legacy, fc_core.project_branch(proj))
+    if legacy and f.exists():
+        fc_core.atomic_write(f, json.dumps({**rec, "task_prefix": answer}, indent=2))
     _prefixes[key] = (stamp(), answer)
     return answer
 
@@ -68,6 +68,15 @@ def heads(repo):
         _heads[common] = (stamp, names)
     return names
 
+def can_rename(prefix, legacy, pushed, taken=(), live_pid=None):
+    """(whether the legacy branches may be renamed, why not): never when the project's prefix is no longer `legacy` or any of its refs
+    is `pushed` to a remote (no word said), when a `taken` new name already exists, or when `live_pid` (a run in another process) holds the old names."""
+    if prefix != legacy or pushed:
+        return False, ""
+    if taken or live_pid is not None:
+        return False, f"{taken[0]} already exists" if taken else f"run pid {live_pid} is live"
+    return True, ""
+
 def rename_legacy_branches(repo, proj):
     """Move a project whose `fast/<project>/` branches were never pushed onto the names a new project gets, once: every local
     fast/<project>/ branch becomes `<project branch>-` plus the same rest (`git branch -m` keeps its reflog and config, and moves it
@@ -76,15 +85,17 @@ def rename_legacy_branches(repo, proj):
     on a remote keeps its names, since its PRs carry them; so does one whose run is live in another process, which holds the old
     names, or one where a new name is taken. Returns {old: new}, empty when nothing was renamed."""
     legacy, new = f"fast/{proj.name}/", fc_core.project_branch(proj) + "-"
-    if task_prefix(repo, proj) != legacy or fc_core.sh(["git", "for-each-ref", "--format=%(refname)", f"refs/remotes/*/fast/{proj.name}/*"],
-                                                        repo, check=False).stdout.strip():
+    if not can_rename(task_prefix(repo, proj), legacy, fc_core.sh(["git", "for-each-ref", "--format=%(refname)", f"refs/remotes/*/fast/{proj.name}/*"],
+                                                                   repo, check=False).stdout.strip())[0]:
         return {}
     olds = fc_core.sh(["git", "for-each-ref", "--format=%(refname)", f"refs/heads/{legacy}"], repo, check=False).stdout.split()
     names = {b: new + b.removeprefix(legacy) for b in (r.removeprefix("refs/heads/") for r in olds)}
     run = fc_tasks.run_marker(proj) or {}
     taken = [n for n in names.values() if fc_core.sh(["git", "rev-parse", "--verify", "-q", f"refs/heads/{n}"], repo, check=False).returncode == 0]
-    if taken or (run.get("pid") not in (None, os.getpid()) and fc_tasks.pid_alive(run["pid"])):
-        fc_core.say(f"names  {legacy} kept for now: " + (f"{taken[0]} already exists" if taken else f"run pid {run['pid']} is live"))
+    live = bool(not taken and run.get("pid") not in (None, os.getpid()) and fc_tasks.pid_alive(run["pid"]))
+    ok, why = can_rename(legacy, legacy, "", taken, run.get("pid") if live else None)
+    if not ok:
+        fc_core.say(f"names  {legacy} kept for now: {why}")
         return {}
     for old, n in names.items():
         fc_core.sh(["git", "branch", "-m", old, n], repo)
@@ -406,7 +417,11 @@ def dirty_paths(repo):
     folders (TOOL_DIRS, the `.ignore` file): a graph tool's session hook rewrites a tracked .claude/settings.json whenever a
     session starts there, and info/exclude cannot hide a tracked file; a graph built before the checkout ignored graft/ or
     .trail/ shows up as untracked. None of that is a change of the user's, and no clone needs it."""
-    fields, paths = fc_core.sh(["git", "status", "--porcelain", "-z", "-uall"], repo).stdout.split("\0"), []
+    return user_changes(fc_core.sh(["git", "status", "--porcelain", "-z", "-uall"], repo).stdout)
+
+def user_changes(status):
+    """The paths of `git status --porcelain -z` output `status` that are the user's: not the agent wiring (WIRING), the `.ignore` file or anything under TOOL_DIRS; a rename lists its new path only."""
+    fields, paths = status.split("\0"), []
     while fields:
         entry = fields.pop(0)
         if entry:

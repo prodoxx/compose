@@ -24,6 +24,118 @@ class Fallback(unittest.TestCase):
             self.assertIsNone(fc.fc_models.fallback_for("claude"))
 
 
+class AttemptLoop(unittest.TestCase):
+    """The decisions of fc_attempt that run_task acts on: facts in, decision out."""
+    def test_the_fallback_takes_over_after_the_configured_misses_and_only_when_there_is_one(self):
+        self.assertEqual([fc.fc_implement.fc_attempt.fallback_due(n, BACKUP, 2) for n in (1, 2, 3)], [False, True, True])
+        self.assertTrue(fc.fc_implement.fc_attempt.fallback_due(1, BACKUP, 1))
+        self.assertFalse(fc.fc_implement.fc_attempt.fallback_due(5, None, 2))  # a bench run, or a model with nowhere to fall back to
+
+    def test_a_rate_limit_switches_at_once_when_there_is_a_fallback_and_costs_no_wait(self):
+        self.assertEqual(fc.fc_implement.fc_attempt.rate_step(BACKUP, 0), ("switch", 0, 0))
+        self.assertEqual(fc.fc_implement.fc_attempt.rate_step(BACKUP, 3), ("switch", 3, 0))
+
+    def test_a_busy_provider_without_a_fallback_waits_longer_each_time_and_gives_up_after_four(self):
+        steps, waits = [], 0
+        for _ in range(5):
+            step, waits, seconds = fc.fc_implement.fc_attempt.rate_step(None, waits)
+            steps.append((step, waits, seconds))
+        self.assertEqual(steps, [("wait", 1, 20), ("wait", 2, 40), ("wait", 3, 60), ("wait", 4, 80), ("give_up", 5, 100)])
+
+    def test_a_turn_that_timed_out_across_a_sleep_costs_no_attempt_and_no_step_to_the_fallback(self):
+        self.assertEqual(fc.fc_implement.fc_attempt.timeout_step(False, 5220), "refund")
+        self.assertEqual(fc.fc_implement.fc_attempt.timeout_step(False, 0), "miss")
+
+    def test_after_the_stop_an_implementer_error_or_timeout_is_no_attempt_and_starts_no_fallback(self):
+        for nap in (0, 5220):
+            self.assertEqual(fc.fc_implement.fc_attempt.timeout_step(True, nap), "stop")
+        for fallback in (BACKUP, None):
+            self.assertEqual(fc.fc_implement.fc_attempt.error_step(True, fallback), "stop")
+        self.assertEqual((fc.fc_implement.fc_attempt.error_step(False, BACKUP), fc.fc_implement.fc_attempt.error_step(False, None)), ("retry", "end"))
+
+    def test_the_turn_limit_leaves_no_room_for_a_test_run_whatever_the_task_allows_its_test(self):
+        for meta in ({}, {"test_timeout": 300}, {"test_timeout": 5}):
+            self.assertEqual(fc.fc_implement.fc_attempt.turn_limit(meta), fc.fc_models.TURN_TIMEOUT)
+
+    def test_a_refused_turn_a_payment_stop_or_a_turn_slept_in_is_no_attempt_and_a_turn_and_its_test_are_one(self):
+        log = [{"attempt": 1, "rate_limited": True}, {"attempt": 1}, {"attempt": 1, "cut_short": True}, {"attempt": 2, "slept": 5220},
+               {"attempt": 2, "payment_required": {}}, {"attempt": 3}, {"leak_reverted": ["a.txt"]}]
+        self.assertEqual(fc.fc_implement.fc_attempt.attempts_spent(log), 2)
+        self.assertEqual(fc.fc_implement.fc_attempt.attempts_spent([]), 0)
+
+    def test_a_cut_turn_carries_its_tools_and_usage_and_a_bare_one_costs_nothing(self):
+        spent = {"cost": 0.5, "tokens_in": 100, "tokens_out": 20}
+        e = subprocess.TimeoutExpired("herdr agent prompt", 180)
+        e.tools, e.usage = 4, spent
+        self.assertEqual(fc.fc_implement.fc_attempt.cut_of(e), (4, spent))
+        self.assertEqual(fc.fc_implement.fc_attempt.cut_of(subprocess.TimeoutExpired("pi", 1)), (0, {"cost": 0.0, "tokens_in": 0, "tokens_out": 0}))
+
+
+class UsageTally(unittest.TestCase):
+    def test_a_real_cost_stays_apart_from_the_reference_cost(self):
+        cost, ref = 0.0, 0.0
+        for usage in [{"cost": 0.125, "reference_cost": 0.25}] * 2:
+            cost, ref = fc.fc_implement.fc_attempt.tally(cost, ref, usage)
+        self.assertEqual((ref, cost), (0.5, 0.25))
+
+    def test_a_missing_or_none_reference_cost_counts_as_zero(self):
+        for usage in ({"cost": 0.0}, {"cost": 0.0, "reference_cost": None}):
+            self.assertEqual(fc.fc_implement.fc_attempt.tally(0.0, 0.0, usage), (0.0, 0.0))
+        self.assertEqual(fc.fc_implement.fc_attempt.tally(0.0, 0.0, {"cost": 0.0, "reference_cost": 0.25}), (0.0, 0.25))
+
+    def test_a_rate_limited_turn_and_a_reader_add_their_reference_cost_too(self):
+        cost, ref = fc.fc_implement.fc_attempt.tally(0.0, 0.0, {"cost": 0.0, "reference_cost": 0.125})  # the refused turn
+        cost, ref = fc.fc_implement.fc_attempt.tally(cost, ref, {"cost": 0.0, "reference_cost": 0.25})  # the turn that answered
+        cost, ref = fc.fc_implement.fc_attempt.tally(cost, ref, {"cost": 0.0625, "reference_cost": 0.25})  # the test reader
+        self.assertEqual((cost, ref), (0.0625, 0.625))
+
+
+class AttemptVerdict(unittest.TestCase):
+    def verdict(self, code=0, over=False, new_docs=(), stray=(), broke=(), cannot=()):
+        return fc.fc_implement.fc_attempt.verdict_of(code, over, list(new_docs), list(stray), list(broke), list(cannot))
+
+    def test_a_passing_test_with_nothing_over_its_limits_passes(self):
+        self.assertEqual(self.verdict(), "pass")
+        self.assertEqual(self.verdict(code=1), "fail")
+
+    def test_a_passing_task_that_removed_a_sibling_stub_is_rejected_for_the_regression(self):
+        for kw in ({"broke": ["test_sibling (tests.test_b.B.test_sibling)"]}, {"cannot": ["`tests.run` base unknown"]}):
+            self.assertEqual(self.verdict(**kw), "fail")
+        self.assertEqual(fc.fc_implement.fc_attempt.miss_status(0, False, [], [], ["test_sibling"], "failed"), "rejected_regression")
+
+    def test_the_status_of_a_missed_attempt_names_the_first_limit_the_passing_test_broke(self):
+        miss = lambda **kw: fc.fc_implement.fc_attempt.miss_status(0, kw.get("over", False), kw.get("docs", []), kw.get("stray", []), kw.get("broke", []), "failed")
+        self.assertEqual(miss(over=True, docs=["a.md"], stray=["b"], broke=["t"]), "rejected_size")
+        self.assertEqual(miss(docs=["a.md"], stray=["b"], broke=["t"]), "rejected_docs")
+        self.assertEqual(miss(stray=["b"], broke=["t"]), "rejected_scope")
+        self.assertEqual(miss(broke=["t"]), "rejected_regression")
+        self.assertEqual(miss(), "failed")
+        self.assertEqual(fc.fc_implement.fc_attempt.miss_status(1, True, ["a.md"], ["b"], ["t"], "rejected_size"), "rejected_size")  # a failing test leaves the status as it was
+
+    def test_a_tampered_file_or_an_unknown_base_ends_the_task_and_a_pass_ends_it_passed(self):
+        settle = lambda verdict="fail", tampered=(), cannot=(), only=False, status="failed": fc.fc_implement.fc_attempt.settled(verdict, list(tampered), list(cannot), only, status)
+        self.assertEqual(settle(tampered=["t.py"]), "rejected_tampered")
+        self.assertEqual(settle(tampered=["t.py"], cannot=["x"], verdict="pass"), "rejected_tampered")
+        self.assertEqual(settle(cannot=["x"]), "rejected_regression")
+        self.assertEqual(settle(verdict="pass"), "passed")
+        self.assertIsNone(settle())  # another attempt may follow
+
+    def test_a_delete_only_task_ends_after_its_one_attempt_whatever_its_test_said(self):
+        self.assertEqual(fc.fc_implement.fc_attempt.settled("fail", [], [], True, "failed"), "failed")
+        self.assertEqual(fc.fc_implement.fc_attempt.settled("pass", [], [], True, "failed"), "passed")
+
+
+class DeleteScope(unittest.TestCase):
+    def test_the_deletion_is_the_whole_task_only_when_no_file_is_named(self):
+        only = fc.fc_implement.fc_attempt.only_delete
+        self.assertEqual([only(["old/"], []), only(["old/"], ["a.txt"]), only([], []), only([], ["a.txt"])], [True, False, False, False])
+
+    def test_the_scope_check_allows_the_files_and_covers_a_task_that_deletes_but_names_none(self):
+        self.assertEqual(fc.fc_implement.fc_attempt.scope_of(["a.txt"], []), ["a.txt"])
+        self.assertEqual(fc.fc_implement.fc_attempt.scope_of([], ["gone.txt"]), [])  # a turn deleting another file is rejected for scope
+        self.assertIsNone(fc.fc_implement.fc_attempt.scope_of([], []))  # no files and no delete: no scope check
+
+
 class Preflight(unittest.TestCase):
     def test_bad_model_stops_before_anything_runs(self):
         def impl(cwd, model, prompt, session=None, task=None, timeout=None):

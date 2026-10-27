@@ -1,6 +1,7 @@
 import hermetic  # first: no test sees the real home
 import argparse, json, os, subprocess, tempfile, time, unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 from layers_kit import WRITTEN, fc, unit
 os.environ["COMPOSE_NO_TREEHOUSE"] = "1"
@@ -153,6 +154,110 @@ class PrText(unittest.TestCase):
                 fc.fc_stack.pr_text(f, 72)
             self.assertIn(why, str(e.exception), text)
 
+
+class FakedRegister(unittest.TestCase):
+    """register_stack's decisions before anything is built, with git, gh and the chain faked: `upstream` and `ahead` say how the base stands."""
+    ORDER = ["compose/p-001", "compose/p-002", "compose/p-003"]
+
+    def setUp(self):
+        self.proj = Path(tempfile.mkdtemp()).resolve() / ".compose" / "p"
+        (self.proj / "results").mkdir(parents=True)
+        (self.proj / "verify.json").write_text("{}")
+        (self.proj / "results" / "tasks.json").write_text(json.dumps({"feature": {}, "tasks": [{"id": t, "protected": []} for t in ("001", "002", "003")]}))
+        self.upstream, self.ahead, self.said, self.chain, self.through, self.built = "", 0, [], [], [], []
+        self.addCleanup(setattr, fc.fc_layers, "STACK_STOP", "")
+        fc.fc_layers.STACK_STOP = ""
+        for target, name, fake in ((fc.fc_stack, "head_problem", lambda *a: ""), (fc.fc_worktree, "rename_legacy_branches", lambda *a: {}), (fc.fc_worktree, "stack_order", lambda *a: self.ORDER),
+                                   (fc.fc_worktree, "task_prefix", lambda *a: "compose/p-"), (fc.fc_stack, "layer_base", lambda *a: "main"), (fc.fc_core, "sh", self.sh),
+                                   (fc.fc_core, "say", self.said.append), (fc.fc_worktree, "stack_worktree", lambda *a: self.proj), (fc.fc_layers, "linearize", self.linearize),
+                                   (fc.fc_layers, "build_layers", lambda *a, **kw: self.built.append(a) or self.layers), (fc.fc_config, "read_config", lambda: {})):
+            patch = mock.patch.object(target, name, fake)
+            patch.start(); self.addCleanup(patch.stop)
+        self.layers = None
+        patch = mock.patch("subprocess.run", side_effect=AssertionError("gh stack was touched")); patch.start(); self.addCleanup(patch.stop)
+
+    def sh(self, cmd, cwd=None, **kw):
+        out = {"rev-list": str(self.ahead)}.get(cmd[1], self.upstream if "--abbrev-ref" in cmd else "")
+        return SimpleNamespace(stdout=out + "\n", stderr="", returncode=0 if out or cmd[1] != "rev-parse" else 1)
+
+    def linearize(self, repo, proj, trunk, wt, through=()):
+        self.through.append(list(through))
+        fc.fc_layers.STACK_STOP = self.stop
+        return self.chain
+
+    stop = ""
+
+    def register(self, **kw):
+        return fc.fc_stack.register_stack(self.proj.parent.parent, self.proj, "compose/p", **kw)
+
+    def result(self, tid, status):
+        (self.proj / "results" / f"{tid}.json").write_text(json.dumps({"status": status}))
+
+    def test_a_base_ahead_of_its_upstream_warns_and_a_submit_stops_before_anything_is_built(self):
+        self.upstream, self.ahead = "origin/main", 2
+        self.assertEqual(self.register(), [])
+        self.assertIn("stack  WARN  main is 2 commits ahead of origin/main, so the PRs would carry them; --submit stops until main is pushed", self.said)
+        self.said.clear(); self.through.clear()
+        self.assertEqual(self.register(submit=True), [])
+        self.assertEqual(self.said, ["stack  STOP  main is 2 commits ahead of origin/main, so the PRs would carry them; nothing was built or pushed. Push main, or wait until origin/main has them, then re-run"])
+        self.assertEqual((self.through, fc.fc_layers.STACK_STOP), ([], self.said[0].removeprefix("stack  STOP  ")))
+
+    def test_a_base_behind_its_upstream_or_with_none_submits_without_a_word(self):
+        for t in ("001", "002", "003"):
+            self.result(t, "passed")
+        for upstream in ("origin/main", ""):
+            self.said.clear(); self.through.clear()
+            self.upstream, self.ahead = upstream, 0  # behind: `upstream..base` holds nothing
+            self.register(submit=True)
+            self.assertEqual(self.through, [[]])  # it went on to the chain
+            self.assertFalse([l for l in self.said if "WARN" in l or "STOP" in l], self.said)
+
+    def test_a_chain_rebase_that_stops_leaves_the_layers_and_gh_stack_untouched(self):
+        self.stop, self.chain = "compose/p-003 conflicts when rebased onto compose/p-002 in 002.src", self.ORDER[:2]
+        self.assertEqual(self.register(), [])
+        self.assertEqual(self.built, [])  # no layer was cut; a gh call would have raised
+        self.assertEqual(fc.fc_layers.STACK_STOP, self.stop)
+        self.chain = []  # nothing chained at all
+        self.stop = ""
+        self.assertEqual(self.register(), [])
+        self.assertEqual(self.built, [])
+
+    def test_layers_that_do_not_add_up_to_the_chain_leave_gh_stack_untouched(self):
+        for t in ("001", "002", "003"):
+            self.result(t, "passed")
+        self.chain, self.layers = self.ORDER, None  # build_layers says no: its STACK_STOP is the reason
+        self.assertEqual(self.register(submit=True, gate=lambda *a: self.fail("the gate ran")), [])
+        self.assertEqual(len(self.built), 1)
+
+    def test_the_layers_differ_from_the_chain_in_every_file_but_the_ones_a_held_task_protects(self):
+        tasks = [{"id": "001", "protected": ["t001.test"]}, {"id": "002", "protected": ["t002.test", "shared.test"]}, {"id": "003", "protected": ["t003.test"]}]
+        self.assertEqual(fc.fc_layers.differing_files(["003.src", "t003.test", "t002.test"], tasks, []), ["003.src", "t003.test", "t002.test"])
+        self.assertEqual(fc.fc_layers.differing_files(["003.src", "t003.test", "t002.test"], tasks, ["002", "003"]), ["003.src"])
+        self.assertEqual(fc.fc_layers.differing_files([], tasks, ["001"]), [])
+        why = fc.fc_layers.chain_conflict("compose/p-003", "compose/p-002", "002.src", "abc", "the old base from the reflog")
+        self.assertEqual(why, "compose/p-003 conflicts when rebased onto compose/p-002 in 002.src; the layers below it are kept. Resolve by hand: "
+                              "git checkout compose/p-003 && git rebase --onto compose/p-002 abc (the old base from the reflog), then re-run")
+
+    def test_a_failed_task_holds_it_and_the_ones_after_it_back_and_the_layers_below_go_on(self):
+        self.result("001", "passed"); self.result("002", "failed"); self.result("003", "passed")
+        self.register(submit=True)
+        self.assertIn("stack  hold  002 is failed; 002, 003 not submitted", self.said)
+        self.assertEqual(self.through, [["compose/p-001"]])
+
+    def test_a_pending_first_task_stops_with_nothing_pushed(self):
+        self.assertEqual(self.register(submit=True), [])
+        self.assertIn("stack  STOP  nothing to submit: 001 is pending", self.said)
+        self.assertEqual(self.through, [])
+        self.assertEqual(fc.fc_layers.STACK_STOP, "nothing to submit: 001 is pending")
+
+    def test_held_tasks_start_at_the_first_task_not_passed_or_done_on_linear_whatever_its_id(self):
+        held = lambda order, statuses, finished=(): fc.fc_stack.held_tasks(order, {**{t: "passed" for t in order}, **statuses}, set(finished))
+        self.assertEqual(held(["001", "002", "003"], {"002": "failed"}), ["002", "003"])
+        self.assertEqual(held(["001", "002", "003"], {"002": "failed"}, ["002"]), [])  # done on Linear, whatever its result
+        self.assertEqual(held(["001", "002", "003"], {"001": "pending"}), ["001", "002", "003"])
+        self.assertEqual(held(["001", "002"], {"001": "already_green", "002": "hand_done"}), [])
+        order = fc.fc_worktree.layer_order([{"id": "001", "after": "003"}, {"id": "002"}, {"id": "003"}])  # 001 sits right above 003, below 002
+        self.assertEqual((order, held(order, {"002": "failed"})), (["003", "001", "002"], ["002"]))
 
 
 if __name__ == "__main__":

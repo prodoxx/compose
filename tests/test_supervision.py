@@ -715,6 +715,92 @@ class RunStop(unittest.TestCase):
         self.assertEqual(hooked, [name, [("agent", "send-keys", name, "esc"), ("pane", "close", "p1")]])
 
 
+class DetachRules(unittest.TestCase):
+    """Which commands start their work in a session of their own, and what a Ctrl-C ends, in what order."""
+    def test_the_long_commands_detach_unless_their_parent_already_did_or_they_only_queue_on_a_live_run(self):
+        for cmd in ("run", "verify", "resume"):
+            self.assertTrue(fc.fc_detach.detaches(cmd, None, lambda: False), cmd)
+            self.assertFalse(fc.fc_detach.detaches(cmd, "1", lambda: False), cmd)  # this is the work itself
+            self.assertFalse(fc.fc_detach.detaches(cmd, None, lambda: True), cmd)  # it queues on the live run: nothing to outlive the terminal
+        self.assertFalse(fc.fc_detach.detaches("status", None, lambda: False))
+
+    def test_the_live_run_is_asked_only_when_the_command_would_detach(self):
+        asked = mock.Mock(return_value=False)
+        self.assertFalse(fc.fc_detach.detaches("status", None, asked)); self.assertFalse(fc.fc_detach.detaches("verify", "1", asked))
+        asked.assert_not_called()
+
+    def test_a_verify_started_by_a_detached_verify_detaches_too(self):
+        """The marker is popped by main for this process alone: a compose an e2e driver runs inherits none, so it gets a session of its own."""
+        env = {"COMPOSE_DETACHED": "1", "PATH": "/bin"}
+        marker = env.pop("COMPOSE_DETACHED", None)  # what main does first
+        self.assertFalse(fc.fc_detach.detaches("verify", marker, lambda: False))  # the verify itself runs the work
+        self.assertTrue(fc.fc_detach.detaches("verify", env.get("COMPOSE_DETACHED"), lambda: False))  # what it starts sees no marker
+
+    def test_follow_hands_the_work_the_sigint_in_its_whole_group(self):
+        with mock.patch.object(os, "killpg") as killpg:
+            fc.fc_detach.interrupt_work(4242)
+        killpg.assert_called_once_with(4242, signal.SIGINT)
+
+    def test_a_sigint_ends_the_suite_group_and_what_it_started_then_runs_the_hooks_then_says_so_and_exits_130(self):
+        """fc_proc.stop: every running group gets SIGTERM, then the hooks (the verify's stage cleanup) run, then the line is printed."""
+        events, err = [], io.StringIO()
+        gone = set()
+        def killpg(pid, sig):
+            events.append(("killpg", pid, sig))
+            if pid in gone: raise ProcessLookupError
+            if sig == 0 or sig == signal.SIGKILL: gone.add(pid)
+        def kill(pid, sig):
+            events.append(("kill", pid, sig))
+            if pid in gone: raise ProcessLookupError
+            if sig != 0: gone.add(pid)
+        fc.fc_proc.RUNNING.update({4000: None}); self.addCleanup(fc.fc_proc.RUNNING.clear); self.addCleanup(fc.fc_proc.HOOKS.clear); self.addCleanup(fc.fc_proc.STOP.clear)
+        fc.fc_proc.HOOKS["stage"] = lambda: events.append(("hook",))
+        def term_group(pid, sig, group=False):
+            events.append(("group" if group else "pid", pid, sig)); return True
+        with mock.patch.object(fc.fc_proc, "children_outside", return_value=[4001]), mock.patch.object(os, "killpg", killpg), mock.patch.object(os, "kill", kill), \
+                mock.patch.object(fc.fc_proc.time, "sleep"), contextlib.redirect_stderr(err):
+            code = fc.fc_detach.interrupted("verify")
+        self.assertEqual(code, 130)
+        terms = [e for e in events if e[2:] == (signal.SIGTERM,)]
+        self.assertEqual(terms, [("killpg", 4000, signal.SIGTERM), ("kill", 4001, signal.SIGTERM)])  # the suite's group, then the child that left it
+        self.assertLess(events.index(terms[1]), events.index(("hook",)))  # the hooks run after the kills
+        self.assertEqual(events.count(("hook",)), 1)
+        self.assertTrue(fc.fc_proc.STOP.is_set())
+        self.assertRegex(err.getvalue(), r"^\n\[\d\d:\d\d:\d\d\] verify stopped by Ctrl-C\n$")
+
+    def test_only_run_and_resume_say_that_resume_continues_them(self):
+        for cmd, said in (("run", True), ("resume", True), ("verify", False)):
+            err = io.StringIO()
+            with mock.patch.object(fc.fc_proc, "stop"), contextlib.redirect_stderr(err):
+                fc.fc_detach.interrupted(cmd)
+            self.assertEqual("`compose resume` continues it" in err.getvalue(), said, cmd)
+
+
+class ParkedBoard(unittest.TestCase):
+    """A parked watch loop reads the board every two seconds: while nothing changed it reuses the board it holds."""
+    def test_the_held_board_is_returned_only_for_the_same_project_and_stamp(self):
+        same = fc.fc_status.same_stamp
+        kept = {"p": (("s1",), {"rows": []})}
+        self.assertEqual(same(kept, "p", ("s1",)), {"rows": []})
+        self.assertIsNone(same(kept, "p", ("s2",)))  # something changed
+        self.assertIsNone(same(kept, "q", ("s1",)))  # another project
+        self.assertIsNone(same({}, "p", ("s1",)))
+
+    def test_a_second_read_with_an_unchanged_stamp_runs_no_git_and_writes_no_file(self):
+        proj = Path(tempfile.mkdtemp()) / "p"; proj.mkdir()
+        self.addCleanup(fc.fc_status._board.clear)
+        with mock.patch.object(fc.fc_status, "board_stamp", return_value=("s",)), mock.patch.object(fc.fc_tasks, "load_tasks", return_value=[]) as load, \
+                mock.patch.object(fc.fc_status, "project_head", return_value=""), mock.patch.object(fc.fc_status, "branch_facts", return_value={"prefix": "p-"}), \
+                mock.patch.object(fc.fc_core, "current_branch", return_value="main"), mock.patch.object(fc.fc_worktree, "stack_order", return_value=[]), \
+                mock.patch.object(fc.fc_layers, "layer_branches", return_value=[]):
+            first = fc.fc_status.board(proj, proj)
+            before = sorted(p.name for p in proj.rglob("*"))
+            with mock.patch.object(fc.fc_core, "sh", side_effect=AssertionError("git ran")), mock.patch.object(fc.fc_core, "atomic_write", side_effect=AssertionError("file written")):
+                self.assertIs(fc.fc_status.board(proj, proj), first)
+        load.assert_called_once()
+        self.assertEqual(sorted(p.name for p in proj.rglob("*")), before)
+
+
 class ReadyEvent(unittest.TestCase):
     """Issues that became ready wake the watch with one line naming only the new ones, for the product owner to hear."""
     LINE = "event ready=NEB-2,NEB-3  (can start now: NEB-2 B, NEB-3 C; tell the product owner)"
@@ -1218,7 +1304,7 @@ class RestoredTeammate(unittest.TestCase):
         def guard(pane):
             ev, out = {"tool_name": "Write", "cwd": str(repo), "tool_input": {"file_path": str(repo / "a.go")}}, io.StringIO()
             with mock.patch.dict(os.environ, {"HERDR_PANE_ID": pane}, clear=True), mock.patch.object(sys, "stdin", io.StringIO(json.dumps(ev))), mock.patch.object(sys, "stdout", out), \
-                    mock.patch.object(fc.fc_core, "sh", return_value=SimpleNamespace(returncode=0, stdout="true\n")):  # the only git question: is the path inside a work tree
+                    mock.patch.object(fc.fc_core, "checkout", return_value=fc.fc_core.Checkout((repo, repo / ".git", repo / ".git"))):  # the repo is a checkout
                 fc.fc_hooks.cmd_guard(None)
             return out.getvalue()
         self.assertIn("never edit code", guard(self.PANE))

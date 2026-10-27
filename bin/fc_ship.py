@@ -86,6 +86,27 @@ def layer_refusal(name, c, out, why=""):
             f"Nothing was pushed. A layer must pass without the layers above it: put what it needs in this layer or below "
             f"(a task's `after`), fix it, then run `compose stack --submit` again")
 
+def unchanged_layer(seen, branch, stamp, lean, fresh=False):
+    """True when the layer's checks passed before and nothing changed since: `seen` (the memo kept in layer-checks.json) holds its `stamp` (tip and commands) or its `lean` one (also the base and top it leaned on). Never on a `fresh` run."""
+    return not fresh and seen.get(branch) in (stamp, lean)
+
+def check_outcome(state, top, c, own, out):
+    """What a command's `state` (fc_gate.check_state's) means for its layer: ("later", script) when it fails below the `top` on a package script this layer does not define yet (`c` is one of the project's `own` checks, `out` its output); ("refuse", why) when no failing test is named; ("fail", failing ids) when it fails; else ("pass", None)."""
+    if state["exit"] and not top and c in own and (script := missing_script(out)):
+        return "later", script
+    if state["unknown"]:
+        return "refuse", "" if state["exit"] == 124 else "it names no failing test, so it cannot be compared with the base"
+    return ("fail", state["failing"]) if state["exit"] else ("pass", None)
+
+def base_why(new, hit, ok, unknown, base):
+    """Why a command's failures, judged against the base (against_base's `new, touched, accepted, unknown`), refuse the layer; "" when they are all accepted."""
+    if not (unknown or new or hit):
+        return ""
+    return (f"cannot tell whether {ids_text(new)} fail on the base too: its run on the base {base[:9]} timed out or names no failing test" if unknown else
+            "; ".join(x for x in (f"passes on the base {base[:9]}, fails here: {ids_text(new)}" if new else "",
+                                  f"fails on the base too, in what this stack changes: {ids_text(hit)}" if hit else "",
+                                  f"{len(ok)} more already fail on the base and are ignored" if ok else "") if x))
+
 def layer_checks(repo, proj, layers, trunk, wt, fresh=False):
     """The gate on a submit: verify.json `checks` (the cheap ones, never e2e) on each layer's own tree, bottom up, in the CLI's
     worktree. Each layer runs the tests of the tasks it is the lowest layer for (layer_commands); the top layer also every check, a layer below it only the cheap ones (layer_commands).
@@ -114,7 +135,7 @@ def layer_checks(repo, proj, layers, trunk, wt, fresh=False):
         cmds = fc_verify.at_root(layer_commands(proj, l, checks, i == len(layers)), roots, wt)
         stamp = f"{tip}:{hashlib.sha1(json.dumps(cmds).encode()).hexdigest()[:12]}"
         lean = f"{stamp}:{base}:{top}"
-        if not fresh and seen.get(l["branch"]) in (stamp, lean):
+        if unchanged_layer(seen, l["branch"], stamp, lean, fresh):
             fc_core.say(f"layers ok    {name}  unchanged since its checks passed")
             continue
         fc_core.say(f"layers scope {name}  " + ("its tasks' tests and every check" if i == len(layers) else "its tasks' tests and the cheap checks") + (": " + "; ".join(cmds) if cmds else ": nothing to run"))
@@ -133,24 +154,21 @@ def layer_checks(repo, proj, layers, trunk, wt, fresh=False):
                 checked_out = True
             state = fc_gate.check_state(checked(name, outs), [c], wt, 0)[c]
             fc_green.record(proj, tree, c, state["exit"])
-            if state["exit"] and i < len(layers) and c in own and (script := missing_script(outs[c])):
-                fc_core.say(f"layers later {name}  `{c}`: this layer does not define the script {script} yet: it waits for the layer that adds it, and the top runs every check")
+            kind, detail = check_outcome(state, i == len(layers), c, own, outs[c])
+            if kind == "later":
+                fc_core.say(f"layers later {name}  `{c}`: this layer does not define the script {detail} yet: it waits for the layer that adds it, and the top runs every check")
                 continue
-            if state["unknown"]:
-                return layer_refusal(name, c, outs[c], "" if state["exit"] == 124 else "it names no failing test, so it cannot be compared with the base")
-            if state["exit"]:
-                failed[c] = state["failing"]
+            if kind == "refuse":
+                return layer_refusal(name, c, outs[c], detail)
+            if kind == "fail":
+                failed[c] = detail
         leaned = False
         try:
             verdicts = against_base(repo, cfg, wt, base, top, failed, on_base) if failed else {}
         except InstallFailed as e:
             return install_refusal(name, e, base)
         for c, (new, hit, ok, unknown) in verdicts.items():
-            if unknown or new or hit:
-                why = (f"cannot tell whether {ids_text(new)} fail on the base too: its run on the base {base[:9]} timed out or names no failing test" if unknown else
-                       "; ".join(x for x in (f"passes on the base {base[:9]}, fails here: {ids_text(new)}" if new else "",
-                                             f"fails on the base too, in what this stack changes: {ids_text(hit)}" if hit else "",
-                                             f"{len(ok)} more already fail on the base and are ignored" if ok else "") if x))
+            if why := base_why(new, hit, ok, unknown, base):
                 return layer_refusal(name, c, outs[c], why)
             accepted, leaned = accepted + len(ok), True
             fc_core.say(f"layers base  {name}  `{c}` fails on the base {base[:9]} too and the stack does not touch it, accepted: {ids_text(ok)}")
@@ -159,33 +177,53 @@ def layer_checks(repo, proj, layers, trunk, wt, fresh=False):
     fc_core.say(f"layers ok    {len(layers)} layer(s): every check on the top, the cheap ones below, each layer's own tasks' tests" + (f"; {accepted} failing test(s) already red on the base accepted" if accepted else ""))
     return ""
 
+def layer_changed(info, tip):
+    """True when a layer's PR (`info`, or None) is open and GitHub holds a head other than the local `tip`."""
+    return bool(info) and info["state"] == "OPEN" and info["headRefOid"] != tip
+
+def change_cause(own, moved):
+    """Why a layer moved since its PR: the files it owns (`own`, its diff against the layer below) that changed between GitHub's head and the tip (`moved`), else a layer below it or the base moved."""
+    hit = sorted(set(own) & set(moved))
+    return f"its own files changed: {', '.join(hit)}" if hit else "a layer below it or the base moved"
+
+def changed_stop(i, b, info, tip, cause):
+    """The STOP of a submit that finds layer `i` (branch `b`) changed since its PR `info`."""
+    return (f"layer {i} ({b}) changed since PR #{info['number']}: GitHub has {info['headRefOid'][:9]}, here {tip[:9]}; {cause}. "
+            "Nothing was pushed. `compose stack --submit --update` pushes it with --force-with-lease")
+
+def lease_push(b, head):
+    """The git command that pushes layer `b` over the `head` GitHub holds, and nothing else."""
+    return ["git", "push", "-q", f"--force-with-lease={b}:{head}", "origin", f"{b}:{b}"]
+
+def layer_gate(a, repo, proj, layers, trunk, wt):
+    """The gate of a submit, run once the layers stand and before anything is pushed: layer_checks, then every layer whose open PR
+    holds another head than its tip stops the submit; with --update it is pushed with a lease on that head, bottom up, and the first push refused stops it. "" when the submit may go on."""
+    if why := layer_checks(repo, proj, layers, trunk, wt, getattr(a, "fresh", False)):
+        return why
+    below = fc_stack.layer_base(repo, proj, trunk)
+    for i, l in enumerate(layers, 1):
+        b = l["branch"]
+        info = pr_info(b, wt)
+        tip = fc_core.sh(["git", "rev-parse", b], repo).stdout.strip()
+        prev, below = below, b
+        if not layer_changed(info, tip):
+            continue
+        head = info["headRefOid"]
+        own = fc_core.sh(["git", "diff", "--name-only", prev, b], repo).stdout.split()
+        cause = change_cause(own, fc_core.sh(["git", "diff", "--name-only", head, tip], repo, check=False).stdout.split())
+        if not a.update:
+            return changed_stop(i, b, info, tip, cause)
+        q = fc_core.sh(lease_push(b, head), repo, check=False)
+        if q.returncode:
+            return f"push of {b} refused: {q.stderr.strip()[-200:]}"
+        fc_core.say(f"submit update {b} {tip[:9]} (was {head[:9]})")
+    return ""
+
 def cmd_stack(a):
     proj = fc_core.project_dir(a); repo = Path(a.repo).resolve()
     trunk = a.trunk or fc_core.current_branch(repo)
     fc_update.refuse_while_verifying(proj, repo)
-    def gate(repo, proj, layers, trunk, wt):
-        if why := layer_checks(repo, proj, layers, trunk, wt, getattr(a, "fresh", False)):
-            return why
-        below = fc_stack.layer_base(repo, proj, trunk)
-        for i, l in enumerate(layers, 1):
-            b = l["branch"]
-            info = pr_info(b, wt)
-            tip = fc_core.sh(["git", "rev-parse", b], repo).stdout.strip()
-            prev, below = below, b
-            if not info or info["state"] != "OPEN" or info["headRefOid"] == tip:
-                continue
-            head = info["headRefOid"]
-            own = set(fc_core.sh(["git", "diff", "--name-only", prev, b], repo).stdout.split())
-            hit = sorted(own & set(fc_core.sh(["git", "diff", "--name-only", head, tip], repo, check=False).stdout.split()))
-            cause = f"its own files changed: {', '.join(hit)}" if hit else "a layer below it or the base moved"
-            if not a.update:
-                return (f"layer {i} ({b}) changed since PR #{info['number']}: GitHub has {head[:9]}, here {tip[:9]}; {cause}. "
-                        "Nothing was pushed. `compose stack --submit --update` pushes it with --force-with-lease")
-            q = fc_core.sh(["git", "push", "-q", f"--force-with-lease={b}:{head}", "origin", f"{b}:{b}"], repo, check=False)
-            if q.returncode:
-                return f"push of {b} refused: {q.stderr.strip()[-200:]}"
-            fc_core.say(f"submit update {b} {tip[:9]} (was {head[:9]})")
-        return ""
+    gate = lambda repo, proj, layers, trunk, wt: layer_gate(a, repo, proj, layers, trunk, wt)
     if not fc_stack.register_stack(repo, proj, trunk, submit=a.submit, preview=not a.submit, gate=gate):
         if fc_layers.STACK_STOP:
             sys.exit(1)  # the STOP line already said why and what to do

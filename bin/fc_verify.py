@@ -1,7 +1,7 @@
 import itertools, json, os, re, shutil, subprocess, sys, tempfile, time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-import fc_core, fc_proc, fc_config, fc_tasks, fc_ledger, fc_linear, fc_models, fc_herdr, fc_worktree, fc_layers, fc_change, fc_routecost, fc_implement, fc_green, fc_gate, fc_init, fc_jev, fc_accept, fc_reroute, fc_costevent, fc_review, fc_history, fc_load, fc_trailpack, fc_update
+import fc_core, fc_proc, fc_config, fc_tasks, fc_ledger, fc_linear, fc_models, fc_herdr, fc_worktree, fc_layers, fc_change, fc_routecost, fc_implement, fc_green, fc_gate, fc_init, fc_jev, fc_accept, fc_reroute, fc_costevent, fc_review, fc_history, fc_load, fc_trailpack, fc_update, fc_fixround
 
 CHECK_TIMEOUT = 900  # seconds a check may run; past it the check fails, named as a timeout
 
@@ -423,8 +423,7 @@ def fix_message(reply, files, conv=None):
 def changed_files(repo):
     """Each file differing from HEAD, tracked or untracked (not ignored), with its digest; never the agent wiring (fc_worktree.WIRING)."""
     out = lambda *c: fc_core.sh(["git", *c, "-z"], repo, check=False).stdout.split("\0")
-    files = set(out("diff", "--name-only", "--no-renames", "HEAD") + out("ls-files", "--others", "--exclude-standard"))
-    return fc_core.digests(repo, sorted(files - {"", *fc_worktree.WIRING}))
+    return fc_core.digests(repo, fc_fixround.unwired(out("diff", "--name-only", "--no-renames", "HEAD") + out("ls-files", "--others", "--exclude-standard")))
 
 def verify_rounds(repo, proj, cfg, a, rounds, t0, left_out=()):
     base = fc_worktree.review_base(repo, cfg)
@@ -442,10 +441,8 @@ def verify_rounds(repo, proj, cfg, a, rounds, t0, left_out=()):
         if cfg.get("main_repo"):  # a fix round may have changed the lockfile
             fc_worktree.ready_checkout(cfg["main_repo"], repo, install=cfg.get("install"))
         ok, report, findings = run_stages(repo, proj, cfg, a, tests)
-        if branch() != stands_on:  # a fix commit stays on the branch; only a checkout moves it, and then the stages judged other code
-            fc_core.say(f"verify VOID  nothing verified or recorded: {repo} stood on {stands_on or 'a detached HEAD'} when the stages started and stands on "
-                        f"{branch() or 'a detached HEAD'} now, so something else checked a branch out there during the run (compose stack, top, a hand checkout) "
-                        "and the stages judged that code, not the stack top; run verify again")
+        if fc_fixround.checkout_moved(stands_on, branch()):  # a fix commit stays on the branch; only a checkout moves it, and then the stages judged other code
+            fc_core.say(fc_fixround.void_message(repo, stands_on, branch()))
             sys.exit(1)
         rounds.append(report)
         round_logged(ok)
@@ -539,9 +536,10 @@ def verify_rounds(repo, proj, cfg, a, rounds, t0, left_out=()):
                f"changed a file of layer {', '.join(sorted({x for o in foreign.values() for x in o}))}, not the top layer {top}: {', '.join(foreign)}" if foreign else
                "changed no failing check and removed no line a confirmed finding cites" if fixed and not fix_answers(repo, fixed, report, cfg.get("install")) else None)
         if why:
-            if set(fixed) - added:
-                fc_core.sh(["git", "--literal-pathspecs", "checkout", "-q", "HEAD", "--", *sorted(set(fixed) - added)], repo)
-            for f in added & set(fixed):
+            restore, drop = fc_fixround.revert_plan(fixed, added)
+            if restore:
+                fc_core.sh(["git", "--literal-pathspecs", "checkout", "-q", "HEAD", "--", *restore], repo)
+            for f in drop:
                 (repo / f).unlink()
             rejected.append({"round": rnd + 1, "files": stray or sorted(foreign) or fixed, **({} if stray else {"why": why}), **({"next": cut_top_task(foreign, top)} if foreign else {})})
             fc_core.say(f"fix    REJECTED round {rnd + 1}: {why}; reverted the round")

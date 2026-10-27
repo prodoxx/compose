@@ -30,7 +30,7 @@ class KeepFinishedLayers(unittest.TestCase):
         self.proj = self.repo / ".compose" / "p"
         (self.proj / "results").mkdir(parents=True); (self.proj / "worktrees").mkdir()
         for p in (mock.patch.object(fc.fc_core, "sh", self.sh), mock.patch.object(fc.fc_run, "require_committed"), mock.patch.object(fc.fc_run.fc_briefs, "test_open", return_value=False),
-                  mock.patch.object(fc.fc_worktree, "task_branch", lambda repo, proj, tid: f"fast/p/{tid}"), mock.patch.object(fc.fc_run.fc_prove, "unproven", return_value=None),
+                  mock.patch.object(fc.fc_worktree, "task_branch", lambda repo, proj, tid: f"fast/p/{tid}"), mock.patch.object(fc.fc_worktree, "task_prefix", return_value="fast/p/"), mock.patch.object(fc.fc_run.fc_prove, "unproven", return_value=None),
                   mock.patch.object(fc.fc_run.fc_linear, "refresh_tasks"), mock.patch.object(fc.fc_run.fc_route, "route_tasks", return_value=({}, {})), mock.patch.object(fc.fc_run.fc_fast, "run_holds", return_value={})):
             p.start(); self.addCleanup(p.stop)
 

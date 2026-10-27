@@ -299,6 +299,28 @@ def fetch_landed_base(wt, base):
         return f"origin/{base}", fc_core.sh(["git", "fetch", "-q", "origin", f"+refs/heads/{base}:refs/remotes/origin/{base}"], wt, check=False)
     return base, fc_core.sh(["git", "fetch", "-q", "origin", f"{base}:{base}"], wt, check=False)
 
+MAX_STACK_PRS = 10  # the PRs a stack holds unless verify.json or the config says `max_stack_prs`
+
+def stack_cap(cfg, settings):
+    """The most PRs a stack holds: verify.json's `max_stack_prs` (`cfg`), else the active workspace's settings (its entry over the top level), else MAX_STACK_PRS."""
+    return int(cfg.get("max_stack_prs") or settings.get("max_stack_prs") or MAX_STACK_PRS)
+
+def base_ahead(base, upstream, ahead, submit):
+    """(`stop` for a submit, `warn` without one, else ""; what it says) for a base `ahead` commits past its `upstream`: its unpushed commits would go into the PRs. A base that is level with or behind its upstream (ahead 0) says nothing."""
+    if not ahead:
+        return "", ""
+    them = "them" if ahead > 1 else "it"
+    said = f"{base} is {ahead} commit{'s' * (ahead > 1)} ahead of {upstream}, so the PRs would carry {them}"
+    if submit:
+        return "stop", f"{said}; nothing was built or pushed. Push {base}, or wait until {upstream} has {them}, then re-run"
+    return "warn", f"{said}; --submit stops until {base} is pushed"
+
+HELD_STATUSES = ("passed", "already_green", "hand_done")
+
+def held_tasks(order, statuses, finished):
+    """The ids of `order` (bottom to top) a submit leaves out: from the first one whose result in `statuses` is not passed, already green or done by hand and that is not `finished` on Linear, up to the top, so a failed task holds back the ones after it."""
+    return order[next((i for i, t in enumerate(order) if statuses[t] not in HELD_STATUSES and t not in finished), len(order)):]
+
 def register_stack(repo, proj, trunk, submit=False, preview=False, gate=None):
     """Make the project's passed task branches one gh stack, layer by layer, without touching the user's checkout. Branches built
     in parallel from trunk are rebased onto the layer below (tasks own disjoint files, so this is normally clean; a conflict
@@ -323,14 +345,13 @@ def register_stack(repo, proj, trunk, submit=False, preview=False, gate=None):
     up = fc_core.sh(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", f"{base}@{{upstream}}"], repo, check=False)
     upstream = up.stdout.strip() if up.returncode == 0 else ""
     ahead = int(fc_core.sh(["git", "rev-list", "--count", f"{upstream}..{base}"], repo).stdout) if upstream else 0
-    if ahead:
-        them = "them" if ahead > 1 else "it"
-        said = f"{base} is {ahead} commit{'s' * (ahead > 1)} ahead of {upstream}, so the PRs would carry {them}"
-        if submit:
-            fc_layers.STACK_STOP = f"{said}; nothing was built or pushed. Push {base}, or wait until {upstream} has {them}, then re-run"
-            fc_core.say(f"stack  STOP  {fc_layers.STACK_STOP}")
-            return []
-        fc_core.say(f"stack  WARN  {said}; --submit stops until {base} is pushed")
+    level, said = base_ahead(base, upstream, ahead, submit)
+    if level == "stop":
+        fc_layers.STACK_STOP = said
+        fc_core.say(f"stack  STOP  {said}")
+        return []
+    if level == "warn":
+        fc_core.say(f"stack  WARN  {said}")
     held, through = [], ()
     if submit:
         metas = fc_tasks.code_tasks(fc_tasks.load_tasks(proj))
@@ -339,9 +360,8 @@ def register_stack(repo, proj, trunk, submit=False, preview=False, gate=None):
         def status(t):
             f = proj / "results" / f"{t}.json"
             return (json.loads(f.read_text()).get("status") if f.exists() else None) or "pending"
-        done = lambda t: status(t) in ("passed", "already_green", "hand_done") or fc_tasks.linear_done(by_id[t])
-        cut = next((i for i, t in enumerate(order) if not done(t)), len(order))
-        held = order[cut:]
+        held = held_tasks(order, {t: status(t) for t in order}, {t for t in order if fc_tasks.linear_done(by_id[t])})
+        cut = len(order) - len(held)
         if held:
             fc_core.say(f"stack  hold  {held[0]} is {status(held[0])}; {', '.join(held)} not submitted")
             through = [b for b in fc_worktree.stack_order(repo, proj) if b.removeprefix(fc_worktree.task_prefix(repo, proj)) in order[:cut]]
@@ -368,7 +388,7 @@ def register_stack(repo, proj, trunk, submit=False, preview=False, gate=None):
     if not linear or fc_layers.STACK_STOP:  # a stack of the layers below the stop would leave the rest out of review
         return []
     budget = int(cfg.get("review_layer_lines") or fc_layers.REVIEW_LAYER_LINES)
-    cap = int(cfg.get("max_stack_prs") or fc_config.settings(fc_config.read_config())[1].get("max_stack_prs") or 10)
+    cap = stack_cap(cfg, fc_config.settings(fc_config.read_config())[1])
     layers = fc_layers.build_layers(repo, proj, built, trunk, linear, wt, budget, cap, held=held, landed=landed)
     if layers is None:
         return []

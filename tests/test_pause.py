@@ -268,5 +268,125 @@ class TeammateSteer(HoldCase):
             self.assertNotIn("teammate", self.hold(only="002", reason="x"))
 
 
+class PauseKeeps(unittest.TestCase):
+    """What a pause keeps and where, decided from plain facts; the git plumbing that writes the ref stays untested."""
+    P = staticmethod(lambda: fc.fc_implement.fc_pause)
+
+    def test_the_work_is_kept_on_a_ref_of_its_project_and_task(self):
+        self.assertEqual(self.P().paused_ref(Path("/p/shop"), "007"), "refs/compose/shop/paused/007")
+
+    def test_a_second_pause_keeps_the_first_pauses_commit_reachable_from_the_ref(self):
+        self.assertEqual(self.P().parents("base1", ""), ["-p", "base1"])
+        self.assertEqual(self.P().parents("base1", "first"), ["-p", "base1", "-p", "first"])
+
+    def test_a_pause_that_kept_the_edits_is_a_paused_result_with_no_branch_and_the_ref_it_wrote(self):
+        block = {"ref": "refs/compose/shop/paused/001", "base": "b1", "files": ["001.txt"], "at": "now", "reason": "D2 broken"}
+        r = self.P().paused_record(task("001"), "main", [{"attempt": 1}], 1, 0.123456789, 4.5, 0.0, block)
+        self.assertEqual((r["status"], r["branch"], r["paused"], r["attempts"], r["cost"], r["base"]), ("paused", "-", block, 1, 0.123457, "main"))
+        self.assertNotIn("snapshot_failed", r)
+
+    def test_a_snapshot_that_fails_reports_a_failed_result_and_names_the_clone_that_keeps_the_edits(self):
+        r = self.P().failed_record(task("001"), Path("/p/shop/worktrees/001"), "main", [{"error": "pause snapshot failed: x"}], 2, 0.5, 9.0)
+        self.assertEqual((r["status"], r["branch"], r["snapshot_failed"], r["worktree"], r["attempts"]), ("failed", "-", True, "/p/shop/worktrees/001", 2))
+        self.assertNotIn("paused", r)
+
+    def test_only_a_failed_snapshot_of_this_very_clone_keeps_it(self):
+        wt = Path("/p/shop/worktrees/001")
+        keeps = self.P().keeps_clone
+        self.assertTrue(keeps({"snapshot_failed": True, "worktree": str(wt)}, wt))
+        self.assertFalse(keeps({"snapshot_failed": True, "worktree": "/elsewhere"}, wt))
+        self.assertFalse(keeps({"worktree": str(wt)}, wt))
+        self.assertFalse(keeps({}, wt))
+
+    def clone(self, last):
+        proj = Path(tempfile.mkdtemp()) / "shop"
+        wt = proj / "worktrees" / "001"
+        wt.mkdir(parents=True)
+        (wt / "edit.txt").write_text("unsaved\n")
+        (proj / "results").mkdir()
+        if last is not None:
+            (proj / "results" / "001.json").write_text(json.dumps({**last, "worktree": str(wt)}))
+        said = []
+        with mock.patch.object(fc.fc_core, "say", said.append):
+            self.P().clear_clone(proj, "001", wt)
+        return proj, wt, said
+
+    def test_the_next_run_moves_a_clone_a_failed_snapshot_kept_aside_and_says_so(self):
+        proj, wt, said = self.clone({"snapshot_failed": True})
+        self.assertFalse(wt.exists())
+        (aside,) = [p for p in wt.parent.iterdir()]
+        self.assertTrue(aside.name.startswith("001" + fc.fc_worktree.UNSAVED_CLONE))
+        self.assertEqual((aside / "edit.txt").read_text(), "unsaved\n")
+        self.assertIn(str(aside), said[0])
+
+    def test_any_other_clone_is_removed_whole(self):
+        for last in (None, {"status": "failed"}):
+            proj, wt, said = self.clone(last)
+            self.assertEqual((list(wt.parent.iterdir()), said), ([], []))
+
+
+class CarryOver(unittest.TestCase):
+    """What a released task takes from the edits its pause kept."""
+    P = staticmethod(lambda: fc.fc_implement.fc_pause)
+    PAUSED = {"ref": "refs/compose/shop/paused/001", "base": "b1", "files": ["a.txt", "b.txt", "c.txt"]}
+
+    def last(self, **kw):
+        return {"status": "paused", "paused": {**self.PAUSED, **kw}}
+
+    def test_a_pause_with_no_choice_keeps_every_file_it_touched(self):
+        self.assertEqual(self.P().carry_plan(self.last()), ("refs/compose/shop/paused/001", "b1", ["a.txt", "b.txt", "c.txt"]))
+        self.assertEqual(self.P().carry_plan(self.last(choice="keep"))[2], ["a.txt", "b.txt", "c.txt"])
+
+    def test_part_keeps_only_the_chosen_files_and_discard_keeps_none(self):
+        self.assertEqual(self.P().carry_plan(self.last(choice="part", keep=["b.txt"]))[2], ["b.txt"])
+        self.assertIsNone(self.P().carry_plan(self.last(choice="part", keep=[])))
+        self.assertIsNone(self.P().carry_plan(self.last(choice="part")))
+        self.assertIsNone(self.P().carry_plan(self.last(choice="discard")))
+
+    def test_a_task_that_never_paused_or_has_nothing_kept_carries_nothing(self):
+        for last in ({}, {"status": "failed"}, {"status": "paused"}, self.last(files=[])):
+            self.assertIsNone(self.P().carry_plan(last), last)
+
+    def test_a_released_run_that_is_stopped_keeps_the_kept_from_block_for_the_next_start(self):
+        released = {"status": "running", "kept_from": {**self.PAUSED, "choice": "part", "keep": ["a.txt"]}}
+        self.assertEqual(self.P().carry_plan(released)[2], ["a.txt"])
+        self.assertEqual(self.P().carried(json.dumps(released)), {"kept_from": released["kept_from"]})
+        self.assertEqual(self.P().carried(json.dumps(self.last())), {"kept_from": self.PAUSED})
+        self.assertEqual((self.P().carried(None), self.P().carried(json.dumps({"status": "failed"}))), ({}, {}))
+
+    def test_a_file_the_new_brief_dropped_or_that_conflicts_is_left_out(self):
+        kept, dropped = self.P().split_kept(["a.txt", "b.txt", "c.txt"], ["a.txt", "c.txt"], lambda f: f != "c.txt")
+        self.assertEqual((kept, dropped), (["a.txt"], ["b.txt", "c.txt"]))  # b.txt is no longer the brief's file, c.txt does not apply
+
+    def test_a_file_the_brief_dropped_is_never_applied(self):
+        tried = []
+        self.P().split_kept(["a.txt", "b.txt"], ["a.txt"], lambda f: tried.append(f) or True)
+        self.assertEqual(tried, ["a.txt"])
+
+    def carry(self, last, fetched=True, applies=lambda f: True, files=("a.txt", "b.txt")):
+        said = []
+        with mock.patch.object(self.P(), "_fetch_ref", return_value=fetched), mock.patch.object(self.P(), "_apply_one", lambda wt, base, f: applies(f)), \
+                mock.patch.object(fc.fc_core, "say", said.append):
+            return self.P().carry_over(Path("/repo"), Path("/wt"), {"id": "001", "files": list(files)}, last), said
+
+    def test_a_released_task_keeps_what_applies_and_says_what_stayed_on_the_ref(self):
+        kept, said = self.carry(self.last(), applies=lambda f: f != "b.txt")
+        self.assertEqual(kept, ["a.txt"])
+        self.assertEqual(said, ["001 kept    a.txt; dropped b.txt, c.txt: they stay on refs/compose/shop/paused/001"])
+
+    def test_a_ref_that_cannot_be_fetched_is_said_and_nothing_is_kept(self):
+        kept, said = self.carry(self.last(), fetched=False)
+        self.assertEqual((kept, said), ([], ["001 kept    nothing; the ref refs/compose/shop/paused/001 could not be fetched"]))
+
+    def test_discard_and_a_task_that_never_paused_fetch_nothing(self):
+        with mock.patch.object(self.P(), "_fetch_ref", side_effect=AssertionError("no fetch")):
+            for last in (self.last(choice="discard"), {}):
+                self.assertEqual(self.P().carry_over(Path("/repo"), Path("/wt"), {"id": "001", "files": ["a.txt"]}, last), [])
+
+    def test_the_prompt_names_the_files_kept_and_says_nothing_when_none_are(self):
+        self.assertIn("a.txt, b.txt already hold edits made under the old brief", self.P().carry_note(["a.txt", "b.txt"]))
+        self.assertEqual(self.P().carry_note([]), "")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -21,11 +21,10 @@ def fake_checkouts(tmp, *worktrees, clone=None):
     return found
 
 def in_repo(case, repo):
-    """`repo` is a checkout for the hooks, git never asked: checkout() finds it, and the one question the edit guard puts to git says yes under it and no elsewhere."""
+    """`repo` is a checkout for the hooks, git never asked: checkout() finds it under it and nowhere else, and the edit guard reads only that."""
     top = Path(repo).resolve(); under = lambda path: top in (Path(path).resolve(), *Path(path).resolve().parents)
-    for p in (mock.patch.object(fc_core, "checkout", lambda path: fc_core.Checkout((top, top / ".git", top / ".git")) if under(path) else None),
-              mock.patch.object(fc_core, "sh", lambda cmd, cwd, **kw: SimpleNamespace(returncode=0 if under(cwd) else 1, stdout=""))):
-        p.start(); case.addCleanup(p.stop)
+    p = mock.patch.object(fc_core, "checkout", lambda path: fc_core.Checkout((top, top / ".git", top / ".git")) if under(path) else None)
+    p.start(); case.addCleanup(p.stop)
 
 FC_MODULES = {n: m for n, m in sys.modules.items() if n.startswith("fc_")}
 

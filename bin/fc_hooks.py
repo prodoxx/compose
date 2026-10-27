@@ -47,7 +47,7 @@ def guard_decision(tool, path, role):
         return f"A toolsmith never edits {why}: fix on a branch in your own worktree of the compose repo." if (why := fc_worktree.shared_checkout(d, fc_core.CLI_CHECKOUT)) else None
     if CLI_FILE.search(str(p)):
         return None
-    if fc_core.sh(["git", "rev-parse", "--is-inside-work-tree"], d, check=False).returncode != 0:
+    if not fc_core.checkout(d):
         return None  # scratch outside any repository, e.g. a brief in /tmp
     return (f"The team lead and the planner never edit code, tests, config, or docs ({p.name}). Hand it to a teammate: "
             f"`compose crew start --role <job> --brief -`, or put it in a task issue for `run`.")

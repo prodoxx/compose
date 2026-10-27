@@ -166,6 +166,10 @@ def new_tests_prove(run, repo, fixed, cmds, install=None):
         within = check_state(run, cmds, tree, CHECKS_TIMEOUT)
     finally:
         shutil.rmtree(root, ignore_errors=True)
+    return fails_without_passes_with(theirs, within, cmds)
+
+def fails_without_passes_with(theirs, within, cmds):
+    """Whether a fix's own tests prove it: some check's run with the whole fix is known and no longer fails one of the test ids `theirs[cmd]` that failed with the fix's test files alone."""
     return any(not within[c]["unknown"] and any(t not in within[c]["failing"] for t in theirs[c]) for c in cmds)
 
 def after_checks(checks, tasks, changed, own):

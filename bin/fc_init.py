@@ -289,6 +289,27 @@ def undo_worktree(here, wt, branch):
     if branch:
         fc_core.sh(["git", "branch", "-D", branch], here, check=False)
 
+def branch_prefix(cfg):
+    """The prefix of a project's branch: the active workspace's `branch_prefix` over the top level's, else `compose/`."""
+    return fc_config.settings(cfg)[1].get("branch_prefix", "compose/")
+
+def project_branch_name(prefix, name, branch=None):
+    """The branch of a project's own worktree: --branch when given, else the prefix and the project's name."""
+    return branch or prefix + name
+
+def after_branch(prefix, after_name, known, tip):
+    """The branch `init --after <after_name>` builds on: `tip` (its top layer, else its stored branch) when that project exists
+    (`known`), else the prefix and the name, None without --after."""
+    return tip if known else (prefix + after_name if after_name else None)
+
+def branch_exists(here, branch):
+    """Whether `branch` names a commit in the repository at `here`."""
+    return fc_core.sh(["git", "rev-parse", "--verify", "-q", branch], here, check=False).returncode == 0
+
+def unknown_after(after, after_name):
+    """Why `--after` cannot start when `after`, the other project's branch, is not there."""
+    return f"no branch {after}: `compose init --project {after_name}` that project first"
+
 def cmd_init(a):
     """Create the project's worktree `../compose-<name>` on its branch (`compose/<name>`, or --branch; from the branch the user is on,
     or with --after from another project's branch, for a feature that needs that feature's code), with the
@@ -299,26 +320,26 @@ def cmd_init(a):
         sys.exit(f"init stopped: {', '.join(stop)} missing; install what is missing above, then run it again (`compose doctor` checks again)")
     here = Path(a.repo).resolve()
     name = a.project
-    prefix = fc_config.settings(fc_config.read_config())[1].get("branch_prefix", "compose/")
-    branch = a.branch or prefix + name
+    prefix = branch_prefix(fc_config.read_config())
+    branch = project_branch_name(prefix, name, a.branch)
     if a.branch and fc_core.sh(["git", "check-ref-format", "--branch", a.branch], here, check=False).returncode != 0:
         sys.exit(f"{a.branch!r} is not a valid branch name")
     if a.branch and a.here:
         sys.exit("--branch names the project's own worktree branch; it does not combine with --here")
     other = fc_core.all_projects(here).get(a.after) if a.after else None
     top = (fc_layers.layer_branches(here, other[1]) or [None])[-1] if other else None  # a project's code sits on its layers, not on its branch, once they exist
-    after = top or fc_core.project_branch(other[1]) if other else (prefix + a.after if a.after else None)
+    after = after_branch(prefix, a.after, bool(other), (top or fc_core.project_branch(other[1])) if other else None)
     if after and a.here:
         sys.exit("--after builds a project on another project's branch in its own worktree; it does not combine with --here")
-    if after and fc_core.sh(["git", "rev-parse", "--verify", "-q", after], here, check=False).returncode != 0:
-        sys.exit(f"no branch {after}: `compose init --project {a.after}` that project first")
+    if after and not branch_exists(here, after):
+        sys.exit(unknown_after(after, a.after))
     existing, base, made = fc_core.all_projects(here).get(name), None, None  # base: the review base a new verify.json records; made: (worktree, branch init created)
     if existing:
         wt, proj = existing
         print(f"project {name} already exists at {wt}")
         old = fc_core.project_branch(proj)
         if a.branch and a.branch != old:  # move the project to a new branch name: rename in git, store it, repoint projects built on it
-            if fc_core.sh(["git", "rev-parse", "--verify", "-q", a.branch], wt, check=False).returncode == 0:
+            if branch_exists(wt, a.branch):
                 sys.exit(f"branch {a.branch} exists already")
             fc_core.sh(["git", "branch", "-m", old, a.branch], wt)
             for _, (_, p) in fc_core.all_projects(here).items():
@@ -334,7 +355,7 @@ def cmd_init(a):
     else:
         start = after or fc_core.sh(["git", "branch", "--show-current"], here).stdout.strip()  # empty on a detached HEAD
         base = start or fc_worktree.default_branch(here)
-        new_branch = fc_core.sh(["git", "rev-parse", "--verify", "-q", branch], here, check=False).returncode != 0
+        new_branch = not branch_exists(here, branch)
         if new_branch:
             fc_core.sh(["git", "branch", branch, after or "HEAD"], here)
         if fc_worktree.use_treehouse():

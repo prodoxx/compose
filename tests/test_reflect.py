@@ -358,6 +358,34 @@ class Holds(unittest.TestCase):
             self.hold(only="002", reason="D2 broken")
         self.assertEqual(seen, [{"002"}])
 
+    def held_start(self, tag="", last='{"id": "001", "status": "failed", "attempts": 3}'):
+        """What run_task does when it has cloned and installed task 001: the hold lands, then it looks; `last` is its previous result's text (None: it never ran)."""
+        res, wt = self.proj / "results" / f"001{tag}.json", self.proj / "worktrees" / f"001{tag}"
+        wt.mkdir(parents=True)
+        res.write_text('{"status": "running"}')  # what progress("running") wrote over it
+        self.hold(only="001", reason="D2 broken")
+        return fc.fc_implement.fc_attempt.hold_before_turn(self.proj, tag, task("001"), res, last, wt), res, wt
+
+    def test_a_task_held_while_the_run_prepares_it_never_starts_and_goes_back_to_pending(self):
+        r, res, wt = self.held_start()
+        self.assertEqual((r["status"], r["attempts"], r["log"]), ("held", 0, []))
+        self.assertEqual(res.read_text(), '{"id": "001", "status": "failed", "attempts": 3}')  # its last run's result stands
+        self.assertFalse(wt.exists())
+        self.assertIn("001 held    before its first turn: D2 broken", self.said)
+
+    def test_a_task_that_never_ran_before_leaves_no_result_when_it_is_held(self):
+        r, res, wt = self.held_start(last=None)
+        self.assertEqual(r["status"], "held")
+        self.assertFalse(res.exists())
+
+    def test_a_task_nobody_holds_and_a_bench_run_are_not_held(self):
+        res, wt = self.proj / "results" / "001.json", self.proj / "worktrees" / "001"
+        wt.mkdir(parents=True)
+        self.assertIsNone(fc.fc_implement.fc_attempt.hold_before_turn(self.proj, "", task("001"), res, None, wt))
+        r, res, wt = self.held_start(tag="-bench-x")
+        self.assertIsNone(r)
+        self.assertTrue(wt.exists())
+
     def test_a_task_handed_back_held_waits_like_any_held_task(self):
         calls, table, _ = run_all(self.proj, status={"004": "held"}, during=lambda tid: tid == "004" and self.hold(only="004", reason="x"))
         self.assertEqual(calls, ["001", "002", "003", "004"])
@@ -433,6 +461,17 @@ class ImplementerContradiction(unittest.TestCase):
         for line in (f"`CONTRADICTION: {found}`", f"**CONTRADICTION:** {found}", f"- CONTRADICTION: {found}", f"  CONTRADICTION: {found}"):
             self.assertEqual(fc.fc_implement.contradiction(f"Read a.txt.\n{line}\n"), found, line)
         self.assertIsNone(fc.fc_implement.contradiction("`CONTRADICTION: <what the brief says> / <what the code shows, file:line>`"))
+
+    def test_echoing_the_template_is_not_a_contradiction(self):
+        template = "CONTRADICTION: <what the brief says> / <what the code shows, file:line>"
+        self.assertIsNone(fc.fc_implement.contradiction(f"Done.\n{template}\n"))
+        self.assertIsNone(fc.fc_implement.contradiction(f"I will end with one line `{template}` if I find one.\n" + template))
+        self.assertEqual(fc.fc_implement.contradiction(f"{template}\nCONTRADICTION: a.txt lacks f / code shows g, a.txt:1"), "a.txt lacks f / code shows g, a.txt:1")
+
+    def test_a_contradiction_line_is_the_reply_s_last_and_a_turn_without_a_reply_has_none(self):
+        self.assertEqual(fc.fc_implement.contradiction("CONTRADICTION: x / y\nCONTRADICTION: p / q"), "p / q")
+        for reply in ("", None, "Done."):
+            self.assertIsNone(fc.fc_implement.contradiction(reply))
 
     def test_a_field_that_says_there_is_none_is_not_a_contradiction(self):
         for none in ("none", "None.", "none - the brief and the code agreed.", "NONE: all matched", "n/a", "N/A - nothing", "no contradiction", "No contradiction found.", "none\u2014agreed"):

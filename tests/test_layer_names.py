@@ -49,5 +49,16 @@ class StackLimit(unittest.TestCase):
         self.assertEqual(fc.fc_layers.layer_note(g, 300), "groundwork x1: 400 lines; over the 300-line budget, a commit is never split")
 
 
+class StackCap(unittest.TestCase):
+    def test_the_cap_is_ten_unless_set_and_the_workspace_beats_the_top_level(self):
+        cap = lambda cfg, top=None, ws=None: fc.fc_stack.stack_cap(cfg, fc.fc_config.settings({**(top or {}), **({"workspace": "w", "workspaces": {"w": ws}} if ws else {})})[1])
+        self.assertEqual(cap({}), 10)
+        self.assertEqual(cap({}, {"max_stack_prs": 5}), 5)
+        self.assertEqual(cap({}, {"max_stack_prs": 5}, {"max_stack_prs": 4}), 4)  # the workspace's entry over the top level
+        self.assertEqual(cap({"max_stack_prs": 3}, {"max_stack_prs": 5}, {"max_stack_prs": 4}), 3)  # the project's verify.json over both
+        self.assertEqual(cap({"max_stack_prs": "6"}), 6)
+        self.assertEqual(cap({"max_stack_prs": 0}), 10)
+
+
 if __name__ == "__main__":
     unittest.main()

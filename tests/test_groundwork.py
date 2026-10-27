@@ -309,6 +309,21 @@ class Triage(unittest.TestCase):
                 self.assertEqual((verdict, reason), ("unknown", f"triage failed: reply cut off at max_tokens={budgets[1]}"))
 
 
+class DiffBase(unittest.TestCase):
+    """A task's own diff starts at the layer below it, not at the trunk under the whole chain."""
+    depth = {"fork": 0, "compose/p-001": 2, "compose/p-002": 5}.__getitem__
+
+    def test_a_stacked_task_starts_at_the_nearest_layer_below_it(self):
+        self.assertEqual(fc.fc_run.own_diff_base("fork", ["compose/p-001", "compose/p-002"], self.depth), "compose/p-002")
+        self.assertEqual(fc.fc_run.own_diff_base("fork", ["compose/p-001"], self.depth), "compose/p-001")
+
+    def test_a_task_with_no_layer_below_starts_at_the_trunk_fork_point(self):
+        self.assertEqual(fc.fc_run.own_diff_base("fork", [], self.depth), "fork")
+
+    def test_a_tie_keeps_the_fork_point(self):
+        self.assertEqual(fc.fc_run.own_diff_base("fork", ["same"], {"fork": 3, "same": 3}.__getitem__), "fork")
+
+
 class ReadFailure(unittest.TestCase):
     def test_haiku_writes_the_brief_read_only_and_failures_add_nothing(self):
         meta, calls = {"test": "pytest t.py", "files": ["a.py"]}, []

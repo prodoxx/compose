@@ -97,5 +97,59 @@ class ReviewGate(unittest.TestCase):
         self.assertFalse(ok); self.assertIn("a query per answer", findings)
 
 
+class LegacyNames(unittest.TestCase):
+    def test_the_prefix_falls_back_to_the_legacy_fast_prefix_only_while_such_refs_exist_and_the_record_wins(self):
+        choose = fc.fc_worktree.choose_prefix
+        self.assertEqual(choose({}, "p", "refs/heads/fast/p/001", "compose/p"), "fast/p/")
+        self.assertEqual(choose({}, "p", "", "compose/p"), "compose/p-")
+        self.assertEqual(choose({"task_prefix": "x/"}, "p", "refs/heads/fast/p/001", "compose/p"), "x/")
+        self.assertEqual(choose({"task_prefix": "x/"}, "p", "", "compose/p"), "x/")
+
+    def test_only_a_never_pushed_legacy_project_with_no_live_run_and_no_name_clash_may_be_renamed(self):
+        can = fc.fc_worktree.can_rename
+        legacy = "fast/p/"
+        self.assertEqual(can(legacy, legacy, ""), (True, ""))
+        self.assertEqual(can("compose/p-", legacy, ""), (False, ""))  # already moved, or recorded otherwise
+        self.assertEqual(can(legacy, legacy, "refs/remotes/origin/fast/p/001"), (False, ""))  # a PR carries its names
+        self.assertEqual(can(legacy, legacy, "", ["compose/p-001", "compose/p-002"]), (False, "compose/p-001 already exists"))
+        self.assertEqual(can(legacy, legacy, "", [], 4242), (False, "run pid 4242 is live"))
+        self.assertEqual(can(legacy, legacy, "", ["compose/p-001"], 4242), (False, "compose/p-001 already exists"))
+        self.assertEqual(can(legacy, legacy, "refs/remotes/origin/fast/p/001", ["compose/p-001"], 4242), (False, ""))
+
+    def test_a_rename_blocked_by_a_taken_name_or_a_live_run_says_why_and_moves_nothing(self):
+        repo = Path(tempfile.mkdtemp()).resolve(); proj = repo / ".compose" / "p"
+        (proj / "results").mkdir(parents=True)
+        said, asked, clash = [], [], []
+        def sh(cmd, cwd=None, **kw):
+            asked.append(cmd)
+            out = "refs/heads/fast/p/001\n" if cmd[1] == "for-each-ref" and "refs/heads/fast/p/" in cmd else ""
+            return SimpleNamespace(stdout=out, stderr="", returncode=0 if clash and cmd[1] == "rev-parse" else 1 if cmd[1] == "rev-parse" else 0)
+        run = {"pid": os.getppid()}  # a process that stays alive
+        with mock.patch.object(fc.fc_core, "sh", sh), mock.patch.object(fc.fc_core, "say", said.append), mock.patch.object(fc.fc_worktree, "task_prefix", return_value="fast/p/"), \
+                mock.patch.object(fc.fc_tasks, "run_marker", return_value=run):
+            self.assertEqual(fc.fc_worktree.rename_legacy_branches(repo, proj), {})
+            self.assertEqual(said, [f"names  fast/p/ kept for now: run pid {os.getppid()} is live"])
+            clash.append(1)
+            self.assertEqual(fc.fc_worktree.rename_legacy_branches(repo, proj), {})
+            self.assertEqual(said[-1], "names  fast/p/ kept for now: compose/p-001 already exists")
+        self.assertFalse([c for c in asked if c[1] == "branch"])
+
+
+class DirtyPaths(unittest.TestCase):
+    def test_the_tools_own_files_and_the_agent_wiring_never_count_as_changes(self):
+        status = lambda *entries: "\0".join(entries) + "\0"
+        own = fc.fc_worktree.user_changes
+        self.assertEqual(own(""), [])
+        self.assertEqual(own(status(" M a.txt", "?? new_test.py")), ["a.txt", "new_test.py"])
+        self.assertEqual(own(status(" M .claude/settings.json", " M .claude/settings.local.json", "?? .ignore", "?? graft/map.json", "?? .trail/cache/x.json", "?? .compose/q/notes.md")), [])
+        self.assertEqual(own(status("?? sub/graft", "?? .claude/other.json", "?? .composed")), ["sub/graft", ".claude/other.json", ".composed"])  # only the tools' folders at the root
+
+    def test_a_rename_or_copy_lists_its_new_path_and_skips_its_source_field(self):
+        own = fc.fc_worktree.user_changes
+        self.assertEqual(own("R  b.txt\0a.txt\0 M c.txt\0"), ["b.txt", "c.txt"])
+        self.assertEqual(own("C  copy.txt\0graft/src.txt\0"), ["copy.txt"])  # the source is never read as an entry
+        self.assertEqual(own("R  graft/new.txt\0old.txt\0"), [])
+
+
 if __name__ == "__main__":
     unittest.main()

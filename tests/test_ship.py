@@ -129,5 +129,97 @@ class FakedReword(Faked):
         self.assertFalse((self.proj / "rewords.json").exists())
 
 
+class FakedGateRun(unittest.TestCase):
+    """layer_checks end to end with git and the checks faked: `results` says what a command prints on a layer, `runs` which ran where."""
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp()).resolve()
+        self.proj = self.root / ".compose" / "p"
+        (self.proj / "results").mkdir(parents=True)
+        (self.proj / "verify.json").write_text(json.dumps({"checks": ["c"]}))
+        self.layers = [{"branch": f"compose/p-layer-0{i}", "tested": []} for i in (1, 2, 3)]
+        self.at, self.runs, self.results, self.said = "", [], {}, []
+        for target, name, fake in ((fc.fc_core, "sh", self.sh), (fc.fc_core, "say", self.said.append), (fc.fc_core, "main_checkout", lambda r: r),
+                                   (fc.fc_stack, "layer_base", lambda *a: "main"), (fc.fc_ship, "run_check", self.run_check), (fc.fc_ship, "ready", lambda *a, **k: None),
+                                   (fc.fc_ship, "layer_commands", lambda proj, l, checks, top: list(checks)), (fc.fc_verify, "at_root", lambda cmds, roots, wt: cmds),
+                                   (fc.fc_green, "tree_of", lambda repo, tip: f"tree-{tip}")):
+            patch = mock.patch.object(target, name, fake)
+            patch.start(); self.addCleanup(patch.stop)
+
+    def sh(self, cmd, cwd=None, **kw):
+        if cmd[1] == "checkout":
+            self.at = cmd[-1].removeprefix("tip-")
+        return SimpleNamespace(stdout={"rev-parse": f"tip-{cmd[-1]}", "merge-base": "basecommit"}.get(cmd[1], ""), stderr="", returncode=0)
+
+    def run_check(self, wt, c):
+        self.runs.append((self.at, c))
+        return self.results.get((self.at, c), (0, ""))
+
+    def check(self, **kw):
+        return fc.fc_ship.layer_checks(self.root, self.proj, self.layers, "compose/p", self.root, **kw)
+
+    def ran(self):
+        return [b.removeprefix("compose/p-") for b, _ in self.runs]
+
+    def test_a_failing_layer_refuses_the_submit_names_it_and_the_layers_above_never_run(self):
+        self.results[("compose/p-layer-02", "c")] = (1, "boom")
+        why = self.check()
+        self.assertIn("layer 2 of 3 (compose/p-layer-02) fails `c` on its own tree (it names no failing test, so it cannot be compared with the base)", why)
+        self.assertIn("Nothing was pushed", why)
+        self.assertEqual(self.ran(), ["layer-01", "layer-02"])
+
+    def test_a_check_whose_script_a_later_layer_adds_waits_and_the_top_still_refuses_it(self):
+        missing = (1, 'error: Script not found "build-storybook"')
+        self.results[("compose/p-layer-01", "c")] = missing
+        self.assertEqual(self.check(), "")
+        self.assertTrue(any("layers later" in l and "compose/p-layer-01" in l and "build-storybook" in l for l in self.said), self.said)
+        self.results[("compose/p-layer-03", "c")] = missing
+        self.assertIn("layer 3 of 3 (compose/p-layer-03) fails `c`", self.check(fresh=True))
+
+    def test_a_layer_whose_tree_has_a_recorded_green_is_not_run_and_the_others_still_are(self):
+        fc.fc_green.record(self.proj, "tree-tip-compose/p-layer-03", "c", 0)
+        self.assertEqual(self.check(), "")
+        self.assertEqual(self.ran(), ["layer-01", "layer-02"])
+        taken = [l for l in self.said if "not rerun" in l]
+        self.assertEqual(len(taken), 1)
+        self.assertIn("compose/p-layer-03", taken[0])
+
+    def test_a_layer_unchanged_since_its_checks_passed_is_not_run_again_until_a_fresh_run(self):
+        self.assertEqual(self.check(), "")
+        self.assertEqual(len(self.runs), 3)
+        self.assertEqual(self.check(), "")
+        self.assertEqual(len(self.runs), 3)
+        self.assertEqual(len([l for l in self.said if "unchanged since its checks passed" in l]), 3)
+        self.assertEqual(self.check(fresh=True), "")
+        self.assertEqual(len(self.runs), 6)
+
+
+class FakedLayerDecisions(unittest.TestCase):
+    def test_a_layer_is_unchanged_only_when_its_stamp_or_lean_stamp_was_kept_and_never_on_a_fresh_run(self):
+        seen = {"b1": "s1", "b2": "s2:base:top"}
+        for branch, fresh, want in (("b1", False, True), ("b2", False, True), ("b3", False, False), ("b1", True, False)):
+            self.assertEqual(fc.fc_ship.unchanged_layer(seen, branch, "s1" if branch == "b1" else "s2", "s2:base:top", fresh), want, (branch, fresh))
+        self.assertFalse(fc.fc_ship.unchanged_layer(seen, "b1", "changed", "changed:base:top"))
+
+    def test_a_failing_check_waits_below_the_top_for_a_script_it_names_and_is_refused_when_it_names_no_test(self):
+        state = lambda exit, failing=(), unknown=False: {"exit": exit, "failing": list(failing), "unknown": unknown}
+        missing = 'error: Script not found "build"'
+        outcome = lambda s, top=False, c="c", own=("c",), out="": fc.fc_ship.check_outcome(s, top, c, set(own), out)
+        self.assertEqual(outcome(state(1, unknown=True), out=missing), ("later", "build"))
+        self.assertEqual(outcome(state(1, unknown=True), top=True, out=missing)[0], "refuse")  # the top runs every check
+        self.assertEqual(outcome(state(1, unknown=True), own=(), out=missing)[0], "refuse")  # a command that is not one of the project's checks
+        self.assertEqual(outcome(state(124, unknown=True)), ("refuse", ""))
+        self.assertIn("names no failing test", outcome(state(1, unknown=True))[1])
+        self.assertEqual(outcome(state(1, ["t_a"])), ("fail", ["t_a"]))
+        self.assertEqual(outcome(state(0)), ("pass", None))
+
+    def test_a_failure_the_base_shares_outside_the_stack_is_accepted_and_the_others_refuse_with_their_reason(self):
+        why = lambda new=(), hit=(), ok=(), unknown=False: fc.fc_ship.base_why(list(new), list(hit), list(ok), unknown, "b" * 40)
+        self.assertEqual(why(ok=["old"]), "")
+        self.assertEqual(why(), "")
+        self.assertEqual(why(new=["n"]), f"passes on the base {'b' * 9}, fails here: n")
+        self.assertEqual(why(new=["n"], hit=["h"], ok=["o"]), f"passes on the base {'b' * 9}, fails here: n; fails on the base too, in what this stack changes: h; 1 more already fail on the base and are ignored")
+        self.assertIn(f"cannot tell whether n fail on the base too: its run on the base {'b' * 9} timed out", why(new=["n"], unknown=True))
+
+
 if __name__ == "__main__":
     unittest.main()

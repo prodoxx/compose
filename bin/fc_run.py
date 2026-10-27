@@ -8,6 +8,10 @@ TRIAGE_BAR = ("Flag the layer only for: a change outside its listed files; harde
               "does not ask for; code far more complex than the brief needs; a UI state not placed or styled the way the brief says; "
               "anything aimed at the test rather than the user. Everything else is clean; style nits are clean.")
 
+def own_diff_base(forked, below, depth):
+    """The commit a task's own diff starts at: of the trunk fork point `forked` and the layers `below` it, the one furthest above the trunk (`depth(c)` commits; the first on a tie)."""
+    return max([forked, *below], key=depth)
+
 def triage(repo, proj, ids):
     """One fast-model look per passed task, all at once: `clean`, or `flag: <reason quoting the code>`. It only points the
     team lead at layers to read in full; it never rejects. Stored as `triage` in the task's result file."""
@@ -23,8 +27,8 @@ def triage(repo, proj, ids):
             # A stacked task's own change starts at the nearest layer below it, not at the trunk under the whole chain.
             below = [b for b in layers if b != branch
                      and fc_core.sh(["git", "merge-base", "--is-ancestor", b, branch], repo, check=False).returncode == 0]
-            base = max([fc_core.sh(["git", "merge-base", trunk, branch], repo).stdout.strip(), *below],
-                       key=lambda c: int(fc_core.sh(["git", "rev-list", "--count", f"{trunk}..{c}"], repo).stdout))
+            base = own_diff_base(fc_core.sh(["git", "merge-base", trunk, branch], repo).stdout.strip(), below,
+                                 lambda c: int(fc_core.sh(["git", "rev-list", "--count", f"{trunk}..{c}"], repo).stdout))
             diff = fc_core.sh(["git", "diff", base, branch, "--", *(m.get("files") or [])], repo, check=False).stdout
             shape = '{"verdict": "clean" | "flag", "reason": str}'
             v = fc_models.fast_object(env, "You triage one finished coding task for a senior reviewer. " + TRIAGE_BAR +

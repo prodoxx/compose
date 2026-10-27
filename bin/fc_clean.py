@@ -4,6 +4,22 @@ import fc_core, fc_tasks, fc_linear, fc_herdr, fc_worktree, fc_layers, fc_crew
 
 # ---------- clean: remove a finished or abandoned project's worktrees, branches, tabs, and results ----------
 
+def patch_merged(out):
+    """Whether `git cherry` output proves every commit's patch is in the target: it lists some, and each starts with `-`."""
+    return bool(out.strip()) and all(l.startswith("-") for l in out.splitlines())
+
+def changes_nothing(out, tree):
+    """Whether `git merge-tree --write-tree` output names the target's own tree: merging the branch in would change nothing."""
+    return out.split("\n", 1)[0] == tree
+
+def pr_evidence(out):
+    """The merged-PR line from `gh pr list --json` output, or None for no merged PR or output that does not parse."""
+    try:
+        prs = json.loads(out or "[]")
+    except json.JSONDecodeError:
+        prs = []
+    return f"PR #{prs[0]['number']} merged {str(prs[0].get('mergedAt', ''))[:10]}" if prs else None
+
 def merge_evidence(repo, branch, targets, has_remote):
     """Why a branch counts as merged, or None. Four independent signals, any suffices:
     git ancestry (fast-forward and merge-commit merges), every commit's patch in the target (`git cherry`: a target
@@ -18,25 +34,28 @@ def merge_evidence(repo, branch, targets, has_remote):
         if fc_core.sh(["git", "merge-base", "--is-ancestor", branch, t], repo, check=False).returncode == 0:
             return f"contained in {t}"
         p = fc_core.sh(["git", "cherry", t, branch], repo, check=False)
-        if p.returncode == 0 and p.stdout.strip() and all(l.startswith("-") for l in p.stdout.splitlines()):
+        if p.returncode == 0 and patch_merged(p.stdout):
             return f"contained in {t} by patch"
         p = fc_core.sh(["git", "merge-tree", "--write-tree", t, branch], repo, check=False)
-        if p.returncode == 0 and p.stdout.split("\n", 1)[0] == fc_core.sh(["git", "rev-parse", "-q", f"{t}^{{tree}}"], repo, check=False).stdout.strip():
+        if p.returncode == 0 and changes_nothing(p.stdout, fc_core.sh(["git", "rev-parse", "-q", f"{t}^{{tree}}"], repo, check=False).stdout.strip()):
             return f"merging it into {t} changes nothing"
     if has_remote:
         p = subprocess.run(["gh", "pr", "list", "--head", branch, "--state", "merged", "--json", "number,mergedAt", "--limit", "1"],
                            cwd=repo, capture_output=True, text=True, stdin=subprocess.DEVNULL)
-        if p.returncode == 0:
-            try:
-                prs = json.loads(p.stdout or "[]")
-            except json.JSONDecodeError:
-                prs = []
-            if prs:
-                return f"PR #{prs[0]['number']} merged {str(prs[0].get('mergedAt', ''))[:10]}"
+        if p.returncode == 0 and pr_evidence(p.stdout):
+            return pr_evidence(p.stdout)
     return None
 
 def merged_into(repo, branch, targets, has_remote=False):
     return merge_evidence(repo, branch, targets, has_remote) is not None
+
+def first_plus(out):
+    """The first commit `git cherry -v` lists as unmatched, as (sha, subject, how many more), or None when it lists none."""
+    plus = [l for l in out.splitlines() if l.startswith("+")]
+    if not plus:
+        return None
+    _, sha, subject = plus[0].split(" ", 2)
+    return sha, subject, len(plus) - 1
 
 def first_unmatched(repo, branch, targets):
     """The first commit on the branch with no patch in the first target that resolves, as a line for clean's kept output, or None."""
@@ -45,12 +64,12 @@ def first_unmatched(repo, branch, targets):
             break
     else:
         return None
-    plus = [l for l in fc_core.sh(["git", "cherry", "-v", t, branch], repo, check=False).stdout.splitlines() if l.startswith("+")]
-    if not plus:
+    first = first_plus(fc_core.sh(["git", "cherry", "-v", t, branch], repo, check=False).stdout)
+    if not first:
         return None
-    _, sha, subject = plus[0].split(" ", 2)
+    sha, subject, more = first
     short = fc_core.sh(["git", "rev-parse", "--short", sha], repo).stdout.strip()
-    return f"first unmatched commit {short} {subject}" + (f" and {len(plus) - 1} more" if len(plus) > 1 else "")
+    return f"first unmatched commit {short} {subject}" + (f" and {more} more" if more else "")
 
 def own_commits(repo, branch):
     """False when the branch never got a commit of its own: it still sits where it was created (an empty or design-only project),
@@ -74,6 +93,18 @@ def live_crew(proj):
     why += [f"{ag.get('name')} is alive in its herdr space" for ag in agents or [] if ag.get("tab_id") in tabs and ag.get("name") != lead]
     return why
 
+def runs_inside(here, root):
+    """Whether the working directory `here` (None when it is gone) is the worktree `root` or inside it."""
+    return bool(here and (here == root or root in here.parents))
+
+def lead_working(record, last, force):
+    """Whether the team lead's record says it is still working: it has one, `force` is off, it is not closed, and its last report is not done."""
+    return bool(record and not force and not record.get("closed") and last.get("state") != "done")
+
+def live_run_or_crew(run_pid, run_live, crew, force):
+    """The reasons abandon stops before the worktree check: a live run, and live crew unless `force`."""
+    return ([f"a run is live (pid {run_pid}): stop it first"] if run_live else []) + ([f"live crew ({'; '.join(crew)}); --force overrides"] if crew and not force else [])
+
 def standing_in(wt, proj, force=False):
     """Who would lose the project worktree from under them if clean removed it now: this command, when it runs inside it, and a
     team lead whose last report is not done while its tab is open (`--project <slug> --force` overrides the team lead, never this
@@ -84,12 +115,12 @@ def standing_in(wt, proj, force=False):
         here = Path.cwd().resolve()
     except FileNotFoundError:
         here = None
-    if here and (here == root or root in here.parents):
+    if runs_inside(here, root):
         why.append("this command runs inside it")
     lead = fc_herdr.agent_name(proj.name, "orchestrator")
     c = fc_crew.crew_record(proj, lead)
     last = (fc_crew.crew_reports(proj, lead) or [{}])[-1]
-    if c and not force and not c.get("closed") and last.get("state") != "done" \
+    if lead_working(c, last, force) \
             and not fc_crew.tab_closed(c, (fc_herdr.herdr("agent", "list") or {}).get("agents") if fc_herdr.herdr_env() else None):
         why.append(f"{lead} last reported {last.get('state', 'nothing')}")
     return why
@@ -142,6 +173,40 @@ def close_space(proj, name, force=False):
         else:
             fc_herdr.herdr("workspace", "close", space)
 
+def crew_holds_clean(crew, force, explicit):
+    """Whether live crew keeps the project from a clean: only `--project <slug> --force` together override it."""
+    return bool(crew and not (force and explicit))
+
+def branch_fate(why, holders, layer_why, delete_unmerged):
+    """(why, remove) for a task or layer branch: merged on its own proof, or through every layer that held it, goes; unmerged
+    goes only on `--delete-unmerged`, else stays."""
+    if not why and holders and all(lb in layer_why for lb in holders):
+        why = f"held by {', '.join(holders)}, merged: {layer_why[holders[0]]}"
+    return why, bool(why or delete_unmerged)
+
+def project_proof(why, own, explicit, delete_unmerged, held, layer_why):
+    """(why, project_merged, empty) for the project branch from its merge evidence `why`: with no commits of its own (`own` false)
+    nothing was merged unless named or `--delete-unmerged`; else every layer merged, or `--delete-unmerged`, stands for a merge."""
+    if why and not own and not (explicit or delete_unmerged):
+        return None, False, True
+    if not why and held and all(lb in layer_why for lb in held):  # layers squash the project branch's commits: its merge is theirs
+        return f"every layer built from it is merged ({', '.join(held)})", True, False
+    if not why and delete_unmerged:
+        return "UNMERGED, removed on --delete-unmerged", False, False
+    return why, bool(why), False
+
+def merged_by_project(metas, merged, statuses, finished):
+    """The tasks a merged project holds the code of beyond `merged`: every one with a finished (or already green) status."""
+    return [t for t in metas if t not in merged and statuses.get(t) in finished]
+
+def settle_clean(main_repo, name, wt, proj, pbranch, link, metas, merged, project_merged, remove, line):
+    """The end of a clean: Linear moves with all the worktree holds first, then the worktree goes, then the summary line."""
+    fc_linear.linear_merged(link.get("feature"), [metas[t] for t in merged], project_merged, scope=link.get("stories"))  # before the worktree goes, with all it holds
+    fc_linear.refresh_ready(proj, link.get("feature"))
+    if remove:
+        remove_project(main_repo, name, wt, proj, pbranch)
+    print(line)
+
 def clean_project(main_repo, name, wt, proj, delete_unmerged=False, explicit=False, force=False):
     """The post-merge step. Fetch, then remove what the reviewer's merges made redundant: task clones and the CLI's stack
     worktree always; task branches merged into the project branch (locally or on the remote); and, once every layer and the
@@ -149,7 +214,7 @@ def clean_project(main_repo, name, wt, proj, delete_unmerged=False, explicit=Fal
     import shutil
     repo = wt
     crew = live_crew(proj)
-    if crew and not (force and explicit):
+    if crew_holds_clean(crew, force, explicit):
         print(f"clean  {name}: kept, it has live crew ({'; '.join(crew)}); --project {name} --force overrides")
         return
     has_remote = bool(fc_core.sh(["git", "remote"], repo, check=False).stdout.strip())
@@ -196,9 +261,8 @@ def clean_project(main_repo, name, wt, proj, delete_unmerged=False, explicit=Fal
             continue
         why = merge_evidence(repo, b, targets, has_remote)
         holders = [lb for lb, tasks in held.items() if b.removeprefix(fc_worktree.task_prefix(repo, proj)) in tasks]
-        if not why and holders and all(lb in layer_why for lb in holders):
-            why = f"held by {', '.join(holders)}, merged: {layer_why[holders[0]]}"
-        if why or delete_unmerged:
+        why, gone = branch_fate(why, holders, layer_why, delete_unmerged)
+        if gone:
             print(f"clean  {b}: {why if why else 'UNMERGED, deleted on --delete-unmerged; any PR on GitHub is unaffected'}")
             fc_core.sh(["git", "branch", "-D", b], repo, check=False)
             if why and b.removeprefix(fc_worktree.task_prefix(repo, proj)) in metas:
@@ -220,16 +284,9 @@ def clean_project(main_repo, name, wt, proj, delete_unmerged=False, explicit=Fal
         on = [fc_core.project_config(proj)["review_base"]] if fc_core.project_after(proj) else []  # merged into the project it was built on counts
         ptargets = [*on, "main", "origin/main", "master", "origin/master", fc_core.current_branch(main_repo)]
         why = merge_evidence(main_repo, pbranch, ptargets, has_remote)
-        if why and not own_commits(main_repo, pbranch) and not (explicit or delete_unmerged):
+        why, project_merged, empty = project_proof(why, not why or own_commits(main_repo, pbranch), explicit, delete_unmerged, held, layer_why)
+        if empty:
             line += f"; project branch {pbranch} has no commits of its own (empty or design-only), so nothing was merged: kept; name it with --project {name} to remove it"
-            why = None
-        elif not why and held and all(lb in layer_why for lb in held):  # layers squash the project branch's commits: its merge is theirs
-            why = f"every layer built from it is merged ({', '.join(held)})"
-            project_merged = True
-        elif not why and delete_unmerged:
-            why = "UNMERGED, removed on --delete-unmerged"
-        else:
-            project_merged = bool(why)
         if why:
             stay = standing_in(wt, proj, force=force and explicit)
             remove = not stay
@@ -249,12 +306,8 @@ def clean_project(main_repo, name, wt, proj, delete_unmerged=False, explicit=Fal
             print(f"clean  {pbranch}: kept unmerged" + (f", {fu}" if fu else ""))
     if project_merged:  # the project branch holds every finished task's code, a task with no branch of its own (skipped as green, done by hand) too
         status = lambda t: json.loads(f.read_text()).get("status") if (f := proj / "results" / f"{t}.json").exists() else None
-        merged += [t for t in metas if t not in merged and status(t) in (*fc_tasks.FINISHED, "already_green")]
-    fc_linear.linear_merged(link.get("feature"), [metas[t] for t in merged], project_merged, scope=link.get("stories"))  # before the worktree goes, with all it holds
-    fc_linear.refresh_ready(proj, link.get("feature"))
-    if remove:
-        remove_project(main_repo, name, wt, proj, pbranch)
-    print(line)
+        merged += merged_by_project(metas, merged, {t: status(t) for t in metas}, (*fc_tasks.FINISHED, "already_green"))
+    settle_clean(main_repo, name, wt, proj, pbranch, link, metas, merged, project_merged, remove, line)
 
 def abandon_project(main_repo, name, wt, proj, force=False, dry=False):
     """Remove an unmerged project the user gave up on. It lists what goes (the worktree with its results and local changes, the
@@ -271,8 +324,7 @@ def abandon_project(main_repo, name, wt, proj, force=False, dry=False):
     ahead = fc_core.sh(["git", "rev-list", "--count", f"{base}..{pbranch}"], main_repo, check=False).stdout.strip() if base else ""
     link = json.loads((proj / "linear.json").read_text()) if (proj / "linear.json").exists() else {}
     crew = live_crew(proj)
-    stop = ([f"a run is live (pid {fc_tasks.run_marker(proj).get('pid')}): stop it first"] if fc_tasks.run_alive(proj) else []) \
-        + ([f"live crew ({'; '.join(crew)}); --force overrides"] if crew and not force else []) + standing_in(wt, proj, force=force)
+    stop = live_run_or_crew(fc_tasks.run_marker(proj).get("pid") if fc_tasks.run_alive(proj) else None, fc_tasks.run_alive(proj), crew, force) + standing_in(wt, proj, force=force)
     print(f"abandon  {name}: removes")
     for line in (f"worktree {wt} ({'returned to the treehouse pool' if fc_worktree.is_slot(main_repo, wt) else 'removed'}), with its .compose/{name} results and {dirty} uncommitted path(s)",
                  f"local branches {', '.join(branches)}" + (f" ({ahead} commit(s) on {pbranch} past {base})" if ahead else ""),

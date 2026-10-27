@@ -65,5 +65,38 @@ class MoveOnto(unittest.TestCase):
         self.assertEqual(self.cfg(), {"review_base": "compose/a", "after": "a"})
 
 
+class InitBranchNames(unittest.TestCase):
+    """init names a project's branch from the prefix, the workspace's over the top level's, and --after reaches the other project's branch the same way."""
+    def test_the_prefix_is_compose_slash_unless_the_config_or_its_workspace_says_otherwise(self):
+        prefix = fc.fc_init.branch_prefix
+        self.assertEqual(prefix({}), "compose/")
+        self.assertEqual(prefix({"branch_prefix": "team/"}), "team/")
+        self.assertEqual(prefix({"branch_prefix": "team/", "workspace": "work", "workspaces": {"work": {"branch_prefix": "w/"}}}), "w/")
+        self.assertEqual(prefix({"branch_prefix": "team/", "workspace": "work", "workspaces": {"work": {}}}), "team/")  # a workspace that says nothing keeps the top level's
+
+    def test_the_branch_is_the_prefix_and_the_name_unless_branch_is_given(self):
+        self.assertEqual(fc.fc_init.project_branch_name("compose/", "b"), "compose/b")
+        self.assertEqual(fc.fc_init.project_branch_name("w/", "b", None), "w/b")
+        self.assertEqual(fc.fc_init.project_branch_name("w/", "b", "mine"), "mine")
+
+    def test_after_an_existing_project_builds_on_its_top_layer_or_branch_and_otherwise_on_the_prefix_and_name(self):
+        after = fc.fc_init.after_branch
+        self.assertEqual(after("compose/", "a", True, "compose/a-003"), "compose/a-003")  # a project that exists: where its code is
+        self.assertEqual(after("w/", "a", False, None), "w/a")
+        self.assertIsNone(after("w/", None, False, None))
+
+    def test_after_an_unknown_project_refuses_naming_the_branch_and_the_project_to_init_first(self):
+        self.assertEqual(fc.fc_init.unknown_after("compose/nope", "nope"), "no branch compose/nope: `compose init --project nope` that project first")
+
+    def test_init_exits_with_that_message_when_the_branch_check_says_no(self):
+        a = mock.Mock(repo=tempfile.mkdtemp(), project="b", branch=None, here=False, after="nope")
+        with mock.patch.object(fc.fc_init, "check_deps", return_value=[]), mock.patch.object(fc.fc_config, "read_config", return_value={}), \
+                mock.patch.object(fc.fc_core, "all_projects", return_value={}), mock.patch.object(fc.fc_init, "branch_exists", return_value=False) as exists, \
+                self.assertRaises(SystemExit) as cm:
+            fc.fc_init.cmd_init(a)
+        self.assertEqual(str(cm.exception), "no branch compose/nope: `compose init --project nope` that project first")
+        self.assertEqual(exists.call_args.args[1], "compose/nope")
+
+
 if __name__ == "__main__":
     unittest.main()

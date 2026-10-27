@@ -55,6 +55,30 @@ class RunHolds(unittest.TestCase):
         self.assertEqual(got, [FIX, IMPL, None, None, None])
 
 
+class FastBase(unittest.TestCase):
+    def test_a_fast_task_failing_on_head_is_broken_base_with_no_turn(self):
+        self.assertEqual(fc.fc_implement.fc_attempt.base_state(True, 1, []), "broken_base")
+        self.assertEqual(fc.fc_implement.fc_attempt.base_state(True, 1, ["old/"]), "broken_base")
+
+    def test_a_fast_task_passing_on_head_goes_on_to_its_turn(self):
+        self.assertEqual(fc.fc_implement.fc_attempt.base_state(True, 0, []), "go")
+
+    def test_a_test_first_task_still_skips_a_green_base_and_passes_a_red_one(self):
+        self.assertEqual(fc.fc_implement.fc_attempt.base_state(False, 0, []), "already_green")
+        self.assertEqual(fc.fc_implement.fc_attempt.base_state(False, 1, []), "go")
+        self.assertEqual(fc.fc_implement.fc_attempt.base_state(False, 0, ["old/"]), "go")  # a deleting task has its change to make whatever the test says
+
+    def test_a_fast_attempt_that_passes_ends_unproven_and_one_that_fails_stays_failed(self):
+        end = fc.fc_implement.fc_attempt.final_status
+        self.assertEqual([end("passed", True), end("failed", True), end("rejected_scope", True), end("passed", False)], ["unproven", "failed", "rejected_scope", "passed"])
+
+    def test_only_a_real_run_of_a_fix_then_regression_test_task_is_fast_and_a_bench_run_asks_nothing(self):
+        asked = []
+        route = lambda tag, reset, flow: fc.fc_implement.fc_attempt.fast_route(tag, reset, lambda: asked.append(1) or flow)
+        self.assertTrue(route("", False, FIX))
+        self.assertEqual([route("", False, IMPL), route("", False, None), route("-bench-x", False, FIX), route("", True, FIX)], [False] * 4)
+        self.assertEqual(len(asked), 3)  # a bench run is never routed: it leaves the real result and Linear alone
+
 class UnprovenLinear(unittest.TestCase):
     """An unproven task stays In Progress on Linear with its comment, and watch wakes on unproven and broken_base."""
     RESULT = {"status": "unproven", "branch": "fast/p/001", "attempts": 2, "cost": 0.0123, "model": "pi:x/glm", "log": []}

@@ -89,15 +89,19 @@ def board_stamp(repo, proj):
 
 _board = {}
 
+def same_stamp(kept, proj, stamp):
+    """The board `kept` (project -> (stamp, board)) holds for `proj` when nothing it was computed from changed since (its stamp is `stamp`), else None."""
+    hit = kept.get(proj)
+    return hit[1] if hit and hit[0] == stamp else None
+
 def board(repo, proj):
     """The project's board: every task's row, the trunk, and the stack layers. Computed with git only when its stamp changed
     since this process last read it: every parked `watch` reads it every two seconds, from many loops at
     once, and while nothing changed that must cost no process."""
     repo, proj = Path(repo).resolve(), Path(proj)
     stamp = board_stamp(repo, proj)
-    hit = _board.get(proj)
-    if hit and hit[0] == stamp:
-        return hit[1]
+    if (same := same_stamp(_board, proj, stamp)) is not None:
+        return same
     tasks = fc_tasks.load_tasks(proj)
     trunk_head = project_head(repo, proj)
     facts = branch_facts(repo, proj, trunk_head)

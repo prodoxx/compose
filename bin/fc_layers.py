@@ -103,6 +103,11 @@ def chain_order(repo, proj):
 
 STACK_STOP = ""  # why the last linearize stopped short, with the commands that resolve it; empty when the chain is whole
 
+def chain_conflict(b, prev, files, upstream, source):
+    """The STACK_STOP of a chain rebase of `b` onto `prev` that conflicted in `files`, with the command that resolves it."""
+    return (f"{b} conflicts when rebased onto {prev} in {files}; the layers below it are kept. Resolve by hand: "
+            f"git checkout {b} && git rebase --onto {prev} {upstream} ({source}), then re-run")
+
 def linearize(repo, proj, trunk, wt, through=()):
     with fc_worktree.STACK_LOCK:
         return _linearize(repo, proj, trunk, wt, through)
@@ -155,8 +160,7 @@ def _linearize(repo, proj, trunk, wt, through=()):
                 files = ", ".join(fc_core.sh(["git", "diff", "--name-only", "--diff-filter=U"], wt, check=False).stdout.split()) or "no file git names"
                 fc_core.sh(["git", "rebase", "--abort"], wt, check=False)
                 fc_core.sh(["git", "checkout", "-q", "--detach", trunk], wt, check=False)
-                STACK_STOP = (f"{b} conflicts when rebased onto {prev} in {files}; the layers below it are kept. Resolve by hand: "
-                              f"git checkout {b} && git rebase --onto {prev} {upstream} ({source}), then re-run")
+                STACK_STOP = chain_conflict(b, prev, files, upstream, source)
                 fc_core.say(f"stack  STOP  {STACK_STOP}")
                 break
         linear.append(b)
@@ -378,6 +382,11 @@ def group_by_record(proj, units, budget, max_prs=None, landed=()):
         groups[i:i + 2] = [(None, groups[i][1] + groups[i + 1][1], True)]
     return groups
 
+def differing_files(changed, tasks, held):
+    """The files of `changed` (layers' top against the chain's) that make the layers differ from the chain: all but the protected files of the `held` tasks, which the layers leave out on purpose."""
+    skip = {f for m in tasks if m["id"] in held for f in m["protected"]}
+    return [f for f in changed if f not in skip]
+
 def build_layers(repo, proj, base, trunk, chain, wt, budget, max_prs=None, held=(), landed=()):
     """Cut the project into review layers on `base`: branches `<layer_prefix>layer-NN`, each at most `budget` counted lines
     (groundwork first, then tasks with their tests), rebuilt from the commits every time. Returns [{branch, tasks, lines,
@@ -440,8 +449,7 @@ def build_layers(repo, proj, base, trunk, chain, wt, budget, max_prs=None, held=
         tips.append(prev)
     fc_core.sh(["git", "checkout", "-q", "--detach", trunk], wt, check=False)
     if layers and fc_core.sh(["git", "merge-base", "--is-ancestor", base, chain[-1]], repo, check=False).returncode == 0:
-        skip = {f for m in fc_tasks.code_tasks(fc_tasks.load_tasks(proj)) if m["id"] in held for f in m["protected"]}
-        differ = [f for f in fc_core.sh(["git", "diff", "--name-only", prev, chain[-1]], repo).stdout.split() if f not in skip]
+        differ = differing_files(fc_core.sh(["git", "diff", "--name-only", prev, chain[-1]], repo).stdout.split(), fc_tasks.code_tasks(fc_tasks.load_tasks(proj)), held)
         if differ:
             stop(f"the layers differ from {chain[-1]} in {', '.join(differ)}; {kept}")
             return None
