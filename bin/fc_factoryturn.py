@@ -1,5 +1,5 @@
 """The build loop's decision step: what is in flight, and which ready stories to start next."""
-import hashlib, json, os, re, subprocess, sys, time, traceback
+import copy, hashlib, json, os, re, subprocess, sys, time, traceback
 from pathlib import Path
 import fc_change, fc_config, fc_core, fc_delivery, fc_herdr, fc_linear, fc_load, fc_plan, fc_prd, fc_readiness, fc_reconcile, fc_tasks
 import fc_factorystate
@@ -14,6 +14,8 @@ PRD_OFFER = "event factory=prd-missing  (no PRD yet: offer to plan it with the p
 OPEN = ("todo", "backlog")
 FREED = ("in review", "done", "canceled")
 SHAPING = "needs-shaping"
+FULL_READ_SECONDS = 600  # a plan whose project shows no change is kept this long; then it is read in full, for what the stamp misses
+_PLANS = {}  # repo -> {"stamp", "at", "plan", "proposed"}: the last plan read and reconciled, for the turns where Linear shows no change
 
 def story_of(plan, ident):
     """The plan's story with this id, or None."""
@@ -405,6 +407,34 @@ def turn(repo, state, now, stopping=None, saved=None):
 def _day(now):
     return time.strftime("%Y-%m-%d", time.localtime(now))
 
+def _stamp(repo):
+    """fc_delivery.stamp, or None when Linear does not answer it: the plan is then read in full."""
+    try:
+        return fc_delivery.stamp(repo)
+    except (SystemExit, RuntimeError, OSError, ValueError, KeyError):
+        return None
+
+def _plan(repo, now):
+    """(plan, proposed fixes), or (None, None) with no plan yet. The plan is read and reconciled only when the project changed in
+    Linear since the last turn or the last full read is FULL_READ_SECONDS old, and read again only when the reconcile changed it:
+    a quiet project costs a turn one read, not one per feature and story group."""
+    before, seen = _stamp(repo), _PLANS.pop(str(repo), None)
+    if seen and before is not None and seen["stamp"] == before and now - seen["at"] < FULL_READ_SECONDS:
+        _PLANS[str(repo)] = seen
+        return copy.deepcopy(seen["plan"]), seen["proposed"]
+    plan, result = fc_delivery.plan_and_reconcile(repo)
+    if plan is None:
+        return None, None
+    proposed = (result or {}).get("proposed") or []
+    after = _stamp(repo) if before is not None else None
+    if after is None or after != before:  # the reconcile wrote, or Linear changed while it ran
+        plan = fc_delivery.product_plan(repo)
+        if plan is None:
+            raise RuntimeError("the product delivery plan went away during the turn")
+    if after is not None:
+        _PLANS[str(repo)] = {"stamp": after, "at": now, "plan": copy.deepcopy(plan), "proposed": proposed}
+    return plan, proposed
+
 def _turn(repo, state, now, stopping, saved, out):
     said = state["said"]
     state["turns"] += 1
@@ -412,7 +442,7 @@ def _turn(repo, state, now, stopping, saved, out):
     if prd:
         said.pop("prd-missing", None); said.pop("prd-day", None)
     try:
-        plan = fc_delivery.product_plan(repo)
+        plan, proposed = _plan(repo, now)
         if plan is None and prd is False:
             fc_factorystate.say_once(state, "prd-missing", PRD_FIRST, out)
             PRD_IDLE.get(fc_factorystate.pace(state)["mode"], lambda *a: None)(repo, state, now, out)
@@ -422,14 +452,10 @@ def _turn(repo, state, now, stopping, saved, out):
                                  "compose delivery seed (sections/0p.md); nothing is dispatched before it exists)", out)
             return
         said.pop("bootstrap", None)
-        proposed = (fc_delivery.reconcile(repo) or {}).get("proposed") or []
         for key in [k for k in said if k.startswith("proposed:") and k[9:] not in proposed]:
             del said[key]
         for text in proposed:
             fc_factorystate.say_once(state, "proposed:" + text, f'event factory=proposed fix="{text}"  (bring it to the product owner with its reason; never apply it without their yes)', out)
-        plan = fc_delivery.product_plan(repo)
-        if plan is None:
-            raise RuntimeError("the product delivery plan went away during the turn")
         entries = fc_plan.order_entries(plan["tracks"], plan["features"])
         entries = ORDER_FILTER.get(state["mode"], lambda plan, entries, state: entries)(plan, entries, state)
         _settle(repo, plan, state, out)

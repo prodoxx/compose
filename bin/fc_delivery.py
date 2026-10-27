@@ -7,8 +7,14 @@ import fc_core, fc_config, fc_linear, fc_linear_cmd, fc_plan, fc_prd, fc_tasks
 PRODUCT_TITLE = "Product delivery plan"
 NO_PLAN = "no product delivery plan yet: compose delivery seed starts one"
 FEATURES_QUERY = """query($p: ID!, $after: String) { issues(first: 50, after: $after, filter: {project: {id: {eq: $p}},
-  labels: {some: {name: {eqIgnoreCase: "feature"}}}}) { pageInfo { hasNextPage endCursor } nodes { %s url } } }""" % fc_linear.LINEAR_TREE_FIELDS
-ISSUE_QUERY = "query($id: String!) { issue(id: $id) { %s url project { id } } }" % fc_linear.LINEAR_TREE_FIELDS
+  labels: {some: {name: {eqIgnoreCase: "feature"}}}}) { pageInfo { hasNextPage endCursor } nodes { id %s url } } }""" % fc_linear.LINEAR_TREE_FIELDS
+ISSUE_QUERY = "query($id: String!) { issue(id: $id) { id %s url project { id } } }" % fc_linear.LINEAR_TREE_FIELDS
+# Every open feature's stories in one paged read, not one read per feature.
+STORIES_QUERY = """query($ids: [ID!], $after: String) { issues(first: 50, after: $after, filter: {parent: {id: {in: $ids}}}) {
+  pageInfo { hasNextPage endCursor } nodes { %s url } } }""" % fc_linear.LINEAR_TREE_FIELDS
+# The project's most recently updated issue and its documents' update times: a write to any of them changes this.
+STAMP_QUERY = """query($slug: String!) { projects(filter: {slugId: {eq: $slug}}) { nodes { issues(first: 1, orderBy: updatedAt, includeArchived: true) {
+  nodes { id updatedAt } } documents(first: 50) { pageInfo { hasNextPage } nodes { id updatedAt } } } } }"""
 DOCS_QUERY = """query($p: String!, $after: String) { project(id: $p) { documents(first: 50, after: $after) {
   pageInfo { hasNextPage endCursor } nodes { id title url } } } }"""
 DOC_QUERY = "query($id: String!) { document(id: $id) { id title url content } }"
@@ -54,22 +60,32 @@ def read_product(repo, tracks=None):
     doc = fc_linear.linear_gql(DOC_QUERY, {"id": found["id"]})["document"] if found else None
     if tracks is None:
         tracks = fc_plan.parse_tracks(_tracks_text(doc["content"] or "")) if doc else []
-    features = {f["id"]: f for f in map(_issue, _paged(FEATURES_QUERY, {"p": proj["id"]}, lambda r: r["issues"]))}
-    for ident in (i for t in tracks for i in t["items"] if i not in features):
+    nodes = _paged(FEATURES_QUERY, {"p": proj["id"]}, lambda r: r["issues"])
+    known = {n["identifier"] for n in nodes}
+    for ident in dict.fromkeys(i for t in tracks for i in t["items"] if i not in known):
         n = _issue_node(ident)
         if n and (n.get("project") or {}).get("id") == proj["id"]:
-            features[ident] = _issue(n)
+            nodes.append(n)
+    features = {f["id"]: f for f in map(_issue, nodes)}
     plans = {d["title"]: d["url"] for d in docs}
     for f in features.values():
         f["plan_url"] = plans.get(f"{f['id']}: delivery plan") or (plans.get(f"{f['parent']}: delivery plan") if f["parent"] else None)
-        if not fc_tasks.blocker_finished(f["state"], f["labels"]):
-            f["stories"] = [_issue(s) for s in fc_linear.linear_children(f["id"])]
+    open_ = [n["id"] for n in nodes if not fc_tasks.blocker_finished(features[n["identifier"]]["state"], features[n["identifier"]]["labels"])]
+    for s in _paged(STORIES_QUERY, {"ids": open_}, lambda r: r["issues"]) if open_ else []:
+        features[s["parent"]["identifier"]]["stories"].append(_issue(s))
     return {"project": proj, "doc": doc, "tracks": tracks, "features": features}
 
 def product_plan(repo):
     """The product read from Linear, or None when its document is missing or names no track."""
     product = read_product(repo)
     return product if product["doc"] and product["tracks"] else None
+
+def stamp(repo):
+    """What changes whenever the plan's Linear side may have: one cheap read, compared from one read of the plan to the next.
+    It misses a change to an issue outside the project, such as a blocker's state, so a reader that keeps a plan reads it again in full from time to time."""
+    _, slug = fc_linear_cmd.project_link(repo)
+    nodes = fc_linear.linear_gql(STAMP_QUERY, {"slug": slug})["projects"]["nodes"]
+    return json.dumps(nodes, sort_keys=True)
 
 def delivery_order(repo):
     plan = product_plan(repo)
@@ -190,8 +206,15 @@ def reconcile(repo, dry_run=False):
     with plan_lock(repo):
         return _reconcile(repo, False)
 
-def _reconcile(repo, dry_run):
-    plan = product_plan(repo)
+def plan_and_reconcile(repo):
+    """The factory turn's read: (the plan, what reconcile did with it), read once and reconciled under one hold of plan_lock,
+    or (None, None) when there is no plan yet."""
+    with plan_lock(repo):
+        plan = product_plan(repo)
+        return (plan, _reconcile(repo, False, plan)) if plan else (None, None)
+
+def _reconcile(repo, dry_run, plan=None):
+    plan = plan or product_plan(repo)
     if not plan:
         sys.exit(NO_PLAN)
     tracks, features = plan["tracks"], plan["features"]

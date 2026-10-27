@@ -363,7 +363,13 @@ class Turn(unittest.TestCase):
         self.held = unittest.mock.Mock(return_value=False)
         self.hold_changed = unittest.mock.Mock(return_value="event factory=held story=x")
         issue = lambda ident: {"id": ident, "description": self.descriptions.get(ident, "")}
+        def plan_and_reconcile(repo):
+            plan = self.product_plan(repo)
+            return (plan, self.reconcile(repo)) if plan else (None, None)
+        self.stamps = iter(range(10 ** 6))  # by default every turn finds the project changed, so reads the plan in full
+        pd = unittest.mock.patch.dict(ft._PLANS, clear=True); pd.start(); self.addCleanup(pd.stop)
         for mod, name, m in ((ft.fc_delivery, "product_plan", self.product_plan), (ft.fc_delivery, "reconcile", self.reconcile),
+                             (ft.fc_delivery, "plan_and_reconcile", plan_and_reconcile), (ft.fc_delivery, "stamp", lambda repo: next(self.stamps)),
                              (ft.fc_plan, "order_entries", lambda tracks, features: [dict(e) for e in self.entries]),
                              (ft.fc_readiness, "story_readiness", lambda repo, s, **kw: self.results[s]),
                              (ft.fc_load, "held", self.held), (ft.fc_linear, "linear_issue", issue),
@@ -407,6 +413,14 @@ class Turn(unittest.TestCase):
         self.dispatch.reset_mock(); self.state["dispatched"] = {}; self.held.return_value = True
         ft.turn(self.repo, self.state, 200.0)
         self.dispatch.assert_not_called()
+
+    def test_a_quiet_project_keeps_the_plan_read_and_a_change_or_the_full_read_age_reads_it_again(self):
+        self.stamps = iter(["a", "a", "a", "b", "b", "b", "b"])
+        for now in (100.0, 200.0, 300.0, 300.0 + ft.FULL_READ_SECONDS):
+            ft.turn(self.repo, self.state, now)
+        # 100: read and reconciled, unchanged after; 200: same stamp, kept; 300: changed, read; the last: same stamp, but the read is old
+        self.assertEqual([c for c in self.calls if c == "reconcile" or c.startswith("product_plan")],
+                         ["product_plan:1", "reconcile", "product_plan:2", "reconcile", "product_plan:3", "reconcile"])
 
     def test_a_restart_dispatches_nothing_twice(self):  # NEB-10 dispatched before the crash, NEB-11 started by hand
         self.state["dispatched"] = {"NEB-10": {"feature": "NEB-9", "project": "sign-in", "kind": "build", "at": 1.0}}

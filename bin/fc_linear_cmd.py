@@ -31,13 +31,17 @@ def read_body(a):
         return Path(a.file).read_text()
     return "" if sys.stdin.isatty() else read_stdin()
 
-def linear_project(repo):
+def project_link(repo):
+    """(linear.json, the project's slug id from its URL)."""
     path = fc_core.repo_link(repo)
     if not path.exists():
         sys.exit(f"no .compose/linear.json in {path.parent.parent}")
     link = json.loads(path.read_text())
     name = urllib.parse.urlsplit(link["project"]).path.split("/project/", 1)[-1].strip("/").split("/")[0]
-    slug = name.rsplit("-", 1)[-1]
+    return link, name.rsplit("-", 1)[-1]
+
+def linear_project(repo):
+    link, slug = project_link(repo)
     p = fc_linear.linear_gql("query($slug: String!) { projects(filter: {slugId: {eq: $slug}}) { nodes { id name url teams { nodes { id name key } } } } }",
                              {"slug": slug})["projects"]["nodes"]
     if not p:

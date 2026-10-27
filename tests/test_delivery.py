@@ -13,7 +13,7 @@ TRACKS = "## Tracks\n\n1. Sign-in: NEB-7, NEB-9\n2. Onboarding: NEB-12 (after Si
 
 
 def node(ident, state, *blockers, title=None, parent=None, project="p1"):
-    return {"identifier": ident, "title": title or "T " + ident, "url": "u/" + ident, "description": "", "state": {"name": state},
+    return {"id": "id-" + ident, "identifier": ident, "title": title or "T " + ident, "url": "u/" + ident, "description": "", "state": {"name": state},
             "parent": {"identifier": parent} if parent else None, "labels": {"nodes": [{"name": "Feature"}]}, "project": {"id": project},
             "inverseRelations": {"nodes": [{"type": "blocks", "issue": {"identifier": b, "state": {"name": s}, "labels": {"nodes": []}}} for b, s in blockers]}}
 
@@ -31,9 +31,8 @@ class Fake(unittest.TestCase):
         self.nodes = [node("NEB-7", "Done"), node("NEB-9", "Todo", ("NEB-7", "Done")), node("NEB-12", "Todo")]
         self.tracks_file = self.repo / "tracks.md"
         self.tracks_file.write_text(TRACKS)
-        story = node("NEB-10", "Todo", parent="NEB-9")
-        for mod, name, value in ((fc.fc_config, "LINEAR_KEY", KEY), (fc.fc_config, "WORKSPACE", "work"), (fc.fc_linear, "linear_gql", self.gql),
-                                 (fc.fc_linear, "linear_children", lambda ident: [story] if ident == "NEB-9" else [])):
+        self.stories = [node("NEB-10", "Todo", parent="NEB-9")]
+        for mod, name, value in ((fc.fc_config, "LINEAR_KEY", KEY), (fc.fc_config, "WORKSPACE", "work"), (fc.fc_linear, "linear_gql", self.gql)):
             p = mock.patch.object(mod, name, value); p.start(); self.addCleanup(p.stop)
 
     def set_docs(self, docs, content):
@@ -46,6 +45,9 @@ class Fake(unittest.TestCase):
         self.calls.append((q, variables))
         if "projects(filter" in q:
             return {"projects": {"nodes": [{"id": "p1", "name": "Shop", "url": URL, "teams": {"nodes": [{"id": "t1", "name": "Engineering", "key": "ENG"}]}}]}}
+        if "parent: {id: {in" in q:
+            return {"issues": {"pageInfo": {"hasNextPage": False, "endCursor": None},
+                               "nodes": [n for n in self.stories if "id-" + n["parent"]["identifier"] in variables["ids"]]}}
         if "labels: {some" in q:
             return {"issues": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": self.nodes if self.page is None else self.page}}
         if "documents(first" in q:
@@ -296,6 +298,30 @@ class Reconcile(Fake):
         with mock.patch.object(fc.fc_linear, "linear_issue", issue):
             fc.fc_delivery.reconcile(self.repo)
         self.assertEqual([c.args[0] for c in issue.call_args_list], ["NEB-12"])
+
+    def test_the_factory_s_read_reads_the_plan_once_and_every_open_feature_s_stories_in_one_query(self):
+        self.stories += [node("NEB-8", "Done", parent="NEB-7"), node("NEB-13", "Todo", parent="NEB-12")]
+        plan, r = fc.fc_delivery.plan_and_reconcile(self.repo)
+        self.assertEqual(r["ready"], ["NEB-10"])
+        self.assertEqual({i: [s["id"] for s in f["stories"]] for i, f in plan["features"].items() if f["stories"]}, {"NEB-9": ["NEB-10"], "NEB-12": ["NEB-13"]})
+        reads = [v for q, v in self.calls if "parent: {id: {in" in q]
+        self.assertEqual((len([q for q, _ in self.calls if "labels: {some" in q]), len(reads)), (1, 1))
+        self.assertNotIn("id-NEB-7", reads[0]["ids"])  # a finished feature's stories are not read
+
+    def test_no_plan_yet_reconciles_nothing(self):
+        self.set_docs([], "")
+        self.assertEqual(fc.fc_delivery.plan_and_reconcile(self.repo), (None, None))
+        self.mark.assert_not_called()
+
+    def test_the_stamp_is_one_read_that_changes_with_the_project(self):
+        latest = {"id": "i1", "updatedAt": "t1"}
+        answer = lambda: {"projects": {"nodes": [{"issues": {"nodes": [dict(latest)]}, "documents": {"pageInfo": {"hasNextPage": False}, "nodes": []}}]}}
+        with mock.patch.object(fc.fc_linear, "linear_gql", side_effect=lambda q, v: answer()) as gql:
+            first, again = fc.fc_delivery.stamp(self.repo), fc.fc_delivery.stamp(self.repo)
+            latest["updatedAt"] = "t2"
+            changed = fc.fc_delivery.stamp(self.repo)
+        self.assertEqual((first == again, first == changed, gql.call_count), (True, False, 3))
+        self.assertEqual(gql.call_args.args[1], {"slug": URL.rstrip("/").rsplit("-", 1)[-1]})
 
     def test_an_edit_made_during_the_run_is_kept(self):
         edited = PLAN + "\n## Why this order\n\nAuth first, edited by hand.\n"
