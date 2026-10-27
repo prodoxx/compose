@@ -208,11 +208,14 @@ class SkillDoc(unittest.TestCase):
             "WRITES ONLY",
             "design_concurrency",
             "figma_caps",
-            "compose figma check --project <slug> --plan",
+            "compose figma check --project <slug> --pages <pages> --modes <modes>",
             "compose figma publish --project <slug> --library",
             "publish: ask",
+            "`use_figma` and the `create_session` it needs",
         ):
             self.assertIn(phrase, d)
+        for phrase in ("stay on the official connector", "`whoami`, then", "(`get_libraries`"):
+            self.assertNotIn(phrase, d)
         self.assertLess(d.index("Foundations"), d.index("Components"))
         self.assertLess(d.index("Components"), d.index("Hand-off"))
 

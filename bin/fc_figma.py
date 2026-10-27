@@ -4,7 +4,8 @@ from pathlib import Path
 import fc_core, fc_config, fc_steps, fc_tasks, fc_linear, fc_models, fc_herdr, fc_crew, fc_init, fc_figmaplan, fc_figmanodes, fc_figmashots
 
 
-FIGMA_CONNECTOR = ("Figma tools: the authenticated Figma connector, `mcp__claude_ai_Figma__*` or the Figma plugin's `mcp__plugin_figma_figma__*` (the same server; use whichever ToolSearch finds), is for WRITES ONLY: `use_figma`, never a read-only script. Load it in one ToolSearch select call.\n"
+FIGMA_CONNECTOR = ("Figma tools: the authenticated Figma connector, `mcp__claude_ai_Figma__*` or the Figma plugin's `mcp__plugin_figma_figma__*` (the same server; use whichever ToolSearch finds), is for WRITES ONLY: `use_figma` (and the `create_session` it needs), never a read-only script, and never `whoami`, `get_libraries`, `search_design_system`, or `create_new_file`. Load it in one ToolSearch select call.\n"
+                   "A `use_figma` script that sets nothing is a read, even when it only measures layout, sizes, or positions: measure from Framelink tree data (`mcp__framelink-figma__get_figma_data` on the written nodes, or `compose figma tree`) after the write.\n"
                    "Every write script returns the facts it set (ids of nodes, variable bindings, component keys), so no read is needed to prove a binding.\n"
                    "Every READ goes through Framelink (`mcp__framelink-figma__get_figma_data` for node trees, `download_figma_images` for images): never `get_screenshot`, `get_metadata`, or `get_design_context`.\n"
                    "Framelink (REST) shows structure, names, layout, sizes, fills, text, fonts, component properties, and component keys; it has no variable bindings and no library flag, so prove a binding from the write's returned facts and library origin by component key. "
@@ -66,8 +67,8 @@ target Figma file is {figma}.
 2. Read, before any Figma write: the feature's Linear tree; a `compose linear list --search` search for "design system", "tokens",
    "Figma"; the Frame0 pages when `.compose/{slug}/design.f0` exists (`compose frame0 pages --project {slug}` reads the file; to see a page,
    `compose frame0 up --project {slug}` right before, `compose frame0 export --project {slug} --page <page>`, read the PNG, then `down`); the repo's tokens through trail
-   (`trail ask "<question>" --source`); DESIGN.md. Then in the Figma file: `whoami`, `get_libraries`, and `search_design_system`
-   (the only reads that stay on the official connector, one call each); every other read is a Framelink fetch.
+   (`trail ask "<question>" --source`); DESIGN.md. Then in the Figma file: a Framelink fetch of the stored file at depth 1, to see what the canvas has;
+   every Figma read is a Framelink fetch.
 3. """ + fc_figmaplan.PROBE_STEPS + """
 4. Load the `figma:figma-use` skill before every `use_figma` call.
    """ + FIGMA_CONNECTOR.replace("\n", "\n   ") + """ Tell every builder and the `design-review` teammate the same.
@@ -154,7 +155,7 @@ def cmd_designcrews(a):
     pages = fc_figmaplan.design_pages(tasks)  # pages already built count against the file's limit too
     blocked = fc_figmaplan.caps_blockers(caps, len(pages), 0) if caps else []
     if blocked and not a.print_:
-        sys.exit(f"{'; '.join(blocked)} ({', '.join(sorted(pages))}): {fc_figmaplan.BLOCKED_QUESTION} After the answer: compose figma check --project {proj.name} --plan <tier>")
+        sys.exit(f"{'; '.join(blocked)} ({', '.join(sorted(pages))}): {fc_figmaplan.BLOCKED_QUESTION} After the answer: run the probe again, then compose figma check --project {proj.name} --pages <pages> --modes <modes>")
     states = {m["id"]: m.get("linear_state") for m in tasks}
     waits = {m["id"]: [b for b in (x.strip() for x in str(m.get("after") or "").split(","))
                        if b and states.get(b) not in ("In Review", "Done")] + m.get("waits_on", []) for m in metas}
@@ -413,7 +414,7 @@ def cmd_figma(a):
             key = (json.loads((proj / "linear.json").read_text()) if (proj / "linear.json").exists() else {}).get("figma")
             if not key:
                 sys.exit("no Figma file: compose figma check --figma <url or key>")
-        print(f"figma file {key} stored in {proj / 'linear.json'}; confirm the write connector with whoami through the Figma MCP")
+        print(f"figma file {key} stored in {proj / 'linear.json'}; the capability probe, a use_figma write, confirms the write connector")
         try:
             pages_now = fc_figmaplan.count_pages(framelink_fetch(key, depth=1))
             print(f"framelink reads figma file {key}")

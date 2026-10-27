@@ -50,7 +50,8 @@ class FigmaCheck(unittest.TestCase):
             self.assertIn("figma file AbCdEf123456 stored in ", self.check())
         self.assertEqual(self.stored(), {"feature": "ENG-1", "figma": "AbCdEf123456"})
         self.assertIn("figma file AbCdEf123456 stored in ", out)
-        self.assertIn("confirm the write connector with whoami", out)
+        self.assertIn("the capability probe, a use_figma write, confirms the write connector", out)
+        self.assertNotIn("whoami", out)
         self.assertIn("framelink reads figma file AbCdEf123456", out)
         fetch.assert_called_with("AbCdEf123456", depth=1)
 
@@ -548,7 +549,7 @@ class FigmaCaps(unittest.TestCase):
     def caps(self):
         return json.loads((self.proj / "linear.json").read_text()).get("figma_caps")
 
-    def test_plan_tier_reads_whoami_text(self):
+    def test_plan_tier_reads_the_plan_text(self):
         t = fc.fc_figma.fc_figmaplan.plan_tier
         for text, tier in (("Starter", "starter"), ("free", "starter"), ("pro", "professional"), ("Professional (full seat)", "professional"),
                            ("org", "organization"), ("Organization", "organization"), ("enterprise", "enterprise"), ("team", None), ("", None), (None, None)):
@@ -588,10 +589,29 @@ class FigmaCaps(unittest.TestCase):
     def test_check_without_a_plan_shows_what_is_stored_or_says_it_is_not_checked(self):
         out, err = self.check()
         self.assertIn("capabilities not checked", out)
-        self.assertIn("compose figma check --project <slug> --plan", out)
+        self.assertIn("compose figma check --project <slug> --pages <pages> --modes <modes>", out)
+        self.assertNotIn("whoami", out)
         self.check(plan="org")
         out, _ = self.check()
         self.assertIn("plan organization", out)
+
+    def test_the_probe_alone_sets_the_tier_and_its_limits(self):
+        for pages, modes, tier, line in (("3", "1", "starter", "pages per file 3; modes per collection 1; library publish no"),
+                                         ("unlimited", "4", "professional", "pages per file no limit; modes per collection 4; library publish yes"),
+                                         ("unlimited", "unlimited", "organization", "modes per collection no limit; library publish yes; Code Connect yes")):
+            out, _ = self.check(pages=pages, modes=modes)
+            self.assertIn(f"Figma capabilities (probe): plan {tier}", out)
+            self.assertIn(line, out)
+            self.assertEqual(self.caps()["source"], "probe")
+        out, err = self.check(pages="3", modes="1", need_modes=2)
+        self.assertEqual(err, "the Figma plan blocks the design")
+        self.assertNotIn("measure them with the probe", out)
+
+    def test_a_probe_with_only_one_count_and_no_plan_is_refused(self):
+        for kw in (dict(pages="3"), dict(modes="4")):
+            out, err = self.check(**kw)
+            self.assertEqual(err, "pass both --pages and --modes (the probe's result), or --plan <tier>")
+        self.assertIsNone(self.caps())
 
     def test_unknown_plan_and_bad_counts_are_refused(self):
         for kw, msg in ((dict(plan="team"), "unknown Figma plan"), (dict(plan="pro", pages="lots"), "not a count or `unlimited`: lots")):
@@ -614,9 +634,13 @@ class FigmaCaps(unittest.TestCase):
 
     def test_the_probe_and_the_publish_step_are_in_the_designer_brief_and_the_stored_caps_follow_it(self):
         brief = fc.fc_figma.DESIGNER_BRIEF.format(slug="p", wt="/w", feature="ENG-1", figma="AbCd")
-        for text in ("Capability preflight", "compose figma check --project p --plan", "figma.createPage()", "addMode", "create_new_file", "compose-probe",
-                     "--pages <pages> --modes <modes>", "the one open question", "compose figma publish --project p --library", "`publish: none`", "`publish: ask`"):
+        for text in ("Capability preflight", "on the target file AbCd", "figma.createPage()", "addMode",
+                     "compose figma check --project p --pages <pages> --modes <modes>", "the one open question", "compose figma publish --project p --library", "`publish: none`", "`publish: ask`"):
             self.assertIn(text, brief)
+        for text in ("the only reads that stay", "one call each", "create_new_file`, ", "compose-probe", "figma-create-new-file"):
+            self.assertNotIn(text, brief)
+        self.assertIn("never `whoami`, `get_libraries`, `search_design_system`, or `create_new_file`", " ".join(brief.split()))
+        self.assertIn("a Framelink fetch of the stored file at depth 1", brief)
         wt = Path(tempfile.mkdtemp())
         for caps, line in ((None, "Figma capabilities: not checked yet"), (fc.fc_figma.fc_figmaplan.figma_caps("pro"), "Figma capabilities (table): plan professional")):
             (self.proj / "linear.json").write_text(json.dumps({"feature": "ENG-1", "figma": "AbCdEf123456", **({"figma_caps": caps} if caps else {})}))

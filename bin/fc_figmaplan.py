@@ -32,7 +32,7 @@ PLAN_LIMITS = {"starter": {"pages": 3, "modes": 1, "library_publish": False, "co
 DESIGN_SYSTEM_MODES = 2  # the design system's semantic color has Light and Dark (0d)
 
 def plan_tier(text):
-    """The tier in `whoami`'s plan text (starter, pro, org, enterprise, or the long names), else None."""
+    """The tier in a plan text (starter, pro, org, enterprise, or the long names), else None."""
     t = (text or "").lower()
     for tier, words in (("enterprise", "enterprise"), ("organization", "organization|org"), ("professional", "professional|pro"), ("starter", "starter|free")):
         if re.search(rf"\b({words})\b", t):
@@ -46,11 +46,17 @@ def limit_value(text):
         sys.exit(f"not a count or `unlimited`: {text}")
     return int(text)
 
+def probe_tier(modes):
+    """The tier the probe's mode count shows: 1 is starter, a limit of a few is professional, and no limit up to the probe's 5 is organization
+    (organization and enterprise gate the same things here)."""
+    return "organization" if modes is None else "starter" if modes <= 1 else "professional"
+
 def figma_caps(plan, pages="table", modes="table"):
-    """The record stored as `figma_caps`: the tier's predicted limits, each replaced by a probed value when one is given; `source` says which."""
-    tier = plan_tier(plan)
+    """The record stored as `figma_caps`: the tier's predicted limits, each replaced by a probed value when one is given; `source` says which.
+    With no plan, both probed values name the tier."""
+    tier = plan_tier(plan) if plan else probe_tier(modes)
     if not tier:
-        sys.exit(f"unknown Figma plan {plan!r}: pass the tier whoami shows (starter, pro, org, enterprise)")
+        sys.exit(f"unknown Figma plan {plan!r}: pass the tier of the plan (starter, pro, org, enterprise), or the probe's --pages and --modes")
     lim = PLAN_LIMITS[tier]
     caps = {"plan": tier, "pages_per_file": lim["pages"], "modes_per_collection": lim["modes"],
             "library_publish": lim["library_publish"], "code_connect": lim["code_connect"], "source": "table"}
@@ -100,13 +106,12 @@ try { col = figma.variables.createVariableCollection('probe'); for (let i = 1; i
 if (col) col.remove();
 return out;"""
 PROBE_STEPS = ("Capability preflight, once, before any plan, story, or task; never find a plan limit by a failing write.\n"
-               "   a. `whoami`: the plan tier of the file's team.\n"
-               "   b. `compose figma check --project {slug} --plan \"<that tier text>\" [--need-pages N] [--need-modes N]` stores the limits the tier predicts and prints BLOCKED when the design needs more "
-               "(the design system needs 2 modes, Light and Dark, unless a recorded decision says otherwise: then pass the decided count, `--need-modes 1` for light only). A known tier with no BLOCKED: done.\n"
-               "   c. BLOCKED, or an unknown tier: measure before raising anything. Load `figma:figma-create-new-file`, create a scratch file `compose-probe` with `create_new_file`, "
-               "run this once with `use_figma` on it, then rerun b with its result added as `--pages <pages> --modes <modes>`:\n"
+               "   a. Run this once with `use_figma` on the target file {figma}: it is a write (it adds scratch pages and a scratch variable collection and removes them again), "
+               "and it returns what the file's plan allowed. No other Figma tool takes part: the plan is read from this result, never from `whoami`.\n"
                "   " + PROBE_SCRIPT.replace("{", "{{").replace("}", "}}").replace("\n", "\n   ") + "\n"
-               "   d. Still BLOCKED: the check prints the one open question to raise now (upgrade vs design around), before planning. After an upgrade, rerun b.\n"
+               "   b. `compose figma check --project {slug} --pages <pages> --modes <modes> [--need-pages N] [--need-modes N]` with that result stores the limits and the tier they show, and prints BLOCKED when the design needs more "
+               "(the design system needs 2 modes, Light and Dark, unless a recorded decision says otherwise: then pass the decided count, `--need-modes 1` for light only). No BLOCKED: done.\n"
+               "   c. BLOCKED: the check prints the one open question to raise now (upgrade vs design around), before planning. After an upgrade, rerun a and b.\n"
                "   Plan inside the Figma capabilities line it leaves under the brief, and put that line in the feature's Linear Decisions.")
 PUBLISH_STEP = ("Before you ask the product owner to publish a library, run `compose figma publish --project {slug} --library <library url or key> [--keys <component keys the consumer needs>]` "
                 "and obey its first line: `publish: none` means nothing is pending, so do not ask (say \"nothing to publish\" and carry on); `publish: open` means an ask is already out, "
@@ -168,14 +173,16 @@ def publish_ruling(data, library, keys, api, withdraw=False):
 def capabilities_report(data, plan, pages, modes, pages_now, need_pages, need_modes=None):
     """The capability half of `figma check`: with a plan, store its limits in data (probed pages and modes replace the tier's predicted ones),
     then (lines to print, whether the design is blocked)."""
-    if plan:
+    if plan or pages is not None or modes is not None:
+        if not plan and (pages is None or modes is None):
+            sys.exit("pass both --pages and --modes (the probe's result), or --plan <tier>")
         data["figma_caps"] = figma_caps(plan, "table" if pages is None else limit_value(pages), "table" if modes is None else limit_value(modes))
     caps = data.get("figma_caps")
     if not caps:
-        return ["capabilities not checked: run `whoami`, then compose figma check --project <slug> --plan \"<its plan tier>\" (the designer brief's step 3)"], False
+        return ["capabilities not checked: run the probe, then compose figma check --project <slug> --pages <pages> --modes <modes> (the designer brief's step 3)"], False
     lines = [caps_line(caps) + (f"; the file has {pages_now} page(s) now" if pages_now else "")]
     blocked = caps_blockers(caps, need_pages, DESIGN_SYSTEM_MODES if need_modes is None else need_modes)
     if blocked:
         lines += [f"BLOCKED {b}" for b in blocked] + [BLOCKED_QUESTION + ("" if caps["source"] == "probe" else
-                 " The limits are the tier's predicted ones: measure them with the probe (brief step 3c) before raising the question.")]
+                 " The limits are the tier's predicted ones: measure them with the probe (brief step 3a) before raising the question.")]
     return lines, bool(blocked)
