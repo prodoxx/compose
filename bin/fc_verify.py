@@ -320,8 +320,8 @@ def verify_root(repo, proj, cfg):
 
 def at_root(value, olds, root):
     """`value` with every absolute path under one of `olds` (the project worktree, the main checkout) moved under `root`, in
-    every string, inside dicts and lists too. One pass, longest prefix first, each matched as a whole path: a path already
-    moved (the slot lives under the main checkout) is never moved again, and ~/code/app never matches ~/code/app-2/x.
+    every string, inside dicts and lists too. Longest prefix first, each matched as a whole path: a path already at `root` (the
+    slot lives under the main checkout) is never moved again, so a second call changes nothing, and ~/code/app never matches ~/code/app-2/x.
     A project's `.compose/` is git-ignored: a path in it moves only when it exists under `root` (the link stack_worktree makes),
     else it stays where the file is, so an e2e driver kept in the project worktree is still found."""
     olds = sorted({str(o) for o in olds} - {str(root)}, key=len, reverse=True)
@@ -333,6 +333,8 @@ def at_root(value, olds, root):
     if isinstance(value, list):
         return [at_root(v, olds, root) for v in value]
     def moved(m):
+        if re.match(re.escape(str(root)) + r"(?=/|$|[\s\"'`;:&|()<>,=])", m.string[m.start():]):
+            return m.group(0)  # already at `root`, which lives under an old one: moving it again doubles it
         tail = re.match(r"/\.compose(?:/[^\s\"'`;:&|()<>,=]*)?", m.string[m.end():])
         return m.group(0) if tail and not Path(str(root) + tail.group(0)).exists() else str(root)
     return path.sub(moved, value) if isinstance(value, str) else value

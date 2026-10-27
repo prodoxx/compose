@@ -23,6 +23,42 @@ class LayerChecks(Ship):
         self.assertFalse(self.origin_has("refs/heads/compose/p-layer-01"))
         self.assertFalse((self.proj / "layers.json").exists())
 
+    def test_a_failing_install_in_a_layer_refuses_the_submit_with_its_output_and_nothing_pushed(self):
+        for install, said in (("echo 'error: @slack-notification not found in workspace' >&2; exit 1", "@slack-notification not found"),
+                              ("no-such-bun-xyz install", "not found")):
+            self.config(checks=["true"], install=install)
+            out, code = self.submit()
+            self.assertEqual(code, 1, out)
+            self.assertFalse(any("Traceback" in l for l in out), out)
+            stop = [l for l in out if "STOP" in l]
+            self.assertEqual(len(stop), 1, out)
+            self.assertIn("layer 1 of 3 (compose/p-layer-01): install failed", stop[0])
+            self.assertIn(said, stop[0])
+            self.assertIn("Nothing was pushed", stop[0])
+            self.assertFalse(any("stack submit" in c for c in self.log()))
+            self.assertFalse(self.origin_has("refs/heads/compose/p-layer-01"))
+            wt = fc.fc_worktree.stack_worktree(self.repo, self.proj, "compose/p")
+            at = lambda *a: subprocess.run(["git", *a], cwd=wt, capture_output=True, text=True).stdout.strip()
+            self.assertEqual(at("branch", "--show-current"), "")  # put back on the trunk, detached
+            self.assertEqual(at("rev-parse", "HEAD"), self.git("rev-parse", "compose/p"))
+
+    def test_a_failing_install_on_the_base_refuses_the_submit_and_names_the_base(self):
+        fail = "echo 'FAIL: t002.test' && exit 1"
+        self.write("bun.lock", "x\n"); self.commit("Lock the groundwork")
+        for t in ("001", "002", "003"):
+            self.git("rebase", "-q", "compose/p", f"compose/p-{t}")
+        self.git("checkout", "-q", "compose/p")
+        self.config(checks=[f"! test -f 002.src || {{ {fail}; }}"],  # the base has no bun.lock, so it installs again there, and breaks
+                    install="test -f bun.lock || { echo 'lockfile out of date' >&2; exit 1; }")
+        out, code = self.submit()
+        self.assertEqual(code, 1, out)
+        self.assertFalse(any("Traceback" in l for l in out), out)
+        stop = [l for l in out if "STOP" in l]
+        self.assertEqual(len(stop), 1, out)
+        self.assertIn("layer 2 of 3 (compose/p-layer-02): install failed on the base", stop[0])
+        self.assertIn("lockfile out of date", stop[0])
+        self.assertFalse(self.origin_has("refs/heads/compose/p-layer-01"))
+
     def test_a_check_whose_script_a_later_layer_adds_waits_for_it_and_the_top_still_runs_every_check(self):
         missing = """echo 'error: Script not found "build-storybook"'; exit 1"""
         self.config(checks=[f"test -f 002.src || {{ {missing}; }}"])  # the script arrives with 002.src in layer 2
