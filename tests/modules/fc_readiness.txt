@@ -13,12 +13,15 @@ READINESS_RULES
 READY_FLOOR
 TECHNICAL_FLOOR
 STATE_CAP
+SHRINK
+STATE_FLOOR
 STRONG_SYSTEM
 _without_open_questions
 judge_state
 judge
 CHECK_VERSION
 HOMED
+judge_chain
 cache_path
 cache_key
 with_questions

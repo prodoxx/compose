@@ -333,6 +333,14 @@ class DesignTasks(unittest.TestCase):
         self.assertEqual(str(e.exception), 'typesafe (Jev acceptance): HTTP 400 Bad Request: {"detail":{"error_type":"max_tokens_exceeded"}}')
         self.assertTrue(err.fp.closed)
 
+    def test_jev_refusing_too_many_tokens_raises_too_big(self):
+        err = urllib.error.HTTPError("u", 400, "Bad Request", {}, io.BytesIO(b'{"detail":{"error_type":"max_tokens_exceeded"}}'))
+        self.addCleanup(err.close)
+        with mock.patch.object(urllib.request, "urlopen", side_effect=err):
+            with self.assertRaises(fc.fc_models.TooBig) as e:
+                fc.fc_models.jev_ask({"TYPESAFE_API_KEY": "k"}, {}, {"s": "x"}, {}, "Jev readiness")
+        self.assertIn("max_tokens_exceeded", str(e.exception))
+
     def test_a_refused_payment_closes_the_error_and_still_raises_payment_required(self):
         for code, reason, body in ((402, "Payment Required", b""), (403, "Forbidden", b"insufficient credits on this key")):
             err = urllib.error.HTTPError("u", code, reason, {}, io.BytesIO(body))
