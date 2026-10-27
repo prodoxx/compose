@@ -11,10 +11,13 @@ LINEAR_MAX_WAIT = 300  # the doubling pause stops growing here
 LINEAR_CALL_SECONDS = 120  # one call, its turn in the pace, its rate-limit waits and slow replies included, never takes longer: it fails naming the time, so no caller waits silently
 
 # Linear's hour for an API key: 2,500 requests and 3,000,000 complexity points, shared by every compose process using the
-# key. Calls go at full speed while over half of both remain; the rest of each is spread evenly over the time left in the
-# hour, down to a reserve the CLI never spends (50 requests, 60,000 points), so a call from outside the pace still has room.
+# key. Linear's bucket refills continuously (a full limit per hour), so the reset header slides with the clock and is no
+# deadline. Calls go at full speed while over a tenth of both remain; below that they keep to the refill rate, down to a
+# reserve the CLI never spends (50 requests, 60,000 points), so a call from outside the pace still has room.
 LINEAR_PACE_FLOOR = 0.25  # seconds between two calls from this machine at most speed
 LINEAR_RESERVE = 0.02     # the share of each hourly limit the CLI leaves untouched
+LINEAR_SLOW = 0.1         # the share of each hourly limit left under which calls slow to the refill rate
+LINEAR_REFILL = 3600      # seconds the bucket takes to give back a full limit
 
 class LinearRateLimited(RuntimeError):
     def __init__(self, message, wait):
@@ -62,11 +65,12 @@ def linear_pace(s, now):
         limit, left, reset = s.get(f"{kind}_limit"), s.get(f"{kind}_left"), s.get(f"{kind}_reset")
         if not limit or left is None or not reset or reset <= now:  # nothing learned, or the hour it described is over
             continue
-        calls = (left - limit * LINEAR_RESERVE) / per_call
-        if calls < 1:
-            not_before = max(not_before, reset)
-        elif left <= limit / 2:
-            spacing = max(spacing, (reset - now) / calls)
+        refill = LINEAR_REFILL / limit  # seconds the bucket takes to give back one point
+        if left <= limit * LINEAR_SLOW:
+            spacing = max(spacing, per_call * refill)
+        spare = left - limit * LINEAR_RESERVE
+        if spare < per_call:
+            not_before = max(not_before, now + (per_call - spare) * refill)
     return not_before, spacing
 
 def _linear_post(query, variables, attempt):
