@@ -311,6 +311,7 @@ def run_alive(proj):
 
 def mark_fixing(proj, rnd):
     """Verify's fix round `rnd` is about to run in this process: `fixing` tells watch that a fix loop, not an ordinary run, is going."""
+    (proj / "results").mkdir(parents=True, exist_ok=True)
     fc_core.atomic_write(proj / "results" / "fixing.json", json.dumps({"pid": os.getpid(), "round": rnd}))
 
 def fixing(proj):
