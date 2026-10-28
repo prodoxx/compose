@@ -1,7 +1,7 @@
 """The build loop's decision step: what is in flight, and which ready stories to start next."""
 import copy, hashlib, json, os, re, subprocess, sys, time, traceback
 from pathlib import Path
-import fc_change, fc_config, fc_core, fc_delivery, fc_herdr, fc_linear, fc_load, fc_plan, fc_prd, fc_readiness, fc_reconcile, fc_tasks
+import fc_change, fc_config, fc_core, fc_delivery, fc_linearapi, fc_herdr, fc_linear, fc_load, fc_plan, fc_prd, fc_readiness, fc_reconcile, fc_tasks
 import fc_factorystate
 
 JUDGE_LIMIT = 6
@@ -57,7 +57,7 @@ def pick(entries, plan, state, free, judge):
     while stories build, and reaches stories whose feature waits on another, which are never started. judge(id, write=True) is the
     caller's readiness check; the caller binds the repo. Only a fresh verdict counts toward JUDGE_LIMIT: a kept one costs nothing."""
     flying = set(in_flight(plan, state))
-    out = {"picks": [], "ready_waiting": False, "offer": None, "failed": [], "specced": set()}
+    out = {"picks": [], "ready_waiting": False, "offer": None, "failed": [], "specced": set(), "busy": False}
     candidate, judged = None, 0
     for e in entries:
         if judged >= JUDGE_LIMIT or (len(out["picks"]) == free and candidate):
@@ -72,6 +72,9 @@ def pick(entries, plan, state, free, judge):
         labels = (story_of(plan, e["id"]) or {}).get("labels", [])
         try:
             r = judge(e["id"], write=True)
+        except fc_linearapi.LinearBusy:  # not a judge failure: the pace holds every call, so no other story is judged this turn either
+            out["busy"] = True
+            break
         except (fc_readiness.NotAStory, RuntimeError, OSError) as ex:
             out["failed"].append((e["id"], str(ex)))
             continue
@@ -351,6 +354,8 @@ def _move_up(repo, plan, entries, picked, state, judge, out):
                 done = i if judge(i, write=False).get("specced") else None
             except fc_readiness.NotAStory:
                 continue
+            except fc_linearapi.LinearBusy:
+                return failed
             except (RuntimeError, OSError) as ex:
                 failed.append((i, str(ex)))
                 continue
@@ -481,7 +486,8 @@ def _turn(repo, state, now, stopping, saved, out):
     free = 0 if fc_load.held() else max(0, fc_factorystate.pace(state)["cap"] - len(in_flight(plan, state)))
     judge = lambda s, **kw: fc_readiness.story_readiness(repo, s, **kw)
     got = pick(entries, plan, state, free, judge)
-    got["failed"] += _move_up(repo, plan, entries, got["specced"], state, judge, out)
+    if not got["busy"]:  # Linear is rate limited: no judge runs until it passes
+        got["failed"] += _move_up(repo, plan, entries, got["specced"], state, judge, out)
     live = {i for i, _ in got["failed"]}
     for key in [k for k in said if k.startswith("judge-failed:") and k[13:] not in live]:
         del said[key]

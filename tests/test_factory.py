@@ -528,6 +528,15 @@ class Turn(unittest.TestCase):
             lines = ft.turn(self.repo, self.state, 100.0)
         self.assertIn('event factory=judge-failed story=NEB-10 why="linear timed out"', lines)
 
+    def test_a_linear_rate_limit_is_no_judge_failure_and_stops_judging_for_the_turn(self):
+        seen = []
+        def busy(repo, s, **kw):
+            seen.append(s)
+            raise ft.fc_linearapi.LinearBusy("Linear rate limit (HTTP 429) (Linear lets calls through again in about 4m; run it again then)")
+        with unittest.mock.patch.object(ft.fc_readiness, "story_readiness", busy):
+            lines = ft.turn(self.repo, self.state, 100.0)
+        self.assertEqual((seen, [l for l in lines if "judge-failed" in l]), (["NEB-10"], []))
+
     def test_a_bad_delivery_plan_is_one_turn_failed_line(self):
         import fc_plan
         self.product_plan.side_effect = fc_plan.TracksError("track a: no such wave")

@@ -24,6 +24,9 @@ class LinearRateLimited(RuntimeError):
         super().__init__(message)
         self.wait = wait
 
+class LinearBusy(RuntimeError):
+    """Linear's rate limit outlasted the call's time: nothing ran, and Linear lets calls through again after `wait` seconds."""
+
 def _number(v):
     try:
         return float(v) if isinstance(v, (str, int, float)) else None
@@ -129,6 +132,6 @@ def linear_gql(query, variables):
         except LinearRateLimited as e:
             fc_pace.hold("linear", e.wait)
             if e.wait > deadline - time.monotonic() or attempt == LINEAR_RETRIES:
-                raise RuntimeError(f"{e} (Linear lets calls through again in about {fc_pace.about(e.wait)}; run it again then)") from None
+                raise LinearBusy(f"{e} (Linear lets calls through again in about {fc_pace.about(e.wait)}; run it again then)") from None
             print(f"Linear rate limit: waiting {int(e.wait)}s, then retry {attempt + 1} of {LINEAR_RETRIES}", file=sys.stderr)
             time.sleep(e.wait)
