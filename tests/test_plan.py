@@ -282,8 +282,27 @@ class LinearMarkdown(unittest.TestCase):
         ours = "Code involved:\n- a.tsx\n- b.tsx\n\nQuestions:\n1. Why?\n   Recommendation: x\n2. How?\n"
         theirs = "Code involved:\n\n* a.tsx\n* b.tsx\n\nQuestions:\n\n1. Why?\n   Recommendation: x\n2. How?"
         self.assertTrue(fc_plan.same_markdown(ours, theirs))
-        self.assertEqual(fc_plan.linear_markdown("- a\n  - b\nlazy\n- c"), "* a\n  * b\nlazy\n* c")  # inside a list nothing is added
-        self.assertFalse(fc_plan.same_markdown("Items:\n- a", "Items:\n\n\n* a"))  # one blank line is Linear's; more is the writer's
+        self.assertEqual(fc_plan.linear_markdown("- a\n  - b\nlazy\n- c"), "* a\n  * b\nlazy\n* c")  # nesting and a lazy line stay
+
+    def test_every_text_linear_gave_back_after_a_real_save_is_the_same_text(self):
+        # captured from a Linear document: what compose wrote (.ours.md) and what Linear served right after (.theirs.md)
+        pairs = sorted((Path(__file__).parent / "linear_roundtrips").glob("*.ours.md"))
+        self.assertGreaterEqual(len(pairs), 2)
+        for ours in pairs:
+            theirs = ours.with_name(ours.name.replace(".ours.", ".theirs."))
+            with self.subTest(ours.name.split(".")[0]):
+                self.assertEqual(fc_plan.linear_markdown(ours.read_text()), fc_plan.linear_markdown(theirs.read_text()))
+                self.assertTrue(fc_plan.same_words(ours.read_text(), theirs.read_text()))
+
+    def test_a_changed_word_or_order_is_not_the_same_text_however_it_is_escaped(self):
+        ours = "- app/src/routes/__root.tsx\n- app/src/routes/_authed.tsx\n"
+        theirs = "* app/src/routes/\\__root.tsx\n* app/src/routes/\\_authed.tsx"
+        self.assertTrue(fc_plan.same_markdown(ours, theirs))
+        for other in (theirs.replace("authed", "guard"), theirs.replace("tsx", "ts"), "\n".join(reversed(theirs.split("\n"))), theirs + "\n* x"):
+            self.assertFalse(fc_plan.same_markdown(ours, other))
+            self.assertFalse(fc_plan.same_words(ours, other))
+        self.assertFalse(fc_plan.same_markdown("a\n\n```\nx\n\ny\n```", "a\n\n```\nx\ny\n```"))  # a blank line in code is content
+        self.assertTrue(fc_plan.same_words("a | b\n--|--", "a  b"))  # words only: for a rewrite nobody has met yet
 
 class ProductSeed(unittest.TestCase):
     def setUp(self):
