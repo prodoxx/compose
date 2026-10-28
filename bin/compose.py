@@ -404,6 +404,7 @@ def main():
             s.add_argument("--force", action="store_true", help="with --project: clean it although teammates are still working")
             s.add_argument("--abandon", action="store_true", help="with --project: remove an unmerged project (worktree, branches, herdr space) after listing what goes and what stays; Linear and pushed branches are untouched")
             s.add_argument("--dry-run", action="store_true", help="with --abandon: list what it would remove and what it keeps, remove nothing")
+            s.add_argument("--delete-remote", action="store_true", help="also delete merged layer branches on the remote (a push; without it clean only names them)")
             s.add_argument("--delete-unmerged", action="store_true", help="also delete task branches not merged into HEAD (layers a reviewer has not merged yet)")
         if name == "verify":
             s.add_argument("--skip-e2e", action="store_true")

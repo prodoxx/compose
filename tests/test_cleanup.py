@@ -366,6 +366,41 @@ class SharedSpaceClean(unittest.TestCase):
         self.assertEqual(closes, [("tab", "close", "t1"), ("tab", "close", "t2")])
         self.assertEqual(lines, ["clean left shop-tests-001 open (last report: working)"])
 
+    def test_a_space_of_several_projects_never_counts_another_projects_team_lead_as_live_crew(self):
+        wt = Path(tempfile.mkdtemp()).resolve(); proj = wt / ".compose" / "shop"
+        (proj / "results").mkdir(parents=True)  # no recorded shared space: the tabs carry bare labels, so every tab of the space looks like its own
+        self.spaces = [{"workspace_id": "w7", "label": "shop", "worktree": {"checkout_path": str(wt)}}]
+        self.tabs = (("t1", "1"), ("t4", "2"))
+        self.calls = []
+        with mock.patch.object(fc.fc_herdr, "herdr", self.herdr), mock.patch.object(fc.fc_herdr, "herdr_env", return_value=True):
+            self.assertEqual(fc.fc_clean.live_crew(proj), [])
+
+
+class RemoteBranches(unittest.TestCase):
+    """Clean is the post-merge step, but a delete on the remote is a push: it names the merged layers and pushes only on --delete-remote."""
+    def clean(self, **kw):
+        wt = Path(tempfile.mkdtemp()).resolve(); proj = wt / ".compose" / "shop"
+        (proj / "results").mkdir(parents=True); (proj / "verify.json").write_text("{}")
+        calls = []
+        def sh(cmd, cwd, **_):
+            calls.append(cmd)
+            out = {"remote": "origin\n", "for-each-ref": "origin/compose/shop-layer-01\n" if "refs/remotes/*/compose/shop-layer-*" in cmd else ""}.get(cmd[1], "")
+            return subprocess.CompletedProcess(cmd, 0, out, "")
+        buf = io.StringIO()
+        with mock.patch.object(fc.fc_core, "sh", sh), mock.patch.object(fc.fc_clean, "live_crew", return_value=[]), \
+                mock.patch.object(fc.fc_clean.fc_layers, "layer_prefix", return_value="compose/shop-"), \
+                mock.patch.object(fc.fc_clean, "merge_evidence", return_value="PR merged"), mock.patch.object(fc.fc_clean, "settle_clean"), \
+                mock.patch("sys.stdout", buf):
+            fc.fc_clean.clean_project(wt, "shop", wt, proj, explicit=True, **kw)
+        return calls, buf.getvalue()
+
+    def test_a_merged_layer_stays_on_the_remote_unless_delete_remote_is_given(self):
+        calls, out = self.clean()
+        self.assertFalse([c for c in calls if c[:2] == ["git", "push"]])
+        self.assertIn("origin/compose/shop-layer-01 is merged", out)
+        calls, out = self.clean(delete_remote=True)
+        self.assertIn(["git", "push", "-q", "origin", "--delete", "compose/shop-layer-01"], calls)
+
 
 if __name__ == "__main__":
     unittest.main()

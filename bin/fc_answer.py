@@ -9,7 +9,7 @@ ANSWERERS = 2
 MORNING = ("shape ", "deep-dive ", "stories ")
 ISSUE_RE = re.compile(r"\b([A-Z][A-Z0-9]*-\d+)\b")
 NEVER_WORDS = re.compile("|".join((
-    r"force[- ]?push|push\s+--force|--force\b|--delete-unmerged|--abandon",
+    r"force[- ]?push|push\s+--force|--force\b|--delete-unmerged|--delete-remote|--abandon",
     r"(?:delete|drop|wipe|truncate)\s+(?:the\s+)?(?:branch|database|table|data|bucket)",
     r"(?:add|create|rotate|new|generate|paste|use)\s+(?:a\s+|an\s+|the\s+)?(?:new\s+)?(?:api[- ]?key|secret key|access token|credential)",
     r"(?:switch|change)\s+(?:the\s+)?(?:model|provider)",

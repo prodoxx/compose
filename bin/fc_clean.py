@@ -89,8 +89,9 @@ def live_crew(proj):
         if c["name"] != lead and not c.get("closed") and last.get("state") != "done" and not fc_crew.tab_closed(c, agents):
             why.append(f"{c['name']} last reported {last.get('state', 'nothing')}")
     space = fc_herdr.herdr_project_space(proj) if fc_herdr.herdr_env() else None
-    tabs = {t["tab_id"] for t in fc_herdr.herdr_project_tabs(proj, space)} if space else set()  # a shared space's other agents are not this project's
-    why += [f"{ag.get('name')} is alive in its herdr space" for ag in agents or [] if ag.get("tab_id") in tabs and ag.get("name") != lead]
+    tabs = {t["tab_id"] for t in fc_herdr.herdr_project_tabs(proj, space)} if space else set()  # a space of several projects holds other projects' agents too: only agents named for this project count
+    why += [f"{ag.get('name')} is alive in its herdr space" for ag in agents or [] if ag.get("tab_id") in tabs and ag.get("name") != lead
+            and fc_herdr.agent_id(proj.name, ag.get("name") or "")]
     return why
 
 def runs_inside(here, root):
@@ -207,10 +208,11 @@ def settle_clean(main_repo, name, wt, proj, pbranch, link, metas, merged, projec
         remove_project(main_repo, name, wt, proj, pbranch)
     print(line)
 
-def clean_project(main_repo, name, wt, proj, delete_unmerged=False, explicit=False, force=False):
+def clean_project(main_repo, name, wt, proj, delete_unmerged=False, explicit=False, force=False, delete_remote=False):
     """The post-merge step. Fetch, then remove what the reviewer's merges made redundant: task clones and the CLI's stack
     worktree always; task branches merged into the project branch (locally or on the remote); and, once every layer and the
-    project branch itself are merged, the project worktree and branch. Unmerged work is kept and named."""
+    project branch itself are merged, the project worktree and branch. Unmerged work is kept and named. Merged layer branches on a remote are only named, and
+    deleted (a push) when `delete_remote` is set."""
     import shutil
     repo = wt
     crew = live_crew(proj)
@@ -249,9 +251,11 @@ def clean_project(main_repo, name, wt, proj, delete_unmerged=False, explicit=Fal
         why = merge_evidence(repo, lb, targets, has_remote)
         if why:
             layer_why[lb] = why
-    for lb, remotes in remote_layers.items():  # a push, but clean is the post-merge step: only layers proven merged lose their remote branch
+    for lb, remotes in remote_layers.items():  # a push: clean never makes one on its own, so it names the merged layers and waits for --delete-remote
         for remote in remotes if lb in layer_why else []:
-            if fc_core.sh(["git", "push", "-q", remote, "--delete", lb], repo, check=False).returncode == 0:
+            if not delete_remote:
+                print(f"clean  {remote}/{lb} is merged ({layer_why[lb]}) and stays on the remote: `compose clean --project {name} --delete-remote` deletes it, or delete the branch on GitHub")
+            elif fc_core.sh(["git", "push", "-q", remote, "--delete", lb], repo, check=False).returncode == 0:
                 print(f"clean  deleted {remote}/{lb} on the remote: {layer_why[lb]}")
             else:
                 print(f"clean  could not delete {remote}/{lb} on the remote; left in place")
@@ -372,4 +376,5 @@ def cmd_clean(a):
     if not projects:
         sys.exit("no projects to clean")
     for name, (wt, proj) in projects.items():
-        clean_project(main_repo, name, wt, proj, delete_unmerged=a.delete_unmerged, explicit=bool(a.project), force=a.force)
+        clean_project(main_repo, name, wt, proj, delete_unmerged=a.delete_unmerged, explicit=bool(a.project), force=a.force,
+                      delete_remote=getattr(a, "delete_remote", False))

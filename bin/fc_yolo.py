@@ -6,7 +6,7 @@ import fc_cost, fc_core, fc_tasks, fc_worktree, fc_decide, fc_watch
 # ---------- `away` and `yolo`: the product owner is away; the engineering manager answers with the recommendation and logs it ----------
 YOLO_NEVER = ("destructive, irreversible, and security-sensitive actions are never pre-authorizable whatever the words say: "
               "anything that costs money beyond the configured models (a model or provider switch, keys), the payment halt, "
-              "merging a toolsmith fix into compose itself, force-push, `clean --delete-unmerged`, `clean --abandon`, `crew stop --force`, "
+              "merging a toolsmith fix into compose itself, force-push, `clean --delete-unmerged`, `clean --delete-remote`, `clean --abandon`, `crew stop --force`, "
               "attended prompts (Frame0 Allow, sign-ins), and anything the product owner's CLAUDE.md forbids. These still stop and wait.")
 YOLO_TAG = fc_decide.UNCONFIRMED  # what the map's Decisions so far shows after a decision taken for the product owner
 def digest_sections(repo, proj, y):

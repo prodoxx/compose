@@ -4,7 +4,7 @@ from pathlib import Path
 import fc_core, fc_prompt
 
 # The narrowest rules for the Bash calls a role makes itself (a call compose makes inside its own process never reaches Claude Code).
-# Never here: git push, force-push, `gh pr merge` (a toolsmith fix merged into compose is in 0h's never-set), `clean --delete-unmerged`,
+# Never here: git push, force-push, `gh pr merge` (a toolsmith fix merged into compose is in 0h's never-set), `clean --delete-unmerged`, `clean --delete-remote`,
 # `clean --abandon`, `crew stop --force`. The team lead's and planner's file-edit denial is `compose guard`, not a permission rule: it stays.
 RULES = (
     ("Bash(gh pr view *)", "read a pull request's state and fields before acting on it"),
@@ -59,7 +59,7 @@ def offer(yes, dry=False):
         return []
     why = dict(RULES)
     fc_prompt.note(NAME, [f"{rule}: {why[rule]}" for rule in left]
-                   + ["These stay asking: git push, force-push, gh pr merge, clean --delete-unmerged, clean --abandon, crew stop --force."])
+                   + ["These stay asking: git push, force-push, gh pr merge, clean --delete-unmerged, clean --delete-remote, clean --abandon, crew stop --force."])
     where = fc_core.tilde(str(settings_path()))
     if dry:
         return [f"would add {len(left)} permission rule{'s' * (len(left) != 1)} to {where}"]
