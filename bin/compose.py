@@ -163,8 +163,12 @@ def main():
             s.add_argument("target", nargs="*")
             for flag in ("--body", "--comments", "--json", "--append", "--description", "--any-project", "--fresh"):
                 s.add_argument(flag, action="store_true")
-            for flag in ("--label", "--add-label", "--drop-label", "--blocked-by", "--add-blocked-by", "--drop-blocked-by"):
-                s.add_argument(flag, action="append")
+            multi = {"--label": "the whole label list (repeat or comma-separate); replaces the issue's labels",
+                     "--add-label": "add a label and keep the rest", "--drop-label": "drop a label and keep the rest",
+                     "--blocked-by": "the issue's WHOLE blocker set (repeat or comma-separate): every blocker not named is removed; to add or remove one, use --add-blocked-by or --drop-blocked-by",
+                     "--add-blocked-by": "update only: add a blocker and keep the rest", "--drop-blocked-by": "update only: remove a blocker and keep the rest"}
+            for flag, text in multi.items():
+                s.add_argument(flag, action="append", help=text)
             for flag in ("--parent", "--search", "--state", "--priority", "--title", "--file", "--section", "--expect", "--create", "--into"):
                 s.add_argument(flag)
         if name == "delivery":

@@ -265,6 +265,16 @@ class SyncFromLinear(unittest.TestCase):
                 self.assertIn(f"sync: Linear failed (boom); compose sync --stdin still works ({fc.fc_tasks.SYNC_SHAPE})", self.fails(gql))
         self.assertFalse((self.proj / "results" / "tasks.json").exists())
 
+class BlockedByHelp(unittest.TestCase):
+    def test_help_says_blocked_by_replaces_the_set_and_a_repeat_keeps_every_value(self):
+        out = io.StringIO()
+        with mock.patch.object(sys, "argv", ["compose", "linear", "--help"]), redirect_stdout(out), self.assertRaises(SystemExit):
+            fc.main()
+        text = " ".join(out.getvalue().split())
+        self.assertIn("WHOLE blocker set", text)
+        self.assertIn("add a blocker and keep the rest", text)
+
+
 class LinearErrors(unittest.TestCase):
     """linear_gql with urlopen faked: an HTTP error whose body holds Linear's `errors` gives the text a 200 reply gives."""
     def setUp(self):
