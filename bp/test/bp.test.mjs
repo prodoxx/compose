@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync, existsSync, rmSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { createServer } from 'node:http';
 import path from 'node:path';
 
 const BP = path.resolve(import.meta.dirname, '../bin/bp.mjs');
@@ -31,6 +32,25 @@ test('stopChrome removes the profile only after the browser exits, and SIGKILLs 
     assert.deepEqual([chrome.exitCode, chrome.signalCode], status);
     assert.ok(!existsSync(profile), 'the profile was left behind');
   }
+});
+
+test('bp has no default port, and launch refuses a port that already has a browser or a bad viewport', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'bp-port-'));
+  const marker = path.join(dir, 'launched');
+  const chrome = path.join(dir, 'fake-chrome');
+  writeFileSync(chrome, `#!/bin/sh\ntouch "${marker}"\n`); chmodSync(chrome, 0o755);
+  const noPort = bp(['list'], { BP_PORT: undefined }, dir);
+  assert.equal(noPort.status, 1);
+  assert.match(noPort.stderr, /set BP_PORT/);
+  // A stand-in for the product owner's browser answers on the port.
+  const server = createServer((_, res) => res.end('{}')); await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const taken = await new Promise((r) => spawn(process.execPath, [BP, 'launch'], { env: { ...process.env, BP_PORT: String(server.address().port), BP_CHROME: chrome } }).on('exit', r));
+  server.close();
+  assert.equal(taken, 1);
+  const bad = bp(['launch', '--viewport', '390'], { BP_PORT: '59877', BP_CHROME: chrome }, dir);
+  assert.match(bad.stderr, /WIDTHxHEIGHT/);
+  assert.ok(!existsSync(marker), 'launch started a browser anyway');
+  rmSync(dir, { recursive: true, force: true });
 });
 
 test('--help and -h print usage and exit 0 without running any command', () => {

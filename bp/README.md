@@ -18,7 +18,7 @@ Set `BP_CHROME` to use another build.
 
 ```sh
 export BP_PORT=9333 BP_EXT=/path/to/unpacked-extension
-bp launch https://example-ats.com/job            # the profile persists at /tmp/bp-profile-9333, so logins survive a relaunch
+bp launch https://example-ats.com/job --viewport 390x844   # --viewport sets the window size for mobile shots; the profile persists at /tmp/bp-profile-9333, so logins survive a relaunch
 bp list                                           # find the page id
 bp hosts <id> --out shots/panel.png               # extension panel text and buttons with coordinates
 bp clicktext <id> "^Autofill$"                    # or: bp click <id> 1008 301
@@ -43,6 +43,7 @@ Everything else is plain CDP with no model: it does only what you type.
 - Never let a flow click a final Submit on a real employer form. Check `bp form <id>` and a screenshot instead.
 - Screenshots and notes go next to the work (`shots/`, `notes/`), with an `index.md` line per screenshot. `bp record` writes that index for you.
 - `bp cookies <id> clear` logs the human out of that site. Say so in your report and ask them to log back in.
+- `BP_PORT` has no default, and `launch` refuses a port that already has a browser, so you never attach to a browser someone else (the product owner) runs. Pick a port only you use.
 - Use one Chromium per port, for example `BP_PORT=9334` for a second extension, so profiles and extensions do not mix.
 - Do not hard-code coordinates in anything reusable. They are only valid for the current viewport.
 - `bp goal` hands control to jev's model. State the stopping point in the goal text, and verify the result with `bp form` and a screenshot; a DONE from the model is not proof.

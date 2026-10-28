@@ -6,13 +6,16 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 
-const PORT = process.env.BP_PORT || '9333';
+// No default port: a shared default let a teammate attach to the product owner's own browser. Every command names its own port.
+const PORT = process.env.BP_PORT;
+const needPort = () => { if (!/^\d+$/.test(PORT || '')) throw new Error('set BP_PORT to a debugging port only you use (a browser you did not launch on it is not yours to attach to)'); };
 // Newest Playwright Chromium on macOS; Chrome 154+ ignores --load-extension, so the branded browser cannot be used.
 const playwrightChromium = () => { const dir = `${process.env.HOME}/Library/Caches/ms-playwright`; const v = existsSync(dir) ? readdirSync(dir).filter((d) => /^chromium-\d+$/.test(d)).sort((a, b) => b.slice(9) - a.slice(9))[0] : null;
   return v ? `${dir}/${v}/chrome-mac-${process.arch === 'arm64' ? 'arm64' : 'x64'}/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing` : `${dir}/chromium-*`; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function connect() {
+  needPort();
   const v = await (await fetch(`http://127.0.0.1:${PORT}/json/version`)).json();
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(v.webSocketDebuggerUrl); let id = 0; const pending = new Map();
@@ -62,7 +65,11 @@ const cmds = {
     const ext = flags.ext || process.env.BP_EXT; const profile = flags.profile || process.env.BP_PROFILE || `/tmp/bp-profile-${PORT}`;
     const bin = process.env.BP_CHROME || playwrightChromium();
     if (!existsSync(bin)) throw new Error(`Chromium not found at ${bin}; set BP_CHROME. Chrome 154+ ignores --load-extension, use Playwright's build.`);
-    const args = [`--user-data-dir=${profile}`, '--no-first-run', `--remote-debugging-port=${PORT}`]; if (ext) args.push(`--load-extension=${ext}`); if (flags.headless || process.env.BP_HEADLESS === '1') args.push('--headless=new'); args.push(url || 'about:blank');
+    needPort();
+    if (await fetch(`http://127.0.0.1:${PORT}/json/version`).then(() => true, () => false)) throw new Error(`a browser is already on :${PORT}; it is not yours to reuse, pick a free BP_PORT`);
+    const vp = flags.viewport === undefined ? null : String(flags.viewport).match(/^(\d+)x(\d+)$/);
+    if (flags.viewport !== undefined && !vp) throw new Error('--viewport takes WIDTHxHEIGHT, for example 390x844');
+    const args = [`--user-data-dir=${profile}`, '--no-first-run', `--remote-debugging-port=${PORT}`]; if (ext) args.push(`--load-extension=${ext}`); if (vp) args.push(`--window-size=${vp[1]},${vp[2]}`); if (flags.headless || process.env.BP_HEADLESS === '1') args.push('--headless=new'); args.push(url || 'about:blank');
     const child = spawn(bin, args, { detached: true, stdio: 'ignore' }); child.unref();
     for (let i = 0; i < 40; i++) { try { await fetch(`http://127.0.0.1:${PORT}/json/version`); console.log(`up on :${PORT} pid ${child.pid} profile ${profile}${ext ? ' ext ' + ext : ''}`); return; } catch { await sleep(250); } }
     throw new Error('Chromium did not open the debug port');
@@ -101,6 +108,7 @@ const cmds = {
   async record([sel, dir], flags) { mkdirSync(dir, { recursive: true }); const b = await connect(); let last = ''; let n = 0; const skip = flags.exclude ? new RegExp(flags.exclude) : null; console.log('recording', sel, '→', dir, '(Ctrl-C to stop)'); for (;;) { try { const { targetInfos } = await b.send('Target.getTargets'); const cands = targetInfos.filter((x) => x.type === 'page' && x.url.includes(sel) && !(skip && skip.test(x.url))).sort((a, c) => c.url.length - a.url.length); const t = cands[0]; if (t) { const { sessionId } = await b.send('Target.attachToTarget', { targetId: t.targetId, flatten: true }); const { data } = await b.send('Page.captureScreenshot', { format: 'png' }, sessionId); const h = createHash('md5').update(data).digest('hex').slice(0, 10); if (h !== last) { last = h; n++; const f = path.join(dir, String(n).padStart(3, '0') + '.png'); writeFileSync(f, Buffer.from(data, 'base64')); const line = `${new Date().toISOString().slice(11, 19)} ${path.basename(f)} ${t.url.slice(0, 100)} | ${(t.title || '').slice(0, 60)}`; console.log(line); appendFileSync(path.join(dir, 'index.md'), line + '\n'); } await b.send('Target.detachFromTarget', { sessionId }); } } catch {} await sleep(Number(flags.interval || 2000)); } },
   async close([sel]) { const b = await connect(); const { t } = await target(b, sel); await b.send('Target.closeTarget', { targetId: t.targetId }); console.log('closed', t.url.slice(0, 80)); b.close(); },
   async goal([url, ...goals], flags) {
+    needPort();
     // Run compose's jev (../../jev) against THIS bp Chromium: browser-harness attaches via BU_CDP_URL, jev picks actions with TypeSafe.
     const jev = process.env.JEV_DIR || path.resolve(import.meta.dirname, '../../jev');
     if (!goals.length) throw new Error('usage: bp goal <url> "<goal>" ["<goal 2>" ...]');
@@ -129,9 +137,9 @@ const cmds = {
       c.on('exit', (code, signal) => { if (code || signal) { console.error('jev exited', code ?? signal); process.exitCode = code || 1; } resolve(); });
     });
   },
-  async kill() { spawn('pkill', ['-f', `remote-debugging-port=${PORT}`]); console.log('killed Chromium on', PORT); },
-  async help() { console.log(`bp — drive Chromium + an unpacked extension over CDP. Env: BP_PORT (9333), BP_EXT, BP_PROFILE, BP_CHROME.
-  launch [url] --ext <dir> --profile <dir> [--headless]   start Chromium with the extension, debug port on (--headless or BP_HEADLESS=1: no window)
+  async kill() { needPort(); spawn('pkill', ['-f', `remote-debugging-port=${PORT}`]); console.log('killed Chromium on', PORT); },
+  async help() { console.log(`bp — drive Chromium + an unpacked extension over CDP. Env: BP_PORT (required, a port only you use), BP_EXT, BP_PROFILE, BP_CHROME.
+  launch [url] --ext <dir> --profile <dir> [--headless] [--viewport WxH]   start Chromium with the extension, debug port on (--headless or BP_HEADLESS=1: no window; --viewport 390x844: window size, for mobile shots; refuses a port that already has a browser)
   list                                         targets (pages, workers, iframes); page ids are the <sel> below
   open <url> [--wait ms] [--out shot.png]      new tab
   snap <sel> [--host <css>] [--out png]        interactive elements + coords (walks shadow roots/iframes); --host limits to one shadow root
