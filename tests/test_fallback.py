@@ -323,10 +323,11 @@ class FixScope(unittest.TestCase):
     def test_a_committed_fix_records_fix_tasks_on_the_round_it_fixed(self):
         tasks = [{"id": "001", "files": ["a.go"], "protected": [], "test": "ta"},
                  {"id": "002", "files": ["b.go"], "protected": ["a.go"], "test": "tb"},
-                 {"id": "003", "kind": "design", "files": ["a.go"], "protected": [], "test": "td"}]
+                 {"id": "003", "kind": "design", "files": ["a.go"], "protected": [], "test": "td"},
+                 {"id": "004", "kind": "hand", "files": ["a.go"], "protected": [], "test": "th"}]
         fix_tasks = lambda res: [r.get("fix_tasks", "absent") for r in res["rounds"]]
         code, _, res = self.verify({"a.go": "fixed\n"}, tasks=tasks)
-        self.assertEqual((code, fix_tasks(res)), (0, [["001", "002"], "absent"]))  # task order, never the design task; the passing round has none
+        self.assertEqual((code, fix_tasks(res)), (0, [["001", "002"], "absent"]))  # task order, never the design task or a hand task (nothing dispatches it); the passing round has none
         _, _, res = self.verify({"a.go": "fixed\n"}, tasks=tasks[:1])
         self.assertEqual(fix_tasks(res), [["001"], "absent"])
         _, _, res = self.verify({"a.go": "fixed\n"}, tasks=[])

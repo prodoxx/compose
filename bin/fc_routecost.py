@@ -23,9 +23,9 @@ def rounds(proj):
 
 
 def fix_tasks(tasks, files):
-    """Ids of the code tasks whose `files` or `protected` hold one of `files`, in task order."""
+    """Ids of the runnable tasks (never a design or hand task: nothing dispatches those, so no fix round is charged to them) whose `files` or `protected` hold one of `files`, in task order."""
     changed = set(files)
-    return [t["id"] for t in fc_tasks.code_tasks(tasks)
+    return [t["id"] for t in fc_tasks.runnable(tasks)
             if changed & (set(t.get("files", [])) | set(t.get("protected", [])))]
 
 
