@@ -430,6 +430,18 @@ class Crew(unittest.TestCase):
             fc.fc_crew.cmd_crew(type("A", (), {"action": "list"}))
         self.assertNotIn("working", out.getvalue()); self.assertIn("half way", out.getvalue())
 
+    def test_list_shows_a_stopped_claude_as_suspended_not_as_the_status_herdr_kept(self):
+        """#407: a claude stopped by a sleep or Ctrl-Z stays listed as done or blocked; crew list says it is suspended."""
+        (fc.fc_crew.crew_dir(self.proj) / "shop-explore.json").write_text(json.dumps({"name": "shop-explore", "agent": "shop-explore", "title": "t", "space": "w9", "tab": "w9:t1"}))
+        agent = {"name": "shop-explore", "workspace_id": "w9", "agent_status": "done", "pane_id": "p1"}
+        for stat, shown in (("T\n", "SUSPENDED"), ("S+\n", "done")):
+            out = io.StringIO()
+            with mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), mock.patch.object(fc.fc_herdr, "herdr", lambda *a, **k: {"agents": [agent]}), \
+                    mock.patch.object(fc.fc_herdr, "pane_processes", return_value=[{"pid": 7}]), mock.patch("sys.stdout", out), \
+                    mock.patch.object(fc.fc_herdr.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, stat, "")):
+                fc.fc_crew.cmd_crew(type("A", (), {"action": "list"}))
+            self.assertIn(shown, out.getvalue())
+
     def test_list_shows_ended_for_a_closed_teammate_whose_last_report_is_not_done(self):
         d = fc.fc_crew.crew_dir(self.proj)
         teammates = {  # name: (reports oldest first, open as (agent name, space) or None)

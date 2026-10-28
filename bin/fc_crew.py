@@ -158,7 +158,8 @@ def cmd_crew(a):
             last = (crew_reports(proj, c["name"]) or [{}])[-1]
             live = next((ag for ag in agents or [] if ag.get("name") == c.get("agent", c["name"]) and ag.get("workspace_id") == c.get("space")), {})
             state = "ended" if last.get("state") not in (None, "done") and tab_closed(c, agents) else last.get("state", "-")
-            print(f"  {c['name']:32} {state:10} {live.get('agent_status', 'closed'):8} {(c.get('model', 'claude') + (' ' + c['effort'] if c.get('effort') else '')):32} {c['title'][:30]:30} {last.get('message', '')[:70]}")
+            status = "SUSPENDED" if live.get("pane_id") and fc_herdr.pane_suspended(live["pane_id"]) else live.get("agent_status", "closed")
+            print(f"  {c['name']:32} {state:10} {status:8} {(c.get('model', 'claude') + (' ' + c['effort'] if c.get('effort') else '')):32} {c['title'][:30]:30} {last.get('message', '')[:70]}")
         return
     if not a.role:
         sys.exit(f"usage: compose crew {a.action} --project {slug} --role <role>")

@@ -160,6 +160,18 @@ def pane_processes(pane):
     return [p for p in info.get("foreground_processes", []) if p.get("pid") != info.get("shell_pid")] \
         if info.get("foreground_process_group_id") != info.get("shell_pid") else []
 
+def pane_suspended(pane):
+    """True when a process in `pane` is stopped (Ctrl-Z, or SIGSTOP after a sleep): herdr keeps listing such an agent with its last
+    status, and after `fg` its terminal can stay wedged, so it is neither working nor finished."""
+    for p in pane_processes(pane):
+        try:
+            stat = subprocess.run(["ps", "-o", "stat=", "-p", str(p["pid"])], capture_output=True, text=True, timeout=5, check=False).stdout.strip()
+        except (OSError, subprocess.TimeoutExpired, KeyError):
+            continue
+        if stat.startswith("T"):
+            return True
+    return False
+
 def agent_pids(pane):
     return sorted(p["pid"] for p in pane_processes(pane) if fc_proc.nice_floor(p["pid"]) is not None)
 
