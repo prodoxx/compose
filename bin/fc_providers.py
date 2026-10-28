@@ -21,7 +21,8 @@ export default function (pi) {
 
 def pi_extension_text() -> str:
     """The text of ~/.compose/pi-providers.js, rendered from fc_config.PROVIDERS."""
-    rows = [{"apiKeyEnv": fc_config.provider_env(n) if fc_config.provider_env(n) in os.environ else None, "baseUrl": p["base_url"], "models": p.get("models", []), "name": n} for n, p in sorted(fc_config.PROVIDERS.items())]
+    envs = {n: fc_config.provider_env(n) for n in fc_config.PROVIDERS}
+    rows = [{"apiKeyEnv": envs[n] if envs[n] in os.environ else None, "baseUrl": p["base_url"], "models": p.get("models", []), "name": n} for n, p in sorted(fc_config.PROVIDERS.items())]
     return PI_JS.replace("<json>", json.dumps(rows, sort_keys=True))
 
 def pi_args(model) -> list[str]:
@@ -57,7 +58,8 @@ def reach(name) -> tuple[bool, str]:
     base_url = fc_config.PROVIDERS[name]["base_url"]
     try:
         env = fc_config.provider_env(name)
-        req = urllib.request.Request(base_url.rstrip("/") + "/models", headers={"Authorization": f"Bearer {os.environ[env]}"} if env in os.environ else {})
+        key = os.environ.get(env)  # set but empty is no key: it would send a bare "Bearer "
+        req = urllib.request.Request(base_url.rstrip("/") + "/models", headers={"Authorization": f"Bearer {key}"} if key else {})
         with urllib.request.urlopen(req, timeout=5) as r:
             return True, f"HTTP {r.status}"
     except urllib.error.HTTPError as e:

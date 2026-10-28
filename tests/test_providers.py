@@ -193,6 +193,14 @@ class Reach(unittest.TestCase):
             with self.subTest(err=err), mock.patch.object(urllib.request, "urlopen", side_effect=err):
                 self.assertEqual(fc_providers.reach("fakelocal"), (False, self.line("fakelocal", url)))
 
+    def test_a_key_variable_set_but_empty_sends_no_bearer_header(self):
+        self.providers(fakelocal="http://127.0.0.1:9/v1/")
+        env = fc.fc_config.provider_env("fakelocal")
+        for value, header in (("", None), ("k", "Bearer k")):
+            with self.subTest(value=value), mock.patch.dict(os.environ, {env: value}), mock.patch.object(urllib.request, "urlopen") as uo:
+                fc_providers.reach("fakelocal")
+                self.assertEqual(uo.call_args[0][0].get_header("Authorization"), header)
+
     def test_reach_is_never_cached(self):
         s, url = self.serve(); self.providers(fakelocal=url)
         self.assertTrue(fc_providers.reach("fakelocal")[0]); s.shutdown(); s.server_close()
