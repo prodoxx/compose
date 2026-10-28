@@ -182,8 +182,19 @@ def cmd_designcrews(a):
         return
     cfg = json.loads((proj / "verify.json").read_text()) if (proj / "verify.json").exists() else {}
     space = fc_herdr.herdr_project_space(proj)
-    live = {ag.get("name") for ag in fc_herdr.live_agents() if ag.get("workspace_id") == space}
+    in_space = {ag.get("name"): ag for ag in fc_herdr.live_agents() if ag.get("workspace_id") == space}
     running = {m["id"]: fc_herdr.agent_name(proj.name, f"design-{m['id']}") for m in metas}
+    for m in metas:  # herdr keeps listing an agent whose process exited (the pane is back at its shell): close it, so the task restarts
+        ag = in_space.get(running[m["id"]])
+        if ag and ag.get("pane_id") and not fc_herdr.pane_processes(ag["pane_id"]):
+            print(f"design-{m['id']} is listed by herdr but its process has exited; closing its pane to start it again")
+            try:
+                fc_crew.cmd_crew(argparse.Namespace(repo=a.repo, project=proj.name, action="stop", role=f"design-{m['id']}", force=True))
+            except SystemExit as e:
+                print(f"design-{m['id']} not closed: {e}")
+            else:
+                in_space.pop(running[m["id"]])
+    live = set(in_space)
     for m in metas:  # a running builder keeps its task: starting it again only fails, and would read as a failure to retry
         if running[m["id"]] in live:
             print(f"design-{m['id']} is already running; steer it with: herdr agent prompt {running[m['id']]} \"...\"")

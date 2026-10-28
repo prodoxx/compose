@@ -593,6 +593,18 @@ class DesignCrews(unittest.TestCase):
         self.assertNotIn("not started", out)
         self.assertNotIn("start them again", out)
 
+    def test_a_builder_herdr_lists_after_its_process_exited_is_closed_and_started_again(self):
+        """#411: the pane is back at its shell, herdr still lists the agent, and designcrews called it already running."""
+        agents = [{"name": fc.fc_herdr.agent_name("p", "design-001"), "workspace_id": "w1", "pane_id": "p1"}]
+        started = []
+        with mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), mock.patch.object(fc.fc_herdr, "herdr_space"), \
+                mock.patch.object(fc.fc_herdr, "live_agents", return_value=agents), mock.patch.object(fc.fc_herdr, "herdr_project_space", return_value="w1"), \
+                mock.patch.object(fc.fc_herdr, "pane_processes", return_value=[]), mock.patch.object(fc.fc_crew, "cmd_crew", side_effect=started.append), \
+                mock.patch.object(fc.fc_linear, "linear_event"), mock.patch("sys.stdout", io.StringIO()) as out:
+            fc.fc_figma.cmd_designcrews(SimpleNamespace(repo=".", project="p", only="001", print_=False, max=None, redo=False, force=False))
+        self.assertEqual([(ns.action, ns.role) for ns in started], [("stop", "design-001"), ("start", "design-001")])
+        self.assertNotIn("already running", out.getvalue())
+
     def test_a_task_figma_line_names_its_own_file_else_the_stored_key(self):
         def issue(n, **kv):
             block = "\n".join(f"{k}: {v}" for k, v in {"id": n, "kind": "design", "test": "t", "nodes": "P/A", **kv}.items())
