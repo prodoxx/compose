@@ -644,6 +644,7 @@ class Guard(unittest.TestCase):
         for f in (".compose/shop/linear.json", ".compose/shop/verify.json", ".compose/linear.json", ".compose/shop/pr/001-002.md"):
             self.assertIsNone(fc.fc_hooks.guard_decision("Write", str(self.repo / f), "orchestrator"), f)
         for role in ("orchestrator", "planner"):
+            self.assertIsNone(fc.fc_hooks.guard_decision("Write", str(self.repo / ".compose/shop/lavish/shape.html"), role), role)
             self.assertIsNone(fc.fc_hooks.guard_decision("Write", str(self.repo / ".compose/shop/scratch/sync.json"), role), role)
         self.assertIsNotNone(fc.fc_hooks.guard_decision("Write", str(self.repo / ".compose/shop/scratch.md"), "planner"))
         self.assertIsNone(fc.fc_hooks.guard_decision("Write", str(Path(tempfile.mkdtemp()) / "brief.txt"), "orchestrator"))  # scratch outside a repo

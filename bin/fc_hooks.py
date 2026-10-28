@@ -6,7 +6,7 @@ import fc_core, fc_config, fc_harness, fc_worktree
 
 GUARDED_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch", "Bash")
 GUARDED_ROLES = ("orchestrator", "planner")
-CLI_FILE = re.compile(r"/\.compose/(linear\.json|[^/]+/(linear|verify)\.json|[^/]+/scratch/.+|[^/]+/pr/[^/]+\.md)$")  # the team lead's own: the CLI's config and the layers' PR text
+CLI_FILE = re.compile(r"/\.compose/(linear\.json|[^/]+/(linear|verify)\.json|[^/]+/(?:scratch|lavish)/.+|[^/]+/pr/[^/]+\.md)$")  # the team lead's own: the CLI's config, the layers' PR text, and the Lavish question pages
 
 def env_role(role):
     """The COMPOSE_ROLE of a teammate's tab. `guard` keeps the team lead and every planner, `planner-<ticket>` too, off the code."""
