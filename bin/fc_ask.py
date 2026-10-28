@@ -100,15 +100,26 @@ def old_card(q, lines):
             q["supersedes"] = sup.group(1).strip()
     q["recommendation"] = f"{letter}. {q['options'][letter][0]}" if letter in q["options"] else letter
 
+def code_masked(text):
+    """`text` with every inline code span (a backtick run, its content, the same run) blanked to `x`s of the same length, so the
+    marks and dashes left are the ones outside code."""
+    return re.sub(r"(`+).+?\1", lambda m: "x" * len(m.group()), text)
+
 def unwrapped(text):
     """`text` without the markdown marks left dangling at its ends (`**` or a backtick the recommendation regex cut from its pair);
-    a pair that closes inside the text, like inline code ending the line, stays whole."""
+    a code span, even one holding a backtick or a mark, stays whole."""
     t = text.strip()
-    while t and t[-1] in "*_`" and t.count(t[-1]) % 2:
+    while t and (m := code_masked(t))[-1] in "*_`" and m.count(m[-1]) % 2:
         t = t[:-1].rstrip()
-    while t and t[0] in "*_`" and t.count(t[0]) % 2:
+    while t and (m := code_masked(t))[0] in "*_`" and m.count(m[0]) % 2:
         t = t[1:].lstrip()
     return t
+
+def split_why(text):
+    """(recommendation, why) from the text after `Recommendation:`: the why follows the last ` - ` outside inline code, since a
+    recommendation may hold a dash, in a code span or not; no such dash and the whole text is the recommendation, no why."""
+    cut = code_masked(text).rfind(" - ")
+    return (text[:cut], text[cut + 3:]) if cut >= 0 else (text, "")
 
 def questions_in(section):
     """The open questions written in a map's Not yet specified, by id: question, recommendation, why, replaces (the decision a
@@ -124,8 +135,8 @@ def questions_in(section):
         q = {"question": text, "recommendation": "", "why": "", "replaces": "", "options": {}, "supersedes": "", "span": (i, end)}
         if r := INLINE_RECOMMENDATION.search(text):
             q["question"] = text[:r.start()].strip()
-            rec, dash, why = text[r.end():].rpartition(" - ")  # the why follows the last dash: a recommendation may hold one
-            q["recommendation"], q["why"] = unwrapped(rec if dash else why), why.strip() if dash else ""
+            rec, why = split_why(text[r.end():])
+            q["recommendation"], q["why"] = unwrapped(rec), why.strip()
         else:
             old_card(q, lines[i + 1:end])
         if p := REPLACES.search(q["question"]):

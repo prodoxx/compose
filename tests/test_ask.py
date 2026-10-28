@@ -86,9 +86,10 @@ class Ask(unittest.TestCase):
 
     def test_a_recommendation_keeps_its_inline_code_and_emphasis_whole(self):
         qs = fc.fc_ask.questions_in("- Q6: Where? - Recommendation: move it to `src/server/stripe-webhook.test.ts` - it follows the webhook\n"
-                                    "- Q7: Which? - Recommendation: **Clerk** - hosted\n- Q8: Which? - Recommendation: `vi.mock`* - same as today\n")
-        self.assertEqual([qs[i]["recommendation"] for i in ("Q6", "Q7", "Q8")],
-                         ["move it to `src/server/stripe-webhook.test.ts`", "**Clerk**", "`vi.mock`"])
+                                    "- Q7: Which? - Recommendation: **Clerk** - hosted\n- Q8: Which? - Recommendation: `vi.mock`* - same as today\n"
+                                    "- Q9: How? - Recommendation: run `ls - l`\n- Q10: How? - Recommendation: use ``a`b`` - why\n")
+        self.assertEqual([qs[i]["recommendation"] for i in ("Q6", "Q7", "Q8", "Q9", "Q10")],  # a dash or a backtick inside a code span is not a cut
+                         ["move it to `src/server/stripe-webhook.test.ts`", "**Clerk**", "`vi.mock`", "run `ls - l`", "use ``a`b``"])
 
     def test_a_question_span_takes_its_continuation_lines_in_both_formats(self):
         qs = fc.fc_ask.questions_in("- Q1: Which auth? - Recommendation: Clerk - every screen\n  signs in\nsee NEB-9\n- Q2: Colors? - Recommendation: warm - brand\n"
