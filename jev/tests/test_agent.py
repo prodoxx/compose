@@ -270,6 +270,20 @@ def test_interrupted_dropdown_mutation_cannot_be_retried_as_stale(monkeypatch, r
     assert cdp.call_count == 1
 
 
+def test_hover_is_its_own_operation_and_moves_the_pointer_without_pressing(monkeypatch):
+    import jev_ultrafast.browser as browser
+
+    menu = {"id": "e1", "kind": "hover", "label": "Hover Menu", "role": "button", "value": "", "node": 5}
+    _, targets, _ = model.action_space([{**menu, "id": "e0", "kind": "click", "label": "Menu"}, menu])
+    assert targets["HOVER"]["1"]["id"] == "e1" and targets["CLICK"]["1"]["id"] == "e0"
+    # The target script finds the element, then only a mouseMoved reaches the page.
+    cdp = Mock(side_effect=[{"result": {"value": {"x": 40, "y": 50}}}, {}])
+    monkeypatch.setattr(browser, "cdp", cdp)
+    browser_operation({"operation": "act", "session": "s", "action": menu})
+    assert [c.args[0] for c in cdp.call_args_list] == ["Runtime.evaluate", "Input.dispatchMouseEvent"]
+    assert cdp.call_args.kwargs["type"] == "mouseMoved"
+
+
 def test_fingerprint_tracks_values_and_identity_not_screenshots():
     p = page()
     other = deepcopy(p)
