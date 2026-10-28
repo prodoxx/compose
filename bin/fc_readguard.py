@@ -23,11 +23,11 @@ def pack_paths(pack):
     return out
 
 
-def write_guard(wt, files, pack):
-    """Write {"root", "allow", "log"} to guard_file(wt) and return that path. `allow` holds the absolute paths of `files` and of
-    pack_paths(pack); `log` is `<wt parent>/<wt name>.refused`."""
+def write_guard(wt, files, pack, extra=()):
+    """Write {"root", "allow", "log"} to guard_file(wt) and return that path. `allow` holds the absolute paths of `files`, of
+    pack_paths(pack), and of `extra` (absolute paths the prompt itself tells the model to read); `log` is `<wt parent>/<wt name>.refused`."""
     root = os.path.realpath(wt)
-    allow = sorted({os.path.realpath(os.path.join(root, f)) for f in list(files) + pack_paths(pack)})
+    allow = sorted({os.path.realpath(os.path.join(root, f)) for f in [*files, *pack_paths(pack), *extra]})
     path = guard_file(wt)
     path.write_text(json.dumps({"root": root, "allow": allow, "log": str(path.parent / (Path(wt).name + ".refused"))}, indent=2))
     return path

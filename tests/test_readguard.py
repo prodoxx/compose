@@ -31,6 +31,13 @@ class ReadGuard(unittest.TestCase):
         self.assertEqual((self.g["root"], os.path.realpath(self.g["log"])), (os.path.realpath(self.wt), os.path.realpath(self.top / "001.refused")))
         self.assertEqual(sorted(self.g["allow"]), sorted({real("src/a.py"), real("tests/t.py"), real("lib/deep/x.py")}))
 
+    def test_an_extra_path_the_prompt_names_is_readable_and_another_tasks_log_is_not(self):
+        log = self.top / "results" / "001.test.log"
+        g = json.loads(fc.fc_readguard.write_guard(self.wt, ["src/a.py"], self.pack, extra=[log]).read_text())
+        for tool, args in (("Read", {"file_path": str(log)}), ("bash", {"command": f"tail -n 5 {log}"}), ("grep", {"pattern": "x", "path": str(log)})):
+            self.assertIsNone(fc.fc_readguard.refusal(tool, args, g), (tool, args))
+        self.assertIsNotNone(fc.fc_readguard.refusal("Read", {"file_path": str(log.with_name("002.test.log"))}, g))
+
     def test_read_takes_an_allowed_file_however_spelled(self):
         for p in ("src/a.py", str(self.wt / "src/a.py"), "docs/../lib/deep/x.py", "../001/tests/t.py"): self.ok("Read", {"file_path": p}); self.ok("read", {"path": p})
         for p in ("src/c.py", "src/../docs/d.md", str(self.top / "outside/a.py"), "../outside/a.py", ".venv/a.py", "src", "/etc/passwd"): self.no("READ", {"file_path": p})

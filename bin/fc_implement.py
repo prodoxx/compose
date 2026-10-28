@@ -274,7 +274,8 @@ def run_task(repo, proj, task, attempts, model=None, reset_files=False, tag=""):
     words = "\n".join([goal.group(1) if goal else body] + [(wt / f).read_text() for f in meta["protected"] if (wt / f).exists()])
     section = fc_libapi.section(wt, meta["files"], words)
     pack = fc_trailpack.trail_pack(wt, f"{meta.get('title', '')}: {(goal.group(1) if goal else body)[:400]}", repo=repo, cap=12000 - len(section))
-    fc_readguard.write_guard(wt, meta["files"] + meta["protected"] + (nodes := fc_figma.code_nodes(proj, wt, meta)), pack)
+    fc_readguard.write_guard(wt, meta["files"] + meta["protected"] + (nodes := fc_figma.code_nodes(proj, wt, meta)), pack,
+                             extra=[proj / "results" / f"{tid}.test.log"])  # the retry prompt sends the model to read it
     context = (f"CONTEXT PACK from the repo's trail graph (exact file:line, with source). Use it instead of exploring. "
                f"If you need more, run `trail ask \"<question>\"` or `trail callers <symbol>`; do not open unrelated files.\n{pack}\n\n"
                if pack else "")
