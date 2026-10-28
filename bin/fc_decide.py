@@ -192,6 +192,28 @@ def check_replaces(body, ident, replaces, change, quote):
     if not quote and "unconfirmed" not in old:
         sys.exit(f'not recorded: {replaces} is confirmed; replacing it needs the product owner\'s words: add --quote "<their message, verbatim>"')
 
+def write_map(lid, old, new):
+    """Write a map's description and wait until Linear reads it back."""
+    fc_linear.linear_gql("mutation($id: String!, $in: IssueUpdateInput!) { issueUpdate(id: $id, input: $in) { success } }", {"id": lid, "in": {"description": new}})
+    fc_linear_cmd.await_write(lambda: fc_linear.linear_gql("query($id: String!) { issue(id: $id) { description } }", {"id": lid})["issue"]["description"], old, new)
+
+def clear_elsewhere(proj, ident, closed):
+    """A closed question is listed on the feature and on its stories alike, so it leaves every Not yet specified of the feature's tree
+    that still holds it, not only the map `decide` wrote. Returns [(identifier, ids cleared)] for the other maps."""
+    feature = json.loads((proj / "linear.json").read_text()).get("feature") if (proj / "linear.json").exists() else None
+    if not closed or not feature:
+        return []
+    root = fc_linear.linear_gql("query($id: String!) { issue(id: $id) { id identifier description } }", {"id": feature})["issue"]
+    kids = [c for c in fc_linear.linear_children(feature) if ((c.get("state") or {}).get("name") or "").lower() not in fc_tasks.CANCELED]
+    done = []
+    for m in [root] + kids:
+        body = m.get("description") or ""
+        held = [i for i in closed if i in open_questions(body)]
+        if m["identifier"] != ident and held:
+            write_map(m["identifier"], body, close_questions(body, held))
+            done.append((m["identifier"], held))
+    return done
+
 def cmd_decide(a):
     """Record the product owner's answers on the map, their words attached (`--quote`), and tell the team lead. Each answer is a
     `--new` decision line, `--closes` naming the open questions it settles; `--drop` closes a question the answers made moot. Without
@@ -248,13 +270,15 @@ def cmd_decide(a):
         if (rid := qs[cid]["replaces"]) and decided_line(new_body, rid) and not KEEP.match(qs[cid]["recommendation"].split(". ", 1)[-1]):
             by = next(l.split(":")[0] for l in added if f"(closes {cid})" in l)
             new_body = replace_decision(new_body, rid, change or (cid.split("-")[0] if re.fullmatch(r"C\d+-\d+", cid) else f"replaced by {by}"))
-    fc_linear.linear_gql("mutation($id: String!, $in: IssueUpdateInput!) { issueUpdate(id: $id, input: $in) { success } }", {"id": lid, "in": {"description": new_body}})
-    fc_linear_cmd.await_write(lambda: fc_linear.linear_gql("query($id: String!) { issue(id: $id) { description } }", {"id": lid})["issue"]["description"], body, new_body)
+    write_map(lid, body, new_body)
+    cleared = clear_elsewhere(proj, ident, [i for i in qs if i in answered or i in accepted])
     if posture and not quote:
         posture["decisions"] += [{"ts": time.strftime("%Y-%m-%d %H:%M:%S"), "text": l} for l in lines]
         fc_core.atomic_write(proj / "results" / "yolo.json", json.dumps(posture, indent=2))
     for l in lines:
         print(f"recorded on {ident}: {l}")
+    for other, ids in cleared:
+        print(f"cleared {', '.join(ids)} from Not yet specified on {other}")
     if any(ans is not None for _, ans in answers):
         print("note: the new form is " + NEW_FORM.format(slug=proj.name))
     print(open_left(ident, new_body))

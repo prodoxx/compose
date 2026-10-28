@@ -147,6 +147,25 @@ class Decide(unittest.TestCase):
         self.assertIn("## Not yet specified\n\n## Out of scope\n\n- payments v2\n", self.linear.body)
         self.assertIn("no open questions on NEB-1", out)
 
+    def test_closing_a_question_on_a_story_clears_it_from_the_feature_and_its_other_stories(self):
+        other = "## Not yet specified\n\n- Q9: Which font? - Recommendation: Inter - brand\n"
+        maps = {"NEB-1": MAP, "NEB-2": MAP, "NEB-3": other}
+        def gql(query, variables):
+            if "issueUpdate" in query:
+                maps[variables["id"]] = variables["in"]["description"]
+                return {"issueUpdate": {"success": True}}
+            if "children" in query:
+                kids = [{"identifier": i, "description": maps[i], "state": {"name": "Todo"}} for i in ("NEB-2", "NEB-3")]
+                return {"issue": {"children": {"nodes": kids, "pageInfo": {"hasNextPage": False, "endCursor": None}}}}
+            i = variables["id"]
+            return {"issue": {"id": i, "identifier": i, "description": maps[i]}}
+        self.linear.gql = gql
+        out = self.decide(new=["Clerk"], closes=["Q1"], quote="clerk", issue="NEB-2")
+        self.assertNotIn("Q1: Which auth?", maps["NEB-2"] + maps["NEB-1"])  # the story it was closed on, and the feature that listed it too
+        self.assertIn("- Q2: Which database?", maps["NEB-1"])
+        self.assertEqual(maps["NEB-3"], other)
+        self.assertIn("cleared Q1 from Not yet specified on NEB-1", out)
+
     def test_closing_a_question_that_is_not_open_refuses_naming_the_open_ones(self):
         self.refuses("Q7 is not an open question on NEB-1; the open ones are Q1, Q2", new=["x"], closes=["Q7"], quote="x")
 
