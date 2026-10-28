@@ -705,6 +705,14 @@ class Prep(unittest.TestCase):
         self.assertIn("## NEB-99: other", doc); self.assertIn("## NEB-12: Billing", doc)
         self.assertEqual(len([c for c in self.cli_calls if c[:3] == ["linear", "doc", "update"]]), 2)
 
+    def test_a_section_linear_stores_with_star_bullets_is_kept(self):
+        # NEB-2191, 2193, 2194: Linear serves `-` bullets back as `*`, so the exact read-back compare failed every prep twice
+        self.reply(built=["a login page"])
+        self.race = fp.fc_plan.linear_markdown
+        fp.run_prep(self.repo, "NEB-12")
+        self.assertIn("* a login page", self.docs[fp.PREP_TITLE])  # Linear's copy stands: ours was not written again
+        self.assertEqual(len([c for c in self.cli_calls if c[:3] == ["linear", "doc", "update"]]), 1)
+
     def test_a_drop_with_no_heading_writes_nothing(self):
         self.docs[fp.PREP_TITLE] = "## NEB-11: Sign in\n\ny\n"
         self.reply(drop=True)

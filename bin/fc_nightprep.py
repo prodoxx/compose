@@ -160,7 +160,7 @@ def _old_section(body, ident) -> str:
 
 def write_section(repo, ident, title, text) -> str:
     """Replace this ticket's section of the prep document, or drop it (heading too) when text is None. Returns the document's url.
-    The document is read back after the write; when another writer's save has undone ours, it is redone on the fresh body (two tries in all)."""
+    The document is read back after the write; when another writer's save has undone ours (Linear's own markdown rewrite is no undoing), it is redone on the fresh body (two tries in all)."""
     url = ""
     for _ in range(2):
         if text is None:
@@ -172,10 +172,13 @@ def write_section(repo, ident, title, text) -> str:
         body = fc_plan.replace_section(doc["content"], _heading(doc["content"], ident, title), text or "")
         shown = fc_factoryturn.compose_cli(["linear", "doc", "update", doc["id"], "--description", "--repo", str(repo)], stdin=body)
         url = shown.strip().removeprefix("updated ").strip() or doc["url"]
-        now = find_doc(repo)["content"]
-        if _old_section(now, ident) == (text or "").strip():
+        kept = _old_section(find_doc(repo)["content"], ident)
+        if fc_plan.same_markdown(kept, text or ""):  # Linear stores the markdown its own way
             return url
-    raise RuntimeError(f"the prep document did not keep the section of {ident}")
+    want = fc_plan.linear_markdown(text or "").split("\n")
+    got = fc_plan.linear_markdown(kept).split("\n")
+    line = next((n for n in range(max(len(want), len(got))) if want[n:n + 1] != got[n:n + 1]), 0)
+    raise RuntimeError(f"the prep document did not keep the section of {ident}: line {line + 1} reads {(got[line:line + 1] or ['nothing'])[0][:60]!r}, not {(want[line:line + 1] or ['nothing'])[0][:60]!r}")
 
 def _running(rec, now) -> bool:
     """Whether the record's worker still runs: a pid older than the worker's timeout is another process's."""
