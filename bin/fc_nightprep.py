@@ -173,7 +173,7 @@ def write_section(repo, ident, title, text) -> str:
         shown = fc_factoryturn.compose_cli(["linear", "doc", "update", doc["id"], "--description", "--repo", str(repo)], stdin=body)
         url = shown.strip().removeprefix("updated ").strip() or doc["url"]
         kept = _old_section(find_doc(repo)["content"], ident)
-        if fc_plan.same_markdown(kept, text or ""):  # Linear stores the markdown its own way
+        if fc_plan.same_words(kept, text or ""):  # Linear stores the markdown its own way, and its rewrites keep coming: what counts is that the words stayed
             return url
     want = fc_plan.linear_markdown(text or "").split("\n")
     got = fc_plan.linear_markdown(kept).split("\n")

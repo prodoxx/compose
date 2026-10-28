@@ -28,26 +28,47 @@ def section_span(lines, heading):
         return None
     return start, next((i for i, n in marks if i > start and n <= heading_level(heading)), len(lines))
 
-LINEAR_BULLET, LINEAR_LINK = re.compile(r"^([ \t]*)[-+*](?=[ \t])", re.M), re.compile(r"\]\(<([^<>\s]*)>\)")
+LINEAR_BULLET, LINEAR_NUMBER = re.compile(r"^([ \t]*)[-+*](?=[ \t])"), re.compile(r"^([ \t]*)\d+[.)](?=[ \t])")
+LINEAR_RULE, LINEAR_HASHES, LINEAR_TASK = re.compile(r"^[ \t]*([-*_])(?:[ \t]*\1){2,}$"), re.compile(r"^(#{1,6} .*?)[ \t]+#+$"), re.compile(r"^([ \t]*\* )\[x\]")
+LINEAR_CODE_SPAN, LINEAR_LINK = re.compile(r"(`+[^`]*`+)"), re.compile(r"\]\(<([^<>\s]*)>\)")
+LINEAR_URL = re.compile(r"\[(https?://[^\]\s]+)\]\(<?\1>?\)|<(https?://[^<>\s]+)>")  # a bare address, which Linear stores as a link to itself
+LINEAR_STRONG, LINEAR_EM = re.compile(r"(?<![\w\\])__(?=[^\s_])(.*?[^\s_])__(?!\w)"), re.compile(r"(?<![\w\\])_(?=[^\s_])([^_]*[^\s_])_(?!\w)")
+LINEAR_ESCAPE = re.compile(r"\\([!-/:-@\[-`{-~])")
 
-LIST_ITEM = re.compile(r"^[ \t]*(?:[-+*]|\d+[.)])(?=[ \t])")
+def _linear_inline(text):
+    text = LINEAR_LINK.sub(r"](\1)", LINEAR_URL.sub(lambda m: m.group(1) or m.group(2), text))
+    text = LINEAR_EM.sub(r"*\1*", LINEAR_STRONG.sub(r"**\1**", text))  # before the escapes go: `\_` is no emphasis
+    return LINEAR_ESCAPE.sub(r"\1", text).replace("&amp;", "&")
 
 def linear_markdown(text):
-    """The text as Linear stores it: a bullet as `*`, a link target bare where Linear wraps it in `<>`, no trailing spaces,
-    a blank line between a paragraph and the list right under it."""
-    text = LINEAR_LINK.sub(r"](\1)", LINEAR_BULLET.sub(r"\1*", text or ""))
-    out, in_list = [], False
-    for line in (l.rstrip() for l in text.strip().split("\n")):
-        is_item = bool(LIST_ITEM.match(line))
-        if is_item and not in_list and out and out[-1]:
-            out.append("")
-        in_list = bool(line) and (is_item or in_list)
-        out.append(line)
+    """The text reduced to what Linear keeps of it, so two texts Linear stores alike read the same. Linear writes the markdown its own way
+    on every save: `\\_` and `\\*` escapes, a bullet as `*`, a number as `1.`, `_em_` as `*em*`, a link target in `<>`, a bare address as a link
+    to itself, `~~~` fences, a rule as `---`, closing `#`s dropped, `[x]` as `[X]`, blank lines wherever it likes. Code is left alone, and a
+    blank line in it counts. Not covered: tables, setext headings, indented code (`same_words` is the net for those)."""
+    out, fence = [], False
+    for line in (l.rstrip() for l in (text or "").strip().split("\n")):
+        if line.lstrip().startswith(("```", "~~~")):
+            fence = not fence
+            out.append("```" + line.lstrip().lstrip("`~"))
+        elif fence:
+            out.append(line)
+        elif line:
+            if LINEAR_RULE.match(line):
+                line = "---"
+            else:
+                line = LINEAR_TASK.sub(r"\1[X]", LINEAR_NUMBER.sub(r"\g<1>1.", LINEAR_BULLET.sub(r"\1*", LINEAR_HASHES.sub(r"\1", line))))
+            out.append("".join(p if i % 2 else _linear_inline(p) for i, p in enumerate(LINEAR_CODE_SPAN.split(line))))
     return "\n".join(out)
 
 def same_markdown(a, b):
     """Whether Linear stores the two texts alike, so writing one over the other changes nothing and Linear keeps serving the old."""
     return linear_markdown(a) == linear_markdown(b)
+
+def same_words(a, b):
+    """Whether the two texts hold the same words in the same order, whatever markup is around them: the check for a rewrite Linear
+    makes that `linear_markdown` has not met yet. Whether a text was kept does not depend on how Linear punctuates it."""
+    words = lambda t: re.findall(r"[^\W_]+", linear_markdown(t).lower())
+    return words(a) == words(b)
 
 def section_hash(body, heading):
     """A short hash of the section as it stands, subsections included; None when it is not there. A writer passes the hash it

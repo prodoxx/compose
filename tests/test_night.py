@@ -713,6 +713,14 @@ class Prep(unittest.TestCase):
         self.assertIn("* a login page", self.docs[fp.PREP_TITLE])  # Linear's copy stands: ours was not written again
         self.assertEqual(len([c for c in self.cli_calls if c[:3] == ["linear", "doc", "update"]]), 1)
 
+    def test_a_section_linear_stores_with_escapes_is_kept(self):
+        # NEB-2191: Linear served `__root.tsx` back as `\__root.tsx` and `_authed.tsx` as `\_authed.tsx`, so every prep of it failed
+        self.reply(code=["app/src/routes/__root.tsx", "app/src/routes/_authed.tsx"], questions=[{"question": "Accept image/*?", "recommendation": "Yes", "why": "w"}])
+        self.race = lambda ours: ours.replace("- ", "* ").replace("/_", "/\\_").replace("/*", "/\\*")
+        self.assertEqual(fp.run_prep(self.repo, "NEB-12")["status"], "prepared")
+        self.assertIn("* app/src/routes/\\__root.tsx\n* app/src/routes/\\_authed.tsx", self.docs[fp.PREP_TITLE])
+        self.assertEqual(len([c for c in self.cli_calls if c[:3] == ["linear", "doc", "update"]]), 1)
+
     def test_a_drop_with_no_heading_writes_nothing(self):
         self.docs[fp.PREP_TITLE] = "## NEB-11: Sign in\n\ny\n"
         self.reply(drop=True)
