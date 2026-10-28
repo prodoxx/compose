@@ -452,7 +452,7 @@ def cmd_watch(a, rewake=False):
         power_seen, power_tick = watch_mem(proj, key).get("power_seen"), 0.0  # the last battery stop this watcher announced
         scope = lambda snap: watch_scope(proj, snap)
         def look(after, stalls):
-            lines = watch_events(before, after) + (owner_lines(proj.name, before, after) if not os.environ.get("COMPOSE_ROLE") else []) + load_events(proj, key)
+            lines = watch_events(before, after) + (owner_lines(proj.name, before, after) if not os.environ.get("COMPOSE_ROLE") else [])
             direct, others = scope(after)
             return yolo_mark(proj, watch_filter(lines + stalls, proj.name, sources or lead_sources(proj, others), direct, others))
         while True:
@@ -466,7 +466,7 @@ def cmd_watch(a, rewake=False):
             if woke_was != woke:
                 woke = woke_was
                 watch_save(proj, key, woke=woke)
-            stalls = slept + watch_stalls(proj, after, limit, key=key, woke=woke, agent_limit=cfg.get("agent_stall_seconds"))
+            stalls = slept + watch_stalls(proj, after, limit, key=key, woke=woke, agent_limit=cfg.get("agent_stall_seconds")) + load_events(proj, key)  # lines handed out once: kept for the settle's second look
             if now - power_tick >= POWER_EVERY:
                 power_tick = now
                 line, at = fc_checks.power_back(power_seen)

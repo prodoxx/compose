@@ -300,6 +300,17 @@ class WatchMemory(unittest.TestCase):
                     fc.fc_watch.cmd_watch(a)
         self.assertEqual(seen, [["event crew=hw-planner state=needs-user message='3 stories; accept-all'"]])
 
+    def test_a_wake_whose_only_event_is_a_load_line_still_prints_it_after_the_settle(self):
+        """The load log hands each line out once: a watch that waits for the rest of its burst must not look again and find nothing to print."""
+        out, env = [], {k: v for k, v in os.environ.items() if k != "COMPOSE_ROLE"}
+        lines = iter([["event tell='load cleared: 1.0 on 8 cores, below 4.0'"]])
+        a = SimpleNamespace(repo=".", now=False, from_=None, timeout=0.5, interval=0.01, stall=10_000, settle=0.01, rewake=False)
+        with mock.patch.object(fc.fc_watch, "load_events", lambda proj, key: next(lines, [])), mock.patch.object(fc.fc_watch, "watch_snapshot", return_value=wsnap()), \
+                mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), mock.patch.dict(os.environ, env, clear=True), mock.patch("builtins.print", out.append):
+            with contextlib.suppress(SystemExit):
+                fc.fc_watch.cmd_watch(a)
+        self.assertTrue(any("load cleared" in line for line in out), out)
+
     def later(self):
         snap = wsnap("passed")
         snap["crew"] = {"hw-x": [{"at": at(0), "state": "tool-bug", "message": "crash"}],
