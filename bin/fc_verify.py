@@ -76,12 +76,13 @@ def e2e_stage(repo, cfg, panes, report, findings, results=None, retry=True, keep
     env.update(E2E_PORT=str(fc_core.free_port()), E2E_CLIENT_PORT=str(fc_core.free_port()))
     env = fc_jev.expand_ports(env, env)
     # Never the product owner's Chrome: without BU_CDP_URL, browser-harness attaches to the running Chrome and waits for approval.
-    # So the stage launches its own Chromium on a fresh CDP port and profile (an extension case sets BU_CDP_URL in e2e_env),
-    # unless the project says its cases need no browser (e2e_browser: false, for example drivers of a terminal app).
+    # So the stage launches its own Chromium on a fresh port and profile, unless e2e_env names one or e2e_browser is false.
     profile = None if "BU_CDP_URL" in env or cfg.get("e2e_browser") is False else tempfile.mkdtemp(prefix=f"fc-e2e-browser-{os.getpid()}-")
     if profile:
         cdp = fc_core.free_port()
         env.update(BU_CDP_URL=f"http://127.0.0.1:{cdp}", BU_NAME=f"fc-e2e-{cdp}")
+    if "BU_CDP_URL" in env:  # bp has no default port, so a driver's or assert's bp reaches this stage's browser
+        env.setdefault("BP_PORT", env["BU_CDP_URL"].rstrip("/").rsplit(":", 1)[1])
     env.setdefault("BU_NAME", f"fc-e2e-{fc_core.free_port()}")  # every stage names its daemons, so it ends its own and no one else's
     cfg = {**cfg, "e2e": [fc_jev.expand_ports(c, env) for c in cfg.get("e2e", [])]}
     ports = fc_jev.e2e_ports(cfg, env)
@@ -110,7 +111,7 @@ def e2e_stage(repo, cfg, panes, report, findings, results=None, retry=True, keep
             if not headless:  # a watched window needs the display awake (cmd_verify already holds this for its whole run)
                 fc_proc.keep_awake()
             p = fc_core.sh(["bp", "launch", "about:blank", "--profile", profile, *(["--headless"] if headless else [])], repo, timeout=30, check=False,
-                   env={**os.environ, "BP_PORT": env["BU_CDP_URL"].rsplit(":", 1)[1]})
+                   env={**os.environ, "BP_PORT": env["BP_PORT"]})
             if p.returncode:  # the cases then fail on the dead CDP port, which reads as a tool error, not the app's
                 fc_core.say(f"e2e    browser launch failed: {(p.stderr or p.stdout).strip()[-300:]}")
         if cfg.get("e2e_setup"):

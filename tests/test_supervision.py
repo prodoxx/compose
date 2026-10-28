@@ -702,6 +702,15 @@ class JevGaveUpStage(unittest.TestCase):
         self.assertIn("FAIL", line); self.assertTrue(line.endswith(" assert=3"), line)
         self.assertEqual((ok, calls, len(findings)), (False, ["flow"], 1))
 
+    def test_a_case_gets_the_stage_browsers_port_as_bp_port(self):
+        seen = []
+        def fake(case, repo):
+            seen.append(case["env"]); return dict(self.DONE)
+        cfg = {"e2e": [{"name": "flow", "driver": "bp text localhost"}], "e2e_env": {"BU_CDP_URL": "http://127.0.0.1:9411"}}
+        with mock.patch.object(fc.fc_jev, "jev_e2e", fake), contextlib.redirect_stdout(io.StringIO()):
+            fc.fc_verify.e2e_stage(Path(tempfile.mkdtemp()), cfg, {}, {"e2e": []}, [])
+        self.assertEqual(seen[0]["BP_PORT"], "9411")
+
     def test_a_record_without_assert_exit_prints_no_assert(self):
         killed = {"exit": 124, "stdout": "", "stderr": "JEV_GAVE_UP: jev did not reach its goal within 150s\nhung"}
         driver = {"name": "flow", "exit": 0, "stdout": "", "stderr": ""}
