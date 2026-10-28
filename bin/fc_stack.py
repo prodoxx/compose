@@ -299,6 +299,13 @@ def fetch_landed_base(wt, base):
         return f"origin/{base}", fc_core.sh(["git", "fetch", "-q", "origin", f"+refs/heads/{base}:refs/remotes/origin/{base}"], wt, check=False)
     return base, fc_core.sh(["git", "fetch", "-q", "origin", f"{base}:{base}"], wt, check=False)
 
+def upstream_ahead(repo, base, upstream):
+    """How many commits `upstream` (the base's remote branch) holds that the local `base` does not, after a fetch of it. The user's checkout
+    holds `base` and compose never moves it, so it can fall behind; a fetch that fails (offline) leaves what was fetched before."""
+    remote, _, branch = upstream.partition("/")
+    fc_core.sh(["git", "fetch", "-q", remote, f"+refs/heads/{branch}:refs/remotes/{upstream}"], repo, check=False)
+    return int(fc_core.sh(["git", "rev-list", "--count", f"{base}..{upstream}"], repo, check=False).stdout.strip() or 0)
+
 MAX_STACK_PRS = 10  # the PRs a stack holds unless verify.json or the config says `max_stack_prs`
 
 def stack_cap(cfg, settings):
@@ -345,6 +352,7 @@ def register_stack(repo, proj, trunk, submit=False, preview=False, gate=None):
     up = fc_core.sh(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", f"{base}@{{upstream}}"], repo, check=False)
     upstream = up.stdout.strip() if up.returncode == 0 else ""
     ahead = int(fc_core.sh(["git", "rev-list", "--count", f"{upstream}..{base}"], repo).stdout) if upstream else 0
+    behind = upstream_ahead(repo, base, upstream) if upstream and not ahead else 0
     level, said = base_ahead(base, upstream, ahead, submit)
     if level == "stop":
         fc_layers.STACK_STOP = said
@@ -376,7 +384,9 @@ def register_stack(repo, proj, trunk, submit=False, preview=False, gate=None):
         v = subprocess.run(["gh", "pr", "view", b, "--json", "state"], cwd=wt, capture_output=True, text=True, stdin=subprocess.DEVNULL)
         if v.returncode == 0 and json.loads(v.stdout).get("state") == "MERGED":
             landed.append(b)
-    built = base  # the ref the layers are cut on
+    built = upstream if behind else base  # the ref the layers are cut on: a base behind its remote is not the one the PRs land on
+    if behind and not landed:
+        fc_core.say(f"stack  base  {base} is {behind} commit{'s' * (behind > 1)} behind {upstream}; building on {upstream}")
     if landed:
         built, f = fetch_landed_base(wt, base)
         if f.returncode:

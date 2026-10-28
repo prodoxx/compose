@@ -164,7 +164,7 @@ class FakedRegister(unittest.TestCase):
         (self.proj / "results").mkdir(parents=True)
         (self.proj / "verify.json").write_text("{}")
         (self.proj / "results" / "tasks.json").write_text(json.dumps({"feature": {}, "tasks": [{"id": t, "protected": []} for t in ("001", "002", "003")]}))
-        self.upstream, self.ahead, self.said, self.chain, self.through, self.built = "", 0, [], [], [], []
+        self.upstream, self.ahead, self.behind, self.said, self.chain, self.through, self.built = "", 0, 0, [], [], [], []
         self.addCleanup(setattr, fc.fc_layers, "STACK_STOP", "")
         fc.fc_layers.STACK_STOP = ""
         for target, name, fake in ((fc.fc_stack, "head_problem", lambda *a: ""), (fc.fc_worktree, "rename_legacy_branches", lambda *a: {}), (fc.fc_worktree, "stack_order", lambda *a: self.ORDER),
@@ -177,7 +177,7 @@ class FakedRegister(unittest.TestCase):
         patch = mock.patch("subprocess.run", side_effect=AssertionError("gh stack was touched")); patch.start(); self.addCleanup(patch.stop)
 
     def sh(self, cmd, cwd=None, **kw):
-        out = {"rev-list": str(self.ahead)}.get(cmd[1], self.upstream if "--abbrev-ref" in cmd else "")
+        out = {"rev-list": str(self.behind if cmd[-1].startswith("main..") else self.ahead)}.get(cmd[1], self.upstream if "--abbrev-ref" in cmd else "")
         return SimpleNamespace(stdout=out + "\n", stderr="", returncode=0 if out or cmd[1] != "rev-parse" else 1)
 
     def linearize(self, repo, proj, trunk, wt, through=()):
@@ -211,6 +211,14 @@ class FakedRegister(unittest.TestCase):
             self.register(submit=True)
             self.assertEqual(self.through, [[]])  # it went on to the chain
             self.assertFalse([l for l in self.said if "WARN" in l or "STOP" in l], self.said)
+
+    def test_a_base_behind_its_remote_has_the_layers_cut_on_the_remote_and_says_so(self):
+        for t in ("001", "002", "003"):
+            self.result(t, "passed")
+        self.upstream, self.behind, self.chain = "origin/main", 20, self.ORDER
+        self.register(submit=True)
+        self.assertEqual(self.built[0][2], "origin/main")  # build_layers' base
+        self.assertIn("stack  base  main is 20 commits behind origin/main; building on origin/main", self.said)
 
     def test_a_chain_rebase_that_stops_leaves_the_layers_and_gh_stack_untouched(self):
         self.stop, self.chain = "compose/p-003 conflicts when rebased onto compose/p-002 in 002.src", self.ORDER[:2]
