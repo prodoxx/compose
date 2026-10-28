@@ -188,6 +188,11 @@ def watch_holder(proj, key):
     except OSError:
         return "unknown"
 
+def at_work(snap, names):
+    """Of the teammates whose last report is working, those herdr does not list as idle or done: a test writer whose task passed sits idle in its
+    pane with that report until collect closes it, and the tail of a stall line says who is really working."""
+    return [n for n in names if snap["agents"].get(n) not in ("idle", "done")]
+
 def watch_stalls(proj, snap, limit, now_s=None, key="all", woke=None, agent_limit=None):
     """The silences an event diff never shows: work is pending but nothing moves. Each stall fires once per watcher
     (results/watch-<key>.json remembers it), so a supervisor that nudges is not woken again for the same silence.
@@ -210,7 +215,7 @@ def watch_stalls(proj, snap, limit, now_s=None, key="all", woke=None, agent_limi
         seen[orch] = [status, now_s]
     ev = []
     hm = lambda t: time.strftime("%H:%M:%S", time.localtime(t))
-    tail = f"{f'team lead {status}' if lead else 'no team lead'}, pending tasks {len(pending)}{f', held {len(on_hold)}' if on_hold else ''}, teammates working {','.join(working) or 'none'}"
+    tail = f"{f'team lead {status}' if lead else 'no team lead'}, pending tasks {len(pending)}{f', held {len(on_hold)}' if on_hold else ''}, teammates working {','.join(at_work(snap, working)) or 'none'}"
     if lead:
         tail += f"  (read: herdr agent read {orch} --lines 60; nudge: herdr agent prompt {orch} \"...\")"
     def fire(key, what):
@@ -516,7 +521,7 @@ def cmd_watch(a, rewake=False):
             if deadline and time.time() > deadline:
                 watch_save(proj, key, base=after)
                 pending = sum(t["state"] in ("pending", "running", "interrupted") for t in after["tasks"].values())
-                working = [n for n, r in after["crew"].items() if r and r[-1]["state"] == "working" and n not in after.get("closed", ())]
+                working = at_work(after, [n for n, r in after["crew"].items() if r and r[-1]["state"] == "working" and n not in after.get("closed", ())])
                 print(f"[{fc_core.now()}] event timeout  nothing changed in {fc_core.fmt(a.timeout)}: pending tasks {pending}, teammates working "
                       f"{','.join(working) or 'none'}, run {'live' if after['run'] else 'not live'}, verify "
                       f"{'PASS' if after['verify'] and after['verify'][1] else 'FAIL' if after['verify'] else 'not run'}")

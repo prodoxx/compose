@@ -29,6 +29,11 @@ class Stalls(unittest.TestCase):
     def stalls(self, snap, now=NOW):
         return fc.fc_watch.watch_stalls(self.proj, snap, 240, now_s=now)
 
+    def test_a_teammate_herdr_lists_idle_is_not_named_as_working_in_a_stall_line(self):
+        s = self.snap(crew={ORCH: ("working", 600), "hw-tests-015": ("working", 3000), "hw-tests-016": ("working", 30)}, last_ago=600)
+        s["agents"] |= {"hw-tests-015": "idle", "hw-tests-016": "working"}
+        self.assertIn("teammates working hw-tests-016", self.stalls(s)[0])
+
     def test_quiet_project_fires_once(self):
         s = self.snap(crew={ORCH: ("working", 600)}, last_ago=600)
         ev = self.stalls(s)
