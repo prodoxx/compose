@@ -282,6 +282,7 @@ def main():
             s.add_argument("--only", help="comma-separated task ids")
             s.add_argument("--print", dest="print_", action="store_true", help="print the briefs instead of starting builders")
             s.add_argument("--redo", action="store_true", help="with --only: reopen tasks finished by hand or passed, even In Review, for a new builder; their old result is kept as <id>.json.before-redo")
+            s.add_argument("--ignore-waits", action="store_true", help="with --only: start the named tasks although their blockers are not In Review or Done (the hold reads the last sync)")
             s.add_argument("--max", type=int, help="most builders to start at once (default: design_concurrency in verify.json, else parallel in ~/.compose/config.json, else 3)")
             s.add_argument("--force", action="store_true", help="start the builders although the Mac's battery is nearly empty")
         if name == "architect":

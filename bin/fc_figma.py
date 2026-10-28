@@ -166,10 +166,16 @@ def cmd_designcrews(a):
     states = {m["id"]: m.get("linear_state") for m in tasks}
     waits = {m["id"]: [b for b in (x.strip() for x in str(m.get("after") or "").split(","))
                        if b and states.get(b) not in ("In Review", "Done")] + m.get("waits_on", []) for m in metas}
-    for m in metas:  # a blocker not yet In Review or Done holds the task back: not started, not briefed, no slot under the cap
-        if waits[m["id"]]:
-            print(f"{m['id']} waits on {','.join(waits[m['id']])}")
-    metas = [m for m in metas if not waits[m["id"]]]
+    ignore = getattr(a, "ignore_waits", False)
+    if ignore and not only:
+        sys.exit("--ignore-waits needs --only <ids>: it starts the named tasks although their blockers are open, not every held one")
+    held = [] if ignore else [m for m in metas if waits[m["id"]]]
+    for m in held:  # a blocker not yet In Review or Done holds the task back: not started, not briefed, no slot under the cap
+        print(f"{m['id']} waits on {','.join(waits[m['id']])}")
+    if held:  # the hold reads Linear as of the last sync: say how old that is and what refreshes it
+        print(f"waits are read from the last sync ({fc_tasks.linear_cache(proj).get('synced_at') or 'never'}): "
+              f"compose sync --project {proj.name} refreshes them; --only <ids> --ignore-waits starts a held task now")
+    metas = [m for m in metas if m not in held]
     if a.print_:
         for m in metas:
             print(f"===== design-{m['id']}\n{design_brief(m, figma, proj / 'results')}\n")

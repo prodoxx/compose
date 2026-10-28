@@ -629,11 +629,11 @@ class DesignCrewsWait(unittest.TestCase):
             issue("001", "Done", "code"), issue("002", "In Progress", "code"), issue("003", kind="code"), issue("004", after=("001", "002", "003")),
             issue("005", after=("001", "006")), issue("006", "In Review"), issue("007"), issue("008", after=("006",)), issue("009")]})
 
-    def run_crews(self, only=None, print_=False, max=None):
+    def run_crews(self, only=None, print_=False, max=None, ignore_waits=False):
         started, out = [], io.StringIO()
         with mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), mock.patch.object(fc.fc_herdr, "herdr_space"), \
                 mock.patch.object(fc.fc_crew, "cmd_crew", side_effect=started.append), mock.patch("sys.stdout", out):
-            fc.fc_figma.cmd_designcrews(SimpleNamespace(repo=".", project="p", only=only, print_=print_, max=max, redo=False))
+            fc.fc_figma.cmd_designcrews(SimpleNamespace(repo=".", project="p", only=only, print_=print_, max=max, redo=False, ignore_waits=ignore_waits))
         return sorted(ns.role for ns in started), out.getvalue()
 
     def assert_waits_once(self, out):
@@ -659,7 +659,11 @@ class DesignCrewsWait(unittest.TestCase):
 
     def test_a_held_back_task_named_with_only_prints_its_waits_line_not_skipped(self):
         started, out = self.run_crews(only="004")
-        self.assertEqual((started, out.strip()), ([], "004 waits on 002,003"))
+        self.assertEqual((started, out.splitlines()[0]), ([], "004 waits on 002,003"))
+        self.assertIn("read from the last sync (20", out)  # the hold says how old its view of Linear is, and what refreshes it
+        self.assertIn("compose sync --project p refreshes", out)
+        started, out = self.run_crews(only="004", ignore_waits=True)
+        self.assertEqual((started, "waits" in out), (["design-004"], False))
         started, out = self.run_crews(only="004,005,003")
         self.assertEqual(started, ["design-005"])
         self.assertIn("003 skipped: not a design task (kind code)", out)
