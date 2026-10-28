@@ -118,6 +118,11 @@ class Ask(unittest.TestCase):
             self.assertIn("does not answer", str(e.exception))
         self.assertEqual(self.sent(), [])
 
+    def test_a_link_whose_host_name_does_not_resolve_here_passes_when_the_local_server_answers(self):
+        port = self.server.server_port
+        self.assertEqual(fc.fc_ask.url_problem(f"http://tailnet-host.invalid:{port}/session/4433ea54b6a63d29"), "")
+        self.assertNotEqual(fc.fc_ask.url_problem(f"http://tailnet-host.invalid:{port}/session/0123456789abcdef"), "")  # the page itself is still checked
+
     def test_one_page_in_two_host_forms_is_refused(self):
         other = self.good.replace("127.0.0.1", "localhost")
         with self.assertRaises(SystemExit) as e:

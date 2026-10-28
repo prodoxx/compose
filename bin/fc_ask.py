@@ -1,4 +1,4 @@
-import json, re, sys, time, urllib.error, urllib.request
+import json, re, sys, time, urllib.error, urllib.parse, urllib.request
 import fc_core, fc_config, fc_linear, fc_change
 
 
@@ -7,8 +7,10 @@ SESSION_URL = re.compile(r"https?://[^\s'\"<>()]*?/session/[0-9A-Za-z]+")  # the
 ASK_FALLBACK = "You can also answer the visual questions in text, in this same message."
 ASK_HEAD = re.compile(r"^(?:reminder:\s*)?(?:change (C\d+):\s*)?([A-Z][A-Z0-9]*-\d+):")
 
-def url_problem(url):
-    """Why a page link does not answer (empty when it does): the check behind "one working link, every time"."""
+LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
+
+def probe(url):
+    """Why `url` does not answer (empty when it does)."""
     try:
         with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(url, timeout=5) as r:  # a proxy never reaches a local page
             return "" if r.status < 400 else f"HTTP {r.status}"
@@ -17,6 +19,17 @@ def url_problem(url):
         return f"HTTP {e.code}"
     except (OSError, ValueError) as e:
         return str(e)[:100]
+
+def url_problem(url):
+    """Why a page link does not answer (empty when it does): the check behind "one working link, every time". `lavish-axi` prints
+    the machine's tailnet host name, which may resolve to other addresses from this machine though it works for the product owner,
+    so a link that cannot be reached by name is checked on this machine's own server: the same port and path on localhost."""
+    why = probe(url)
+    parts = urllib.parse.urlsplit(url)
+    if not why or why.startswith("HTTP ") or parts.hostname in LOCAL_HOSTS:
+        return why
+    local = parts._replace(netloc=f"localhost:{parts.port}" if parts.port else "localhost")
+    return "" if any(not probe(local._replace(scheme=sc).geturl()) for sc in dict.fromkeys([parts.scheme, "http"])) else why
 
 CARD_ID = r"(?:[A-Za-z]{1,3}-?)?\d+(?:-\d+)?"  # `Q1`, `REC-19`, or `C1-8` (question 8 of change C1)
 ID_PARTS = re.compile(r"((?:[A-Za-z]{1,3}-?)?)(\d+)(?:-(\d+))?")
