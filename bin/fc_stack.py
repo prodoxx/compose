@@ -148,10 +148,20 @@ def layer_why(proj, l, metas, layers):
         why = [said[0][:room - 3].rsplit(" ", 1)[0] + "..."]
     return [" ".join(why), *refs] if why else refs
 
+def reviewer_command(cmd, repo):
+    """`cmd` as a reviewer can run it from a checkout of the repository, or None: a path under this machine's checkout of the repository
+    (the project worktree, the main checkout) becomes relative to it, and a command that still names an absolute path under the home
+    directory, or a script in the git-ignored `.compose/` (machine-local), is left out."""
+    for root in sorted({str(repo), str(fc_core.main_checkout(repo))}, key=len, reverse=True):
+        cmd = re.sub(re.escape(root) + r"/", "", cmd)
+        cmd = re.sub(re.escape(root) + r"(?![\w.-])", ".", cmd)
+    home = str(Path.home())
+    return None if re.search(r"(^|[\s\"'=:])\.?/?\.compose/", cmd) or re.search(re.escape(home) + r"(?![\w.-])", cmd) else cmd
+
 def layer_body(repo, proj, l, metas, layers=(), written=None):
     """A layer's PR body: `## Why` (layer_why), `## What changed` (one line per task, the subject of its first commit that is
     not one of its test commits, else its title; one per groundwork commit), `## How it was tested` (each test command and
-    passing verify check once, then whether compose verify passed) and `## Tickets` (its tasks' Linear links), each left out
+    passing verify check once, as a reviewer can run it (reviewer_command), then whether compose verify passed) and `## Tickets` (its tasks' Linear links), each left out
     when empty. `written` (pr_text's Why and What changed lines) replaces the first two, its Why followed by the issue_lines.
     `layers` is the whole stack, bottom first, so an issue's `Fixes` lands on the layer that completes it; without
     it, every task not in this layer is still to come. The layer's size stays on its `layer` line, out of the body."""
@@ -170,7 +180,7 @@ def layer_body(repo, proj, l, metas, layers=(), written=None):
         changed.append(subject(own[0]) if own else fc_layers.commit_message(m))
     verify = read("verify")
     checks = [c["cmd"] for c in ((verify.get("rounds") or [{}])[-1].get("checks") or []) if c.get("exit") == 0]
-    how = list(dict.fromkeys(f"`{t}`" for t in [*(m["test"] for m in tasks), *checks]))
+    how = list(dict.fromkeys(f"`{t}`" for t in map(lambda c: reviewer_command(c, repo), [*(m["test"] for m in tasks), *checks]) if t))
     if verify:
         how.append("compose verify passed" if verify.get("passed") else "compose verify failed")
     why, changed = ([*written[0], *issue_lines(proj, l, metas, list(layers))], written[1]) if written else \

@@ -233,6 +233,12 @@ class PrBody(FakeCommits):
         self.assertEqual(s["How it was tested"], ["- `python3 -m unittest tests.toggle`", "- compose verify failed"])
         self.assertEqual(s["What changed"], ["- Build 001"])  # only test commits: the task's own title
 
+    def test_how_it_was_tested_has_commands_a_reviewer_can_run_not_this_machines_paths_or_local_scripts(self):
+        checks = [{"cmd": f"bun test {self.repo}/src/a.test.ts", "exit": 0}, {"cmd": f"bash {self.repo}/.compose/p/e2e/probe.sh", "exit": 0},
+                  {"cmd": f"bash {Path.home()}/elsewhere/x.sh", "exit": 0}, {"cmd": "bash .compose/p/e2e/probe.sh", "exit": 0}]
+        s = self.body(["001"], self.TASK_COMMITS[:1], verify={"passed": True, "rounds": [{"checks": checks}]})
+        self.assertEqual(s["How it was tested"], ["- `python3 -m unittest tests.toggle`", "- `bun test src/a.test.ts`", "- compose verify passed"])
+
     def test_a_groundwork_layer_says_in_one_sentence_what_it_prepares_with_no_issues_tests_or_tickets(self):
         s = self.body(["groundwork", "groundwork"], [[("Ignore build output", ["a.txt"], "Keeps dist out of review.")], [("Pin the toolchain", ["b.txt"], "")]])
         self.assertEqual(s, {"Why": ["Groundwork for Stacked PRs."], "What changed": ["- Ignore build output", "- Pin the toolchain"]})
