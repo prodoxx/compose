@@ -273,6 +273,15 @@ ORDER_FILTER = {}  # mode -> fn(plan, entries, state) -> entries: a mode's say o
 IDLE = {"day": offer_day}
 PRD_IDLE = {}  # mode -> fn(repo, state, now, out): a mode's use of a turn that waits on the PRD (night prep prepares it)
 
+def story_verified(repo, rec) -> bool:
+    """Whether the story's project passed a verify since the story was dispatched: its tasks all In Review is the roll-up, not the verify."""
+    found = fc_core.all_projects(repo).get(rec.get("project"))
+    try:
+        v = found[1] / "results" / "verify.json"
+        return bool(json.loads(v.read_text()).get("passed")) and v.stat().st_mtime >= (rec.get("at") or 0)
+    except (TypeError, OSError, ValueError, AttributeError):
+        return False
+
 def _settle(repo, plan, state, out):
     """Drop the records of stories that left the build (verified, finished, out of the plan) or lost their team lead.
     When herdr does not answer, no lead counts as lost this turn."""
@@ -284,6 +293,8 @@ def _settle(repo, plan, state, out):
             out.append(f"event factory=dropped story={story}  (it left the product delivery plan)")
         elif s in FREED:
             if s == "in review":
+                if not story_verified(repo, rec):  # its tasks are all In Review, but the story verify has not passed: not verified yet
+                    continue
                 out.append(f"event factory=verified story={story} project={rec.get('project')}  (verified: waiting for the product owner's look and merge)")
         else:
             leads = leads_or_none(repo) if leads is False else leads

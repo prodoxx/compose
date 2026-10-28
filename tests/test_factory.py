@@ -335,10 +335,24 @@ class PlanChange(unittest.TestCase):
         self.assertEqual(line, 'event factory=changed story=NEB-10 why="NEB-10 changed"  (nothing running rests on it)')
 
 
+class Verified(unittest.TestCase):
+    def test_story_verified_reads_the_projects_last_verify_since_the_dispatch(self):
+        with tempfile.TemporaryDirectory() as d:
+            proj = Path(d) / "sign-in"; (proj / "results").mkdir(parents=True)
+            v = proj / "results" / "verify.json"
+            with unittest.mock.patch.object(ft.fc_core, "all_projects", lambda repo: {"sign-in": (Path(d), proj)}):
+                rec = {"project": "sign-in", "at": 1.0}
+                self.assertFalse(ft.story_verified(Path('/repo'), rec))
+                v.write_text('{"passed": false}'); self.assertFalse(ft.story_verified(Path('/repo'), rec))
+                v.write_text('{"passed": true}'); self.assertTrue(ft.story_verified(Path('/repo'), rec))
+                self.assertFalse(ft.story_verified(Path('/repo'), {**rec, "at": v.stat().st_mtime + 10}))  # a verify from before the dispatch
+
+
 class Turn(unittest.TestCase):
     def setUp(self):
         self.repo, self.wt = Path("/repo"), Path("/repo-wt")
         self.state = json.loads(json.dumps(st.EMPTY))
+        self.verified = True
         self.calls, self.leads, self.results, self.descriptions = [], {}, {}, {}
         self.plan = {"tracks": [{"name": "t", "items": ["NEB-9"]}], "features": {}}
         self.entries = []
@@ -379,6 +393,7 @@ class Turn(unittest.TestCase):
                              (ft.fc_load, "held", self.held),
                              (ft, "leads_or_none", lambda repo: None if self.leads is None else dict(self.leads)),
                              (ft, "dispatch", self.dispatch), (ft, "hold_changed", self.hold_changed),
+                             (ft, "story_verified", lambda repo, rec: self.verified),
                              (ft, "project_for", lambda repo, feature: ("sign-in", self.wt, self.wt / "sign-in"))):
             pa = unittest.mock.patch.object(mod, name, m); pa.start(); self.addCleanup(pa.stop)
 
@@ -473,6 +488,16 @@ class Turn(unittest.TestCase):
         self.assertNotIn("NEB-10", self.state["dispatched"]); self.assertNotIn("NEB-10", self.state["prints"])
         self.assertEqual([c.args[2]["id"] for c in self.dispatch.call_args_list], ["NEB-11"])  # requeued and started again on the same turn
         self.assertEqual(list(self.state["dispatched"]), ["NEB-11"])
+
+    def test_a_story_in_review_is_verified_only_once_its_verify_passed(self):
+        # NEB-2183: all nine tasks hand_done rolled the story to In Review while the story verify still ran
+        self.state["dispatched"] = {"NEB-10": {"feature": "NEB-9", "project": "sign-in", "kind": "build", "at": 1.0}}
+        self.set_states(**{"NEB-10": "In Review"}); self.verified = False
+        self.assertFalse([l for l in ft.turn(self.repo, self.state, 100.0) if "verified" in l])
+        self.assertIn("NEB-10", self.state["dispatched"])
+        self.verified = True
+        self.assertTrue([l for l in ft.turn(self.repo, self.state, 200.0) if "event factory=verified story=NEB-10" in l])
+        self.assertNotIn("NEB-10", self.state["dispatched"])
 
     def test_a_changed_or_reordered_in_flight_story_is_held_once(self):
         self.state["dispatched"] = {"NEB-10": {"feature": "NEB-9", "project": "sign-in", "kind": "build", "at": 1.0}}
