@@ -51,13 +51,16 @@ def judge_failure(cfg, case, r):
               "or the assert script broke. When the evidence does not show the app working up to the point the feature should appear, "
               'answer environment with kind "unproven". Reply {"verdict": "feature_missing" or "environment", "kind": one of '
               '"feature", "page did not load", "login", "overlay", "seed", "path", "assert", "unproven", "why": one short sentence}.')
-    try:
-        v = fc_models.fast_object({**fc_core.load_env(cfg.get("env_file", fc_config.ENV_FILE)), **os.environ}, system, user,
-                                  '{"verdict": str, "kind": str, "why": str}', "verdict")
+    env = {**fc_core.load_env(cfg.get("env_file", fc_config.ENV_FILE)), **os.environ}
+    try:  # one draw of a model is no proof: the verdict stands only when a second, identical call gives the same one
+        draws = [fc_models.fast_object(env, system, user, '{"verdict": str, "kind": str, "why": str}', "verdict") for _ in range(2)]
     except fc_models.PaymentRequired:
         raise
     except Exception as e:  # noqa: BLE001
         return "environment", "unjudged", f"no model verdict ({type(e).__name__}: {str(e)[:80]}); read the screenshots"
+    v = draws[0]
+    if draws[0]["verdict"] != draws[1]["verdict"]:
+        return "environment", "unstable", "the judge gave different verdicts on the same evidence; make the assert's FAIL line name the missing piece"
     why = str(v.get("why") or "")[:200]
     if v["verdict"] == "feature_missing":
         return "feature_missing", "feature", why

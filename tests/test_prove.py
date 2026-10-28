@@ -105,6 +105,12 @@ class ProveCase(unittest.TestCase):
             self.assertEqual((row["verdict"], row["kind"]), want, reply)
             self.assertIn("Settings", m.call_args[0][2])  # the judge reads the steps
 
+    def test_a_judge_that_disagrees_with_itself_leaves_the_case_unproven(self):
+        replies = [{"verdict": "feature_missing", "kind": "feature", "why": "a"}, {"verdict": "environment", "kind": "login", "why": "b"}]
+        with mock.patch.object(fc.fc_models, "fast_object", side_effect=replies):
+            row = fc.fc_prove.prove_case({}, {"name": "c"}, {"exit": 1})
+        self.assertEqual((row["verdict"], row["kind"]), ("environment", "unstable"))
+
     def test_a_judge_that_cannot_be_asked_leaves_the_case_unproven(self):
         with mock.patch.object(fc.fc_models, "fast_object", side_effect=RuntimeError("down")):
             row = fc.fc_prove.prove_case({}, {"name": "c"}, {"exit": 1})
