@@ -1,6 +1,6 @@
 """The stack: the review layers registered as one gh stack, and each layer's PR title and body, written by the team lead or
 generated from its commits and stories."""
-import json, re, subprocess, sys
+import json, os, re, subprocess, sys
 from pathlib import Path
 import fc_core, fc_config, fc_tasks, fc_worktree, fc_layers
 
@@ -309,6 +309,18 @@ def fetch_landed_base(wt, base):
         return f"origin/{base}", fc_core.sh(["git", "fetch", "-q", "origin", f"+refs/heads/{base}:refs/remotes/origin/{base}"], wt, check=False)
     return base, fc_core.sh(["git", "fetch", "-q", "origin", f"{base}:{base}"], wt, check=False)
 
+def remote_of(repo, ref):
+    """The remote `ref` is a remote-tracking branch of (`origin` for origin/testing), else ""."""
+    remote = ref.partition("/")[0]
+    return remote if "/" in ref and fc_core.sh(["git", "show-ref", "--verify", "-q", f"refs/remotes/{ref}"], repo, check=False).returncode == 0 else ""
+
+def push_remote_env(repo, remote):
+    """The environment for gh stack: with several remotes and no remote.pushDefault it refuses to say where to push, so the remote the base
+    lives on is the push default for its run (never written to the repository's config). None, the caller's environment, otherwise."""
+    if not remote or fc_core.sh(["git", "config", "--get", "remote.pushDefault"], repo, check=False).stdout.strip():
+        return None
+    return {**os.environ, "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "remote.pushDefault", "GIT_CONFIG_VALUE_0": remote}
+
 def upstream_ahead(repo, base, upstream):
     """How many commits `upstream` (the base's remote branch) holds that the local `base` does not, after a fetch of it. The user's checkout
     holds `base` and compose never moves it, so it can fall behind; a fetch that fails (offline) leaves what was fetched before."""
@@ -359,9 +371,13 @@ def register_stack(repo, proj, trunk, submit=False, preview=False, gate=None):
         return []
     cfg = fc_core.project_config(proj)
     base = layer_base(repo, proj, trunk)
-    up = fc_core.sh(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", f"{base}@{{upstream}}"], repo, check=False)
-    upstream = up.stdout.strip() if up.returncode == 0 else ""
-    ahead = int(fc_core.sh(["git", "rev-list", "--count", f"{upstream}..{base}"], repo).stdout) if upstream else 0
+    remote = remote_of(repo, base)  # a review base that is a remote-tracking ref (origin/testing): the PRs' base is its branch
+    if remote:
+        upstream, base = base, base.partition("/")[2]
+    else:
+        up = fc_core.sh(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", f"{base}@{{upstream}}"], repo, check=False)
+        upstream = up.stdout.strip() if up.returncode == 0 else ""
+    ahead = int(fc_core.sh(["git", "rev-list", "--count", f"{upstream}..{base}"], repo).stdout) if upstream and not remote else 0
     behind = upstream_ahead(repo, base, upstream) if upstream and not ahead else 0
     level, said = base_ahead(base, upstream, ahead, submit)
     if level == "stop":
@@ -388,13 +404,14 @@ def register_stack(repo, proj, trunk, submit=False, preview=False, gate=None):
                 fc_core.say(f"stack  STOP  {fc_layers.STACK_STOP}")
                 return []
     wt = fc_worktree.stack_worktree(repo, proj, trunk)
-    gh = lambda *args: subprocess.run(["gh", "stack", *args], cwd=wt, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    env = push_remote_env(repo, remote or (upstream.partition("/")[0] if upstream else ""))
+    gh = lambda *args: subprocess.run(["gh", "stack", *args], cwd=wt, capture_output=True, text=True, stdin=subprocess.DEVNULL, env=env)
     rec_file, landed = proj / "layers.json", []  # recorded layers whose PR was merged: the rest is built on the base they moved
     for b in json.loads(rec_file.read_text()) if rec_file.exists() else []:
         v = subprocess.run(["gh", "pr", "view", b, "--json", "state"], cwd=wt, capture_output=True, text=True, stdin=subprocess.DEVNULL)
         if v.returncode == 0 and json.loads(v.stdout).get("state") == "MERGED":
             landed.append(b)
-    built = upstream if behind else base  # the ref the layers are cut on: a base behind its remote is not the one the PRs land on
+    built = upstream if behind or remote else base  # the ref the layers are cut on: a base behind its remote is not the one the PRs land on
     if behind and not landed:
         fc_core.say(f"stack  base  {base} is {behind} commit{'s' * (behind > 1)} behind {upstream}; building on {upstream}")
     if landed:

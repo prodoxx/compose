@@ -164,11 +164,12 @@ class FakedRegister(unittest.TestCase):
         (self.proj / "results").mkdir(parents=True)
         (self.proj / "verify.json").write_text("{}")
         (self.proj / "results" / "tasks.json").write_text(json.dumps({"feature": {}, "tasks": [{"id": t, "protected": []} for t in ("001", "002", "003")]}))
+        self.base = "main"
         self.upstream, self.ahead, self.behind, self.said, self.chain, self.through, self.built = "", 0, 0, [], [], [], []
         self.addCleanup(setattr, fc.fc_layers, "STACK_STOP", "")
         fc.fc_layers.STACK_STOP = ""
         for target, name, fake in ((fc.fc_stack, "head_problem", lambda *a: ""), (fc.fc_worktree, "rename_legacy_branches", lambda *a: {}), (fc.fc_worktree, "stack_order", lambda *a: self.ORDER),
-                                   (fc.fc_worktree, "task_prefix", lambda *a: "compose/p-"), (fc.fc_stack, "layer_base", lambda *a: "main"), (fc.fc_core, "sh", self.sh),
+                                   (fc.fc_worktree, "task_prefix", lambda *a: "compose/p-"), (fc.fc_stack, "layer_base", lambda *a: self.base), (fc.fc_core, "sh", self.sh),
                                    (fc.fc_core, "say", self.said.append), (fc.fc_worktree, "stack_worktree", lambda *a: self.proj), (fc.fc_layers, "linearize", self.linearize),
                                    (fc.fc_layers, "build_layers", lambda *a, **kw: self.built.append(a) or self.layers), (fc.fc_config, "read_config", lambda: {})):
             patch = mock.patch.object(target, name, fake)
@@ -219,6 +220,17 @@ class FakedRegister(unittest.TestCase):
         self.register(submit=True)
         self.assertEqual(self.built[0][2], "origin/main")  # build_layers' base
         self.assertIn("stack  base  main is 20 commits behind origin/main; building on origin/main", self.said)
+
+    def test_a_remote_tracking_review_base_is_its_branch_for_the_prs_and_the_ref_the_layers_are_cut_on(self):
+        for t in ("001", "002", "003"):
+            self.result(t, "passed")
+        self.base, self.chain = "origin/testing", self.ORDER
+        self.register(submit=True)
+        self.assertEqual(self.built[0][2:4], ("origin/testing", "compose/p"))  # cut on the remote ref; never `origin/origin/testing`
+        self.assertNotIn("WARN", "".join(self.said))
+        env = fc.fc_stack.push_remote_env(Path("."), "origin")  # several remotes and no remote.pushDefault: the base's remote is it for gh's run
+        self.assertEqual((env["GIT_CONFIG_KEY_0"], env["GIT_CONFIG_VALUE_0"]), ("remote.pushDefault", "origin"))
+        self.assertIsNone(fc.fc_stack.push_remote_env(Path("."), ""))
 
     def test_a_chain_rebase_that_stops_leaves_the_layers_and_gh_stack_untouched(self):
         self.stop, self.chain = "compose/p-003 conflicts when rebased onto compose/p-002 in 002.src", self.ORDER[:2]
