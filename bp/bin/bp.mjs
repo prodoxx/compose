@@ -138,7 +138,7 @@ const cmds = {
     });
   },
   async kill() { needPort(); spawn('pkill', ['-f', `remote-debugging-port=${PORT}`]); console.log('killed Chromium on', PORT); },
-  async help() { console.log(`bp — drive Chromium + an unpacked extension over CDP. Env: BP_PORT (required, a port only you use), BP_EXT, BP_PROFILE, BP_CHROME.
+  async help() { console.log(`bp - drive Chromium + an unpacked extension over CDP. Env: BP_PORT (required, a port only you use), BP_EXT, BP_PROFILE, BP_CHROME.
   launch [url] --ext <dir> --profile <dir> [--headless] [--viewport WxH]   start Chromium with the extension, debug port on (--headless or BP_HEADLESS=1: no window; --viewport 390x844: window size, for mobile shots; refuses a port that already has a browser)
   list                                         targets (pages, workers, iframes); page ids are the <sel> below
   open <url> [--wait ms] [--out shot.png]      new tab
