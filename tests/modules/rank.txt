@@ -79,6 +79,7 @@ fc_buildercheck
 fc_reconcile
 fc_libapi
 fc_green
+fc_keepout
 fc_gate
 fc_format
 fc_trailpack

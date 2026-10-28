@@ -260,6 +260,8 @@ The `e2e` line then names jev's stop reason, and the next lines show the page it
 `results/verify.json` keeps every step of the run, and `results/e2e/<n>-<case>/` keeps a screenshot of each step of a case that did not pass.
 
 A failing check keeps its whole output in `results/checks/` (named on its `check` line and as `output_file` in `results/verify.json`, whose `output` is only the last 3000 characters).
+The `check` line in the verify log also shows the last 20 lines of that output.
+`check_artifacts` in verify.json lists folders or files, relative to the repo (for example `e2e/test-results`), that a failing check's tool writes; each is copied beside the saved output into `results/checks/<name>-artifacts/`, so the next round's run does not wipe it.
 The reflect and every fix round read the check's failing tests (unittest's `FAIL:` and `ERROR:` lines), then the end of the output, then that path.
 
 When the harness itself fails, for example a jev or browser crash, a missing tool, or a port in use, verify reports `TOOL ERROR` and retries once.

@@ -1,7 +1,7 @@
 import itertools, json, os, re, shutil, subprocess, sys, tempfile, time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-import fc_core, fc_proc, fc_config, fc_tasks, fc_ledger, fc_linear, fc_models, fc_herdr, fc_worktree, fc_layers, fc_change, fc_routecost, fc_implement, fc_green, fc_gate, fc_init, fc_jev, fc_accept, fc_reroute, fc_costevent, fc_review, fc_history, fc_load, fc_trailpack, fc_update, fc_fixround
+import fc_core, fc_proc, fc_config, fc_tasks, fc_ledger, fc_linear, fc_models, fc_herdr, fc_worktree, fc_layers, fc_change, fc_routecost, fc_implement, fc_green, fc_gate, fc_init, fc_jev, fc_accept, fc_reroute, fc_costevent, fc_review, fc_history, fc_load, fc_trailpack, fc_update, fc_fixround, fc_keepout
 
 CHECK_TIMEOUT = 900  # seconds a check may run; past it the check fails, named as a timeout
 
@@ -213,9 +213,11 @@ def run_stages(repo, proj, cfg, a, tests=None):
             record = {"cmd": c, "exit": p.returncode, "seconds": round(awake, 1), "output": out, "tool_error": tool}
             if p.returncode:  # the cut hides most of a long suite's failures: the whole output stays in a file
                 record["output_file"] = save_output(proj / "results", c, t1, full)
+                if kept := fc_keepout.keep_artifacts(repo, cfg.get("check_artifacts", []), record["output_file"]):
+                    record["artifacts"] = kept
             into.append(record)
             fc_core.say(f"check  {'ok  ' if p.returncode == 0 else 'TOOL ERROR' if tool else 'FAIL'} {fc_core.fmt(awake):>8}  {c}"
-                        + (f"\n           full output {record['output_file']}" if p.returncode else ""))
+                        + (fc_keepout.tail(full) + f"\n           full output {record['output_file']}" + (f"\n           artifacts   {kept}" if record.get("artifacts") else "") if p.returncode else ""))
             if p.returncode and not tool:
                 findings.append(f"Command failed: {c}\n{failure_summary(full, out, record['output_file'])}")
         passed = all(c["exit"] == 0 for c in into)
