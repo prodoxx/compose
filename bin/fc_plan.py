@@ -30,10 +30,20 @@ def section_span(lines, heading):
 
 LINEAR_BULLET, LINEAR_LINK = re.compile(r"^([ \t]*)[-+*](?=[ \t])", re.M), re.compile(r"\]\(<([^<>\s]*)>\)")
 
+LIST_ITEM = re.compile(r"^[ \t]*(?:[-+*]|\d+[.)])(?=[ \t])")
+
 def linear_markdown(text):
-    """The text as Linear stores it: a bullet as `*`, a link target bare where Linear wraps it in `<>`, no trailing spaces."""
+    """The text as Linear stores it: a bullet as `*`, a link target bare where Linear wraps it in `<>`, no trailing spaces,
+    a blank line between a paragraph and the list right under it."""
     text = LINEAR_LINK.sub(r"](\1)", LINEAR_BULLET.sub(r"\1*", text or ""))
-    return "\n".join(line.rstrip() for line in text.strip().split("\n"))
+    out, in_list = [], False
+    for line in (l.rstrip() for l in text.strip().split("\n")):
+        is_item = bool(LIST_ITEM.match(line))
+        if is_item and not in_list and out and out[-1]:
+            out.append("")
+        in_list = bool(line) and (is_item or in_list)
+        out.append(line)
+    return "\n".join(out)
 
 def same_markdown(a, b):
     """Whether Linear stores the two texts alike, so writing one over the other changes nothing and Linear keeps serving the old."""

@@ -277,6 +277,14 @@ class LinearMarkdown(unittest.TestCase):
         self.assertFalse(fc_plan.same_markdown("1. A\n2. B", "1. B\n2. A"))  # order is content
         self.assertEqual(fc_plan.linear_markdown("x - y\n-z"), "x - y\n-z")  # a dash that is no bullet stays
 
+    def test_linear_puts_a_blank_line_between_a_paragraph_and_the_list_after_it(self):
+        # NEB-2191..2194: `Code involved:` written right above its bullets came back with a blank line between
+        ours = "Code involved:\n- a.tsx\n- b.tsx\n\nQuestions:\n1. Why?\n   Recommendation: x\n2. How?\n"
+        theirs = "Code involved:\n\n* a.tsx\n* b.tsx\n\nQuestions:\n\n1. Why?\n   Recommendation: x\n2. How?"
+        self.assertTrue(fc_plan.same_markdown(ours, theirs))
+        self.assertEqual(fc_plan.linear_markdown("- a\n  - b\nlazy\n- c"), "* a\n  * b\nlazy\n* c")  # inside a list nothing is added
+        self.assertFalse(fc_plan.same_markdown("Items:\n- a", "Items:\n\n\n* a"))  # one blank line is Linear's; more is the writer's
+
 class ProductSeed(unittest.TestCase):
     def setUp(self):
         self.f = {f["id"]: f for f in (feat("NEB-7"), feat("NEB-9", "Todo", ("NEB-7", "Todo")), feat("NEB-12", "Todo", ("NEB-7", "Todo")),
