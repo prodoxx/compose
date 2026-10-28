@@ -79,7 +79,8 @@ class SpecCheck(unittest.TestCase):
 
     def test_settled_feature_prints_only_pass_and_skips_canceled_issues(self):
         canceled = {**STORY, "id": "ENG-9", "description": "", "status": "Canceled"}
-        lines, e = self.run_cli(json.dumps(data([task("ENG-3", "001"), canceled])))
+        done = {**STORY, "id": "ENG-8", "description": "An audit, finished.", "status": "Done"}  # no bullets, no tasks: nothing left to specify
+        lines, e = self.run_cli(json.dumps(data([task("ENG-3", "001"), canceled, done])))
         self.assertIn(e.code, (0, None))
         self.assertEqual(lines[0], "PASS ENG-1 feature")
         self.assertEqual(sorted(lines[1:]), ["PASS ENG-2 story", "PASS ENG-3 task"])

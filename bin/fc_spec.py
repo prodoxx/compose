@@ -299,6 +299,8 @@ def spec_check(data, checks=(), defined=None, scripts=None):
             out.append((not gaps, i["id"], "task", gaps))
         elif fc_tasks.hand_task(i):
             out.append((True, i["id"], "hand task", []))
+        elif (i.get("status") or "").lower() == "done":
+            continue  # a finished story has nothing left to specify: its criteria and tasks may never have been written
         else:
             gaps = []
             if not bullets:
