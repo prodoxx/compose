@@ -730,6 +730,13 @@ class FigmaPublish(unittest.TestCase):
         self.modified = "2026-10-21T02:00:00Z"
         self.assertTrue(self.publish().startswith("publish: ask"))
 
+    def test_a_library_that_is_the_screens_file_never_asks_for_a_publish(self):
+        self.library = {"components": [], "component_sets": [], "styles": []}
+        self.set({"figma": self.LIB})
+        out = self.publish()
+        self.assertTrue(out.startswith("publish: none\nlibrary"), out)
+        self.assertIn("no consumer", out)
+
     def test_nothing_published_yet_is_pending(self):
         self.library = {"components": [], "component_sets": [], "styles": []}
         out = self.publish()

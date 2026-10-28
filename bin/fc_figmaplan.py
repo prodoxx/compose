@@ -177,6 +177,9 @@ def publish_ruling(data, library, keys, api, withdraw=False):
         data.pop("figma_publish_ask", None)
         data["figma_publish_withdrawn"] = {"library": library, "at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
         return f"publish: none\nthe ask is withdrawn: do not ask the product owner to publish library {library}", data
+    if library == data.get("figma"):
+        return (f"publish: none\nlibrary {library} is the file the screens are drawn in: a publish has no consumer there, so do not ask; "
+                "the components are used in place"), data
     caps = data.get("figma_caps") or {}
     if caps and caps.get("library_publish", True) is False:
         return (f"publish: none\nthe {caps['plan']} plan cannot publish a library: do not ask; keep the library and its consumers in one file, "
