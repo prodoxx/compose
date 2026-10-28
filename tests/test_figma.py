@@ -582,7 +582,8 @@ class FigmaCaps(unittest.TestCase):
     def test_the_probe_alone_sets_the_tier_and_its_limits(self):
         for pages, modes, tier, line in (("3", "1", "starter", "pages per file 3; modes per collection 1; library publish no"),
                                          ("unlimited", "4", "professional", "pages per file no limit; modes per collection 4; library publish yes"),
-                                         ("unlimited", "unlimited", "organization", "modes per collection no limit; library publish yes; Code Connect yes")):
+                                         ("unlimited", "unlimited", "unknown", "modes per collection no limit; library publish unknown; Code Connect unknown"),
+                                         ("unproven", "unlimited", "unknown", "pages per file unknown; modes per collection no limit")):
             out, _ = self.check(pages=pages, modes=modes)
             self.assertIn(f"Figma capabilities (probe): plan {tier}", out)
             self.assertIn(line, out)
@@ -591,6 +592,16 @@ class FigmaCaps(unittest.TestCase):
         self.assertEqual(err, "the Figma plan blocks the design")
         self.assertNotIn("measure them with the probe", out)
 
+    def test_a_probe_that_hit_no_limit_does_not_claim_a_tier_and_an_unknown_one_never_blocks_a_publish(self):
+        self.check(pages="unlimited", modes="unlimited")
+        caps = self.caps()
+        self.assertEqual((caps["plan"], caps["code_connect"], caps["library_publish"]), ("unknown", "unknown", "unknown"))
+        out, err = self.check(pages="unproven", modes="unlimited", need_pages=9)
+        self.assertIsNone(err)  # a page limit nobody proved cannot block
+        library = {"components": [], "component_sets": [], "styles": []}
+        text, _ = fc.fc_figma.fc_figmaplan.publish_ruling(caps, "Lib1", [], lambda path: {"meta": library, "lastModified": "2026-01-01T00:00:00Z"})
+        self.assertNotIn("cannot publish", text)
+
     def test_a_probe_with_only_one_count_and_no_plan_is_refused(self):
         for kw in (dict(pages="3"), dict(modes="4")):
             out, err = self.check(**kw)
@@ -598,7 +609,7 @@ class FigmaCaps(unittest.TestCase):
         self.assertIsNone(self.caps())
 
     def test_unknown_plan_and_bad_counts_are_refused(self):
-        for kw, msg in ((dict(plan="team"), "unknown Figma plan"), (dict(plan="pro", pages="lots"), "not a count or `unlimited`: lots")):
+        for kw, msg in ((dict(plan="team"), "unknown Figma plan"), (dict(plan="pro", pages="lots"), "not a count, `unlimited`, or `unproven`: lots")):
             out, err = self.check(**kw)
             self.assertIn(msg, err)
         self.assertIsNone(self.caps())

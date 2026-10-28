@@ -50,6 +50,7 @@ PLAN_LIMITS = {"starter": {"pages": 3, "modes": 1, "library_publish": False, "co
                "professional": {"pages": None, "modes": 4, "library_publish": True, "code_connect": False},
                "organization": {"pages": None, "modes": 10, "library_publish": True, "code_connect": True},
                "enterprise": {"pages": None, "modes": 20, "library_publish": True, "code_connect": True}}
+UNKNOWN = "unknown"  # a limit or capability the probe did not prove
 DESIGN_SYSTEM_MODES = 2  # the design system's semantic color has Light and Dark (0d)
 
 def plan_tier(text):
@@ -60,46 +61,50 @@ def plan_tier(text):
             return tier
 
 def limit_value(text):
-    """A --pages or --modes value: a count, or `unlimited` (None)."""
+    """A --pages or --modes value: a count, `unlimited` (None), or `unproven` (UNKNOWN: the probe could not tell)."""
     if str(text).lower() in ("unlimited", "none", "-"):
         return None
+    if str(text).lower() in ("unproven", UNKNOWN):
+        return UNKNOWN
     if not str(text).isdigit():
-        sys.exit(f"not a count or `unlimited`: {text}")
+        sys.exit(f"not a count, `unlimited`, or `unproven`: {text}")
     return int(text)
 
 def probe_tier(modes):
-    """The tier the probe's mode count shows: 1 is starter, a limit of a few is professional, and no limit up to the probe's 5 is organization
-    (organization and enterprise gate the same things here)."""
-    return "organization" if modes is None else "starter" if modes <= 1 else "professional"
+    """The tier the probe's mode count proves, else None: a limit of 1 is starter and a limit of a few is professional. No limit up to
+    the probe's 5 modes fits organization and enterprise, but a file whose plan the probe cannot read as a limit shows the same, so the
+    tier is unknown, and so are Code Connect and library publish."""
+    return None if modes is None or modes == UNKNOWN else "starter" if modes <= 1 else "professional"
 
 def figma_caps(plan, pages="table", modes="table"):
     """The record stored as `figma_caps`: the tier's predicted limits, each replaced by a probed value when one is given; `source` says which.
-    With no plan, both probed values name the tier."""
+    With no plan, both probed values name the tier when they prove one; else the tier, Code Connect and library publish are `unknown`."""
     tier = plan_tier(plan) if plan else probe_tier(modes)
-    if not tier:
+    if plan and not tier:
         sys.exit(f"unknown Figma plan {plan!r}: pass the tier of the plan (starter, pro, org, enterprise), or the probe's --pages and --modes")
-    lim = PLAN_LIMITS[tier]
-    caps = {"plan": tier, "pages_per_file": lim["pages"], "modes_per_collection": lim["modes"],
-            "library_publish": lim["library_publish"], "code_connect": lim["code_connect"], "source": "table"}
+    lim = PLAN_LIMITS[tier] if tier else {"pages": UNKNOWN, "modes": UNKNOWN, "library_publish": UNKNOWN, "code_connect": UNKNOWN}
+    caps = {"plan": tier or UNKNOWN, "pages_per_file": lim["pages"], "modes_per_collection": lim["modes"],
+            "library_publish": lim["library_publish"], "code_connect": lim["code_connect"], "source": "table" if tier else "probe"}
     for key, val in (("pages_per_file", pages), ("modes_per_collection", modes)):
-        if val != "table":
+        if val != "table" and not (val == UNKNOWN and tier):  # a plan's predicted limit stands where the probe proved nothing
             caps[key], caps["source"] = val, "probe"
     return caps
 
 def caps_line(caps):
     """One line for the brief and the check output."""
     show = lambda v: "no limit" if v is None else v
+    yn = lambda v: UNKNOWN if v == UNKNOWN else "yes" if v else "no"
     return (f"Figma capabilities ({caps['source']}): plan {caps['plan']}; pages per file {show(caps['pages_per_file'])}; modes per collection "
-            f"{show(caps['modes_per_collection'])}; library publish {'yes' if caps['library_publish'] else 'no'}; Code Connect {'yes' if caps['code_connect'] else 'no'}")
+            f"{show(caps['modes_per_collection'])}; library publish {yn(caps['library_publish'])}; Code Connect {yn(caps['code_connect'])}")
 
 def caps_blockers(caps, need_pages=None, need_modes=DESIGN_SYSTEM_MODES):
     """What the design needs that the stored capabilities do not allow, one line each."""
     out = []
     lim = caps.get("modes_per_collection")
-    if need_modes and lim is not None and need_modes > lim:
+    if need_modes and isinstance(lim, int) and need_modes > lim:
         out.append(f"variable modes: the design system needs {need_modes} per collection{' (Light and Dark)' if need_modes == 2 else ''}, the {caps['plan']} plan allows {lim}")
     lim = caps.get("pages_per_file")
-    if need_pages and lim is not None and need_pages > lim:
+    if need_pages and isinstance(lim, int) and need_pages > lim:
         out.append(f"pages: the design needs {need_pages} per file, the {caps['plan']} plan allows {lim}")
     return out
 
@@ -118,9 +123,10 @@ def count_pages(text):
         return None
     return len([n for n in nodes or [] if isinstance(n, dict) and n.get("type") == "CANVAS"]) or None
 
-# The one script that measures what the plan allows (pages up to 6, modes up to 5); the designer brief carries it verbatim.
+# The one script that measures what the plan allows (pages up to 6, modes up to 5; a file that already has 6 pages proves no page limit); the designer brief carries it verbatim.
 PROBE_SCRIPT = """const out = {pages: 'unlimited', modes: 'unlimited'}; const made = [];
-try { while (figma.root.children.length < 6) { const p = figma.createPage(); p.name = 'probe'; made.push(p); } } catch (e) { out.pages = figma.root.children.length; }
+if (figma.root.children.length >= 6) out.pages = 'unproven';
+else try { while (figma.root.children.length < 6) { const p = figma.createPage(); p.name = 'probe'; made.push(p); } } catch (e) { out.pages = figma.root.children.length; }
 made.forEach(p => p.remove());
 let col;
 try { col = figma.variables.createVariableCollection('probe'); for (let i = 1; i < 5; i++) col.addMode('m' + i); } catch (e) { out.modes = col ? col.modes.length : 0; }
@@ -172,7 +178,7 @@ def publish_ruling(data, library, keys, api, withdraw=False):
         data["figma_publish_withdrawn"] = {"library": library, "at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
         return f"publish: none\nthe ask is withdrawn: do not ask the product owner to publish library {library}", data
     caps = data.get("figma_caps") or {}
-    if caps and not caps.get("library_publish", True):
+    if caps and caps.get("library_publish", True) is False:
         return (f"publish: none\nthe {caps['plan']} plan cannot publish a library: do not ask; keep the library and its consumers in one file, "
                 "or raise the upgrade question"), data
     try:
