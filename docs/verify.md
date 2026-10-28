@@ -219,7 +219,7 @@ An e2e case points it at a fake server on `$E2E_PORT` to drive `run` with nothin
   Never hardcode a port.
 - Start servers in `e2e_setup` with a plain `&`.
 - The cases start once every port `e2e_setup` names (`$E2E_PORT`, `$E2E_CLIENT_PORT`) accepts a connection, waiting up to 60 s, or `e2e_setup_wait` if longer.
-  A setup that names neither, such as an extension's browser on a pinned port, waits a fixed `e2e_setup_wait` seconds.
+  A setup that names neither, such as a browser of your own on a pinned port, waits a fixed `e2e_setup_wait` seconds.
   A case's own `setup` works the same way with `setup_wait`.
 - A case's own `setup`, for a jev case as for a driver case, starts before that case and ends after its `assert`.
   Use it for what one case needs alone, such as logging in a different user.
@@ -272,18 +272,19 @@ A case with a `driver` command runs the project's own browser driver instead of 
 That driver still gets the stage's browser in `BU_CDP_URL`.
 When no case needs a browser, for example drivers of a terminal app, set `"e2e_browser": false`: the stage then launches none and sets no `BU_CDP_URL`.
 
-## Extensions
+## A browser of your own
 
-The stage's own browser has no extension.
-To test one, launch the extension's Chromium in `e2e_setup` and point jev at it with `e2e_env`.
+When the stage's own browser is not enough, for example a page that needs a browser extension loaded, launch that browser in `e2e_setup` and point the cases at it with `e2e_env`.
 
 ```json
 {
-  "e2e_setup": "BP_PORT=9333 bp launch about:blank --ext path/to/extension/dist --profile .compose/<project>/bp-profile",
+  "e2e_setup": "BP_PORT=9333 bp launch about:blank --ext path/to/dist --profile .compose/<project>/bp-profile",
   "e2e_setup_wait": 4,
   "e2e_env": {"BU_CDP_URL": "http://127.0.0.1:9333", "BU_NAME": "bp9333"}
 }
 ```
+
+Drivers and asserts get `BP_PORT` set to that browser's port, so a plain `bp` call reaches it.
 
 ## jev
 

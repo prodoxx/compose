@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// bp: drive a Chromium with an unpacked extension over raw CDP. No dependencies. Node 22+.
+// bp: drive a Chromium over raw CDP. No dependencies. Node 22+.
 // Usage: bp <command> [args]   (bp help)
 import { writeFileSync, appendFileSync, mkdirSync, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
@@ -53,7 +53,7 @@ const SNAP_JS = (hostSel) => `(() => {
   walk(root, '');
   return { url: location.href, title: document.title, vw: innerWidth, vh: innerHeight, n: out.length, els: out.slice(0, 300) };
 })()`;
-// Text + controls of every open shadow root whose text is long enough (extension panels live here).
+// Text + controls of every open shadow root whose text is long enough.
 const HOSTS_JS = (min) => `(() => { const hs = [...document.querySelectorAll('*')].filter(e => e.shadowRoot); const txt = (e) => (e.getAttribute('aria-label') || e.getAttribute('placeholder') || e.innerText || e.value || '').trim().replace(/\\s+/g, ' ').slice(0, 90);
   return hs.map((h, i) => { const r = h.shadowRoot; const rc = h.getBoundingClientRect(); const text = (r.textContent || '').replace(/\\s+/g, ' ').trim(); if (text.length < ${min}) return null;
     const els = []; for (const e of r.querySelectorAll('button,a,input,select,textarea,[role=button],[role=tab],[role=switch],[role=checkbox],[role=radio],[role=combobox]')) { const b = e.getBoundingClientRect(); const cs = getComputedStyle(e); if (b.width < 2 || b.height < 2 || cs.visibility === 'hidden') continue; els.push({ tag: e.tagName.toLowerCase(), type: e.type || e.getAttribute('role') || '', text: txt(e), id: e.id || '', x: Math.round(b.x + b.width / 2), y: Math.round(b.y + b.height / 2) }); }
@@ -83,7 +83,7 @@ const cmds = {
   async clicktext([sel, text], flags) { const b = await connect(); const { s } = await target(b, sel); const r = await evalIn(b, s, `(() => { const re = new RegExp(${JSON.stringify(text)}, 'i'); const roots = [document, ...[...document.querySelectorAll('*')].filter(e=>e.shadowRoot).map(e=>e.shadowRoot)]; for (const root of roots) { const els = [...root.querySelectorAll('button,a,[role=button],[role=tab],label,span,div')].filter(e => e.children.length <= 2 && re.test((e.textContent||'').trim()) && e.getBoundingClientRect().width > 4); const e = els[0]; if (e) { (e.closest('button,a,[role=button],[role=tab],label') || e).click(); return 'clicked ' + e.tagName + ' ' + JSON.stringify(e.textContent.trim().slice(0,60)); } } return 'not found'; })()`); console.log(r); await sleep(Number(flags.wait || 500)); b.close(); },
   async type([sel, text], flags) {
     const b = await connect(); const { s } = await target(b, sel);
-    // insertText goes to whatever has focus, so focus the target first. Searches open shadow roots, where extension panels live.
+    // insertText goes to whatever has focus, so focus the target first. Searches open shadow roots too.
     if (flags.selector) { const found = await evalIn(b, s, `(() => { const find = (r) => r.querySelector(${JSON.stringify(flags.selector)}) || [...r.querySelectorAll('*')].filter((e) => e.shadowRoot).map((e) => find(e.shadowRoot)).find(Boolean); const e = find(document); if (e) e.focus(); return !!e; })()`); if (!found) throw new Error(`no element matching "${flags.selector}"`); }
     await b.send('Input.insertText', { text }, s); console.log('typed', JSON.stringify(text)); b.close();
   },
@@ -138,12 +138,12 @@ const cmds = {
     });
   },
   async kill() { needPort(); spawn('pkill', ['-f', `remote-debugging-port=${PORT}`]); console.log('killed Chromium on', PORT); },
-  async help() { console.log(`bp - drive Chromium + an unpacked extension over CDP. Env: BP_PORT (required, a port only you use), BP_EXT, BP_PROFILE, BP_CHROME.
-  launch [url] --ext <dir> --profile <dir> [--headless] [--viewport WxH]   start Chromium with the extension, debug port on (--headless or BP_HEADLESS=1: no window; --viewport 390x844: window size, for mobile shots; refuses a port that already has a browser)
+  async help() { console.log(`bp - drive Chromium over CDP. Env: BP_PORT (required, a port only you use), BP_EXT, BP_PROFILE, BP_CHROME.
+  launch [url] [--profile <dir>] [--headless] [--viewport WxH] [--ext <dir>]   start Chromium with its debug port on (--headless or BP_HEADLESS=1: no window; --viewport 390x844: window size, for mobile shots; refuses a port that already has a browser)
   list                                         targets (pages, workers, iframes); page ids are the <sel> below
   open <url> [--wait ms] [--out shot.png]      new tab
   snap <sel> [--host <css>] [--out png]        interactive elements + coords (walks shadow roots/iframes); --host limits to one shadow root
-  hosts <sel> [--min n] [--out png]            text + controls of every shadow root (extension panels live here)
+  hosts <sel> [--min n] [--out png]            text + controls of every open shadow root
   text <sel> [--lines n]                       page text
   form <sel>                                   every form field and whether it is filled (no values)
   click <sel> <x> <y> | clicktext <sel> <regex> | type <sel> <text> [--selector css] | key <sel> <Enter|Space|Escape|Tab|Arrow*> | scroll <sel> <dy>

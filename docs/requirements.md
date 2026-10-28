@@ -35,7 +35,7 @@ Setup installs these unless you skip them.
 |---|---|---|
 | uv | runs `jev/` (Python 3.12+, fetched on first use) and the setup screen | setup runs uv's installer, then `uv sync --locked --project jev` |
 | Chrome and browser-harness | browser e2e cases | browser-harness comes with `jev/`; check with `cd jev && uv run browser-harness --doctor` |
-| `bp` and Chromium | browser exploration and extension e2e ([bp/README.md](../bp/README.md)) | setup links `bp/bin/bp.mjs` into `~/.local/bin` and runs `npx playwright install chromium` |
+| `bp` and Chromium | browser exploration and e2e ([bp/README.md](../bp/README.md)) | setup links `bp/bin/bp.mjs` into `~/.local/bin` and runs `npx playwright install chromium` |
 | treehouse | worktrees from a pool inside the repo; plain git worktrees without it | `curl -fsSL https://kunchenguid.github.io/treehouse/install.sh \| sh` |
 | trail | `file:line` context packs for implementers | `npm i -g @trailhq/trail-code` |
 | herdr integrations | herdr shows pi and Claude Code agents' state (the Claude one needs Claude Code) | `herdr integration install pi`, `herdr integration install claude` |
