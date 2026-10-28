@@ -14,7 +14,7 @@ Brainstorming is shaping, so it runs `compose decide`, `compose buildercheck`, a
 Start the planner:
 `compose planner --project <slug> --issue <id> | compose crew start --project <slug> --role planner --title planner --brief -`
 The planner reports to you, since you started it, so your one `compose watch --project <slug>` on this project reports it, the `--from orchestrator` watch for a live team lead included.
-Never start a second watch for it: a second one waits on the first one's lock, and the planner's reports would wait with it.
+Never start a second watch for it: a second one is refused while the first runs, and the first one already reports the planner.
 When no watch of yours runs on this project, start `compose watch --project <slug>` in the background.
 Relay every report to the product owner as 0h describes, in one or two sentences each.
 For a `needs-user` with open questions, ask them here one at a time as 0h says, recording each answer with `compose decide --project <slug> --issue <issue> --new "<decision>" --quote "<their words>" --closes <id>`.

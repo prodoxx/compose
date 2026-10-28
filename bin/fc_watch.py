@@ -167,16 +167,26 @@ def load_lines(proj, key):
     watch_save(proj, key, load_n=new[-1]["n"])
     return lines
 
-def watch_lock(proj, key, wait=True):
-    """One live watch per watcher, held until the returned file closes. None when another holds it and wait is False."""
+def watch_lock(proj, key):
+    """One live watch per watcher, held until the returned file closes; its pid is the file's content. None when another holds it."""
     (proj / "results").mkdir(parents=True, exist_ok=True)
-    f = open(proj / "results" / f"watch-{key}.lock", "w")
+    f = open(proj / "results" / f"watch-{key}.lock", "a+")  # not "w": that would wipe the pid of the watch that holds it
     try:
-        fcntl.flock(f, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
-        return f
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         f.close()
         return None
+    f.truncate(0)
+    f.write(str(os.getpid()))
+    f.flush()
+    return f
+
+def watch_holder(proj, key):
+    """The pid of the watch that holds the lock of `key`, as far as its file says."""
+    try:
+        return (proj / "results" / f"watch-{key}.lock").read_text().strip() or "unknown"
+    except OSError:
+        return "unknown"
 
 def watch_stalls(proj, snap, limit, now_s=None, key="all", woke=None, agent_limit=None):
     """The silences an event diff never shows: work is pending but nothing moves. Each stall fires once per watcher
@@ -432,9 +442,12 @@ def cmd_watch(a, rewake=False):
         return
     if not os.environ.get("COMPOSE_ROLE"):
         fc_herdr.herdr_manager_claim(proj, getattr(a, "takeover", False))  # one engineering manager session per project
-    lock = watch_lock(proj, key, wait=not rewake)  # a second watch waits its turn; a second hook leaves it to the parked one
+    lock = watch_lock(proj, key)  # a second hook leaves it to the parked one; a second watch is refused, never parked behind it
     if not lock:
-        return
+        if rewake:
+            return
+        sys.exit(f"another compose watch of yours already runs on {proj.name} (pid {watch_holder(proj, key)}): its exit wakes you with the events, "
+                 "and a second one would sit behind it printing nothing. Start `watch` again after it exits; `watch --now` shows the state meanwhile")
     with lock:  # held until this watch returns or exits
         fc_proc.keep_awake()  # a sleeping Mac sleeps the team it watches
         before = watch_base(proj, key) or watch_snapshot(repo, proj)

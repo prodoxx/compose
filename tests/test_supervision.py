@@ -409,10 +409,21 @@ class Rewake(unittest.TestCase):
         self.assertIn(f"compose's skill changed since you read it: {skill / 'SKILL.md'}", err)
 
     def test_a_second_hook_leaves_the_parked_one_alone(self):
-        held = fc.fc_watch.watch_lock(self.proj, "orchestrator", wait=False)
+        held = fc.fc_watch.watch_lock(self.proj, "orchestrator")
         self.assertIsNotNone(held)
         code, err, _ = self.rewake([wsnap("passed")])
         self.assertEqual((code, err), (0, ""))
+        held.close()
+
+    def test_a_second_watch_of_the_same_watcher_is_refused_naming_the_first(self):
+        held = fc.fc_watch.watch_lock(self.proj, "manager")
+        a = SimpleNamespace(repo=".", now=False, from_=None, timeout=0.05, interval=0.01, stall=10_000, settle=0, rewake=False)
+        env = {k: v for k, v in os.environ.items() if k != "COMPOSE_ROLE"}
+        with mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), mock.patch.object(fc.fc_watch, "watch_key", return_value="manager"), \
+                mock.patch.dict(os.environ, env, clear=True):
+            with self.assertRaises(SystemExit) as cm:
+                fc.fc_watch.cmd_watch(a)
+        self.assertIn(f"pid {os.getpid()}", str(cm.exception))
         held.close()
 
 
