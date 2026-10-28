@@ -192,7 +192,7 @@ class SyncFromLinear(unittest.TestCase):
     def gql(self, query, variables):
         self.queries.append(query)
         kids = {"ENG-1": ["ENG-2", "ENG-3"], "ENG-2": ["ENG-4", "ENG-5", "ENG-6"], "ENG-3": [],
-                "ENG-20": ["ENG-21"], "ENG-21": ["ENG-22"], "ENG-22": ["ENG-23"]}  # ENG-20: a design-system epic > feature > story > task
+                "ENG-20": ["ENG-21"], "ENG-30": ["ENG-1"], "ENG-21": ["ENG-22"], "ENG-22": ["ENG-23"]}  # ENG-20: a design-system epic > feature > story > task
         if "children" not in query:
             return {"issue": self.node("ENG-1", None)}
         ids, after = kids[variables["id"]], variables["after"]
@@ -247,6 +247,12 @@ class SyncFromLinear(unittest.TestCase):
         self.assertIn("4 task(s) synced", self.sync())
         self.assertEqual([t["linear"] for t in json.loads((self.proj / "results" / "tasks.json").read_text())["tasks"]],
                          ["ENG-23", "ENG-4", "ENG-5", "ENG-6"])
+
+    def test_a_feature_under_the_design_epic_is_read_once(self):
+        (self.proj / "linear.json").write_text(json.dumps({"feature": "ENG-1", "design_epic": "ENG-30"}))
+        ids = [i["id"] for i in fc.fc_linear.linear_sync_payload(self.proj)["issues"]]
+        self.assertEqual(ids, ["ENG-2", "ENG-4", "ENG-5", "ENG-6", "ENG-3"])
+        self.assertIn("3 task(s) synced", self.sync())
 
     def test_missing_feature_and_linear_failures_exit_and_store_nothing(self):
         self.assertIn("sync: Linear has no issue ENG-1", self.fails(lambda q, v: {"issue": None}))
