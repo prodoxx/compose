@@ -178,6 +178,8 @@ class ReadyCheckout(unittest.TestCase):
             if isinstance(cmd, str):
                 self.installs.append((cmd, Path(cwd)))
                 return mock.Mock(stdout="", returncode=0)
+            if cmd[0] == "cp":  # the copy of a dev server's install is real: its files must land in the clone
+                return subprocess.run(cmd, capture_output=True, text=True)
             out = str(self.root / "stamp") if "--git-path" in cmd else "".join(f"100644 blob abc\t{f}\n" for f in self.locks) if "ls-tree" in cmd else ""
             return mock.Mock(stdout=out, returncode=0)
         self.sh = sh
@@ -196,6 +198,21 @@ class ReadyCheckout(unittest.TestCase):
         self.assertTrue((self.wt / "client" / "node_modules").is_symlink())
         self.assertTrue((self.wt / "client" / "node_modules" / "jest").is_dir())
         self.assertTrue(all("/client/node_modules" in rules and "/graft/" in rules and "/.trail/" in rules for rules in self.excluded))  # the link is a file to git: /dir, not dir/
+
+    def test_a_dev_servers_install_is_copied_so_vite_sees_real_files_inside_the_clone(self):
+        (self.repo / "node_modules" / "vite").mkdir(parents=True)
+        (self.repo / "node_modules" / "vite" / "setup-file.js").write_text("one")
+        self.ready(deps=["node_modules"])
+        copy = self.wt / "node_modules"
+        self.assertFalse(copy.is_symlink())  # a link resolves outside the clone's root, where Vite will not serve from
+        self.assertEqual((copy / "vite" / "setup-file.js").resolve().parent.parent.parent, self.wt.resolve())
+        (copy / "vite" / "setup-file.js").write_text("clone edit")
+        self.ready(deps=["node_modules"])
+        self.assertEqual((copy / "vite" / "setup-file.js").read_text(), "clone edit")  # unchanged source: the copy stays
+        (self.repo / "node_modules" / "vitest").mkdir()  # a reinstall changed the source: the copy is made again
+        self.ready(deps=["node_modules"])
+        self.assertEqual((copy / "vite" / "setup-file.js").read_text(), "one")
+        self.assertTrue((copy / "vitest").is_dir())
 
     def test_clone_borrows_ignored_env_files_only(self):
         (self.repo / "app").mkdir(); (self.wt / "app").mkdir()

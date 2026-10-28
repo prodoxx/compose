@@ -471,6 +471,30 @@ def stamp_trail_wiring(wt):
         stamp.parent.mkdir(parents=True, exist_ok=True)
         stamp.write_text(json.dumps({"version": version, "hosts": ["claude"], "opts": {"global": False, "mcp": True, "hooks": True, "statusline": True}}))
 
+DEV_SERVERS = ("vite", "vitest", "storybook", "@storybook")  # in a node_modules: a dev server that serves files to a browser
+
+def serves_files(install):
+    """True for a node_modules whose project runs a dev server (Vite, Vitest browser mode, Storybook). Vite resolves a symlink to
+    its real path and refuses to serve a file outside the clone's root (server.fs.allow), so a dependency or setup file reached
+    through a borrowed link fails in the browser with `Failed to fetch dynamically imported module`. Such an install is copied."""
+    return install.name == "node_modules" and any((install / n).exists() for n in DEV_SERVERS)
+
+def copy_install(src, dst):
+    """A copy-on-write copy of the install `src` at `dst` (clonefile on APFS, reflink on Linux, a plain copy elsewhere), so the
+    clone holds real files and costs no disk where the filesystem can share blocks. A copy made from a source that has changed
+    since (its mtime is the stamp inside the copy) is made again, which a link never needs."""
+    stamp = dst / ".compose-copied"
+    if dst.is_dir() and not dst.is_symlink() and stamp.exists() and stamp.read_text() == str(src.stat().st_mtime_ns):
+        return
+    if dst.is_symlink():
+        dst.unlink()
+    shutil.rmtree(dst, ignore_errors=True)
+    fast = ["cp", "-cR"] if sys.platform == "darwin" else ["cp", "-a", "--reflink=auto"]
+    if fc_core.sh([*fast, str(src), str(dst)], ".", check=False).returncode:
+        shutil.rmtree(dst, ignore_errors=True)
+        fc_core.sh(["cp", "-R", str(src), str(dst)], ".")
+    stamp.write_text(str(src.stat().st_mtime_ns))
+
 def ready_checkout(repo, wt, borrow=True, install=None):
     """Make a task clone or the CLI's worktree runnable like the main checkout: symlink each git-ignored dependency install
     (node_modules at any depth, vendor, .venv) and each git-ignored .env or .env.* file from it, and keep those links and
@@ -480,7 +504,8 @@ def ready_checkout(repo, wt, borrow=True, install=None):
     `install` (verify.json `install`) runs in the checkout instead of linking: bundlers write a dependency's real path into
     unminified output, so a borrowed install builds different bytes than the project worktree's own. Links from an earlier
     borrow are removed first, so the command never writes through one. Call it with `install` once the checkout sits on the
-    commit whose checks will run; it installs again only when that commit's lockfiles differ from the last install's."""
+    commit whose checks will run; it installs again only when that commit's lockfiles differ from the last install's.
+    A node_modules whose project runs a dev server (serves_files) is copied, not linked, when `install` is unset."""
     deps, envs = dep_dirs(repo), env_files(repo)
     exclude_paths(wt, ["/graft/", "/.trail/", *("/" + w for w in WIRING), "/.ignore", *("/" + d for d in deps + envs)])
     stamp_trail_wiring(wt)
@@ -502,7 +527,9 @@ def ready_checkout(repo, wt, borrow=True, install=None):
         return
     for d in deps if borrow else ():
         link = wt / d
-        if link.parent.is_dir() and not link.exists() and not link.is_symlink():
+        if link.parent.is_dir() and serves_files(repo / d):
+            copy_install(repo / d, link)
+        elif link.parent.is_dir() and not link.exists() and not link.is_symlink():
             link.symlink_to(repo / d)
 
 def names_lockfile(meta):
