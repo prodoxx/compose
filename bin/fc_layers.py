@@ -192,11 +192,14 @@ def commit_facts(repo, c):
 
 def group_units(units, budget):
     """Consecutive units into layers of at most `budget` counted lines, in order. A unit (a task with its tests, or one groundwork
-    commit) is never split, so one bigger than the budget is a layer of its own; groundwork and a task never share a layer."""
+    commit) is never split, so one bigger than the budget is a layer of its own; groundwork and a task never share a layer.
+    Consecutive groundwork is the exception to the budget: its commits are the scaffold the rest builds on (an entry page, the
+    route and server it loads), nothing says which depend on which, and a cut between them can leave the lower layer unbuildable,
+    so a run of groundwork is one layer however long."""
     layers = []
     for u in units:
         if layers and (layers[-1][-1]["name"] == "groundwork") == (u["name"] == "groundwork") \
-                and sum(x["lines"] for x in layers[-1]) + u["lines"] <= budget:
+                and (u["name"] == "groundwork" or sum(x["lines"] for x in layers[-1]) + u["lines"] <= budget):
             layers[-1].append(u)
         else:
             layers.append([u])
@@ -472,5 +475,6 @@ def layer_note(l, budget):
     over = ""
     if l["lines"] > budget:
         over = (f"; over the {budget}-line budget to stay within {l['fold_cap']} PRs" if l.get("fold_cap")
-                else f"; over the {budget}-line budget, a {'commit' if l['tasks'] == ['groundwork'] else 'task'} is never split" if len(l["tasks"]) == 1 else "")
+                else f"; over the {budget}-line budget, a {'commit' if l['tasks'] == ['groundwork'] else 'task'} is never split" if len(l["tasks"]) == 1
+                else f"; over the {budget}-line budget, groundwork is one layer so it builds" if set(l["tasks"]) == {"groundwork"} else "")
     return f"{' + '.join(held)}: {l['lines']} lines{over}{gen}"

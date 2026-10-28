@@ -19,6 +19,10 @@ class Grouping(unittest.TestCase):
         us = [unit("001", 10), unit("002", 500), unit("003", 10)]
         self.assertEqual(self.names(us, 300), [["001"], ["002"], ["003"]])
 
+    def test_a_run_of_groundwork_is_one_layer_however_long_so_no_cut_leaves_the_lower_one_unbuildable(self):
+        us = [unit("groundwork", 400), unit("groundwork", 300), unit("001", 10), unit("groundwork", 300), unit("groundwork", 300)]
+        self.assertEqual(self.names(us, 300), [["groundwork", "groundwork"], ["001"], ["groundwork", "groundwork"]])
+
     def test_a_small_unit_does_not_jump_the_queue_to_fill_a_gap(self):
         us = [unit("001", 200), unit("002", 150), unit("003", 5)]
         self.assertEqual(self.names(us, 300), [["001"], ["002", "003"]])
