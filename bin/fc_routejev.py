@@ -5,8 +5,13 @@ import fc_models
 
 
 def rule_workflow(state):
-    """test-first when the task's test is protected and the task is no bug; else None, and Jev is asked."""
-    return "test-first" if state.get("test") and not (state.get("bug") or {}).get("label") and not state.get("pin") else None
+    """fix-then-regression-test for a Bug-labelled task, else test-first when the task's test is protected; None (Jev is asked)
+    when a pin decides or neither applies."""
+    if state.get("pin"):
+        return None
+    if (state.get("bug") or {}).get("label"):
+        return "fix-then-regression-test"
+    return "test-first" if state.get("test") else None
 
 
 def route_questions(state, plain):

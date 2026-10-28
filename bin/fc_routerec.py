@@ -2,14 +2,19 @@
 import re
 
 
-def answer_part(route, pin, name):
+def rule_source(state):
+    """What the workflow rule read: the Bug label or the protected test."""
+    return "its Bug label" if (state.get("bug") or {}).get("label") else "its protected test"
+
+
+def answer_part(route, pin, name, state):
     """One of workflow or depth: Jev's choice with its probability and confidence, the pin or the rule that decided it, or its
     fallback with the confidence that sent it there."""
     a, value = route["answers"].get(name), route[name]
     if name == "workflow" and pin:
         return f"workflow {pin} pinned"
     if name == "workflow" and route["decided_by"].startswith("rule"):
-        return f"workflow {value} from its protected test"
+        return f"workflow {value} from {rule_source(state)}"
     if name in route["fell_back"]:
         conf = f"confidence {a['confidence']:.2f}, " if a and a.get("confidence") is not None else "no answer, "
         return f"{name} {value} fallback ({conf}{route['fallback'].removeprefix('confidence ')})"
@@ -20,7 +25,7 @@ def route_reason(route, state):
     """The recorded reason: Jev's answers or the fallback, the context, the Bug flags, the floor, and the policy note."""
     pin = state["pin"]
     if route.get("fell_back"):
-        part1 = "Jev: " + ", ".join(answer_part(route, pin, k) for k in ("depth", "workflow"))
+        part1 = "Jev: " + ", ".join(answer_part(route, pin, k, state) for k in ("depth", "workflow"))
     elif route["fallback"] is None:
         w = route["answers"].get("workflow")
         if (w and w["choice"] == "CHECK_ONLY") or (pin and "depth" not in route["answers"]):
@@ -40,7 +45,7 @@ def route_reason(route, state):
                 part1 += (f", workflow {w['choice'].lower().replace('_', '-')}"
                           f" (p {w['probabilities'][w['choice']]:.2f}, confidence {w['confidence']:.2f})")
             else:
-                part1 += f", workflow {route['workflow']}" + (" from its protected test" if route["decided_by"].startswith("rule") else "")
+                part1 += f", workflow {route['workflow']}" + (f" from {rule_source(state)}" if route["decided_by"].startswith("rule") else "")
     else:
         part1 = f"fallback {route['depth']} {route['workflow']}"
         if pin:

@@ -69,8 +69,16 @@ class Ask(unittest.TestCase):
         self.assertEqual((set(ask.call_args.args[3]), more.call_count, *pick(route, "workflow", "depth", "decided_by", "fell_back")), ({"depth", "policy0"}, 0, "test-first", "DEEP", "rule + jev", []))
         route, _, _ = self.decide([reply(depth=ans("FAST", 0.2))] * 2, state=state)
         self.assertEqual(pick(route, "workflow", "depth", "decided_by", "fell_back"), ("test-first", "STANDARD", "rule + fallback", ["depth"]))
-        for other in ({"bug": {"label": True}}, {"pin": "implement-then-test"}):
-            self.assertEqual("workflow" in fc_routejev.route_questions({**state, **other}, []), "pin" not in other)
+        self.assertIn("workflow", fc_routejev.route_questions({**state, "pin": None, "test": None}, []))
+        self.assertNotIn("workflow", fc_routejev.route_questions({**state, "pin": "implement-then-test"}, []))
+
+    def test_a_bug_label_decides_fix_then_regression_test_by_rule_and_a_pin_wins(self):
+        state = {**STATE, "bug": {"label": True}}
+        self.assertNotIn("workflow", fc_routejev.route_questions(state, []))
+        route, ask, _ = self.decide([reply(depth=ans("STANDARD", 0.9))], state=state)
+        self.assertEqual((set(ask.call_args.args[3]), *pick(route, "workflow", "decided_by")), ({"depth"}, "fix-then-regression-test", "rule + jev"))
+        route, _, _ = self.decide([reply(depth=ans("STANDARD", 0.9))], state={**state, "pin": "implement-then-test", "test": {"protected": ["t"]}})
+        self.assertEqual(pick(route, "workflow", "decided_by"), ("implement-then-test", "pin + jev"))
 
     def test_jev_raising_falls_back_at_once_and_payment_propagates(self):
         route, ask, more = self.decide(RuntimeError("no key"))

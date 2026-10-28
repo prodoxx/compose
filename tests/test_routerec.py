@@ -62,6 +62,8 @@ class Reason(unittest.TestCase):
         self.assertEqual(fc_routerec.route_reason(r, state(ONE, 1)), f"Jev: depth STANDARD (p 0.72, confidence 0.65), workflow test-first from its protected test; {REST}")
         r = route(decided_by="rule + fallback", answers={"depth": DEPTH}, fallback="confidence below 0.6", fell_back=["depth"])
         self.assertEqual(fc_routerec.route_reason(r, state(ONE, 1)), f"Jev: depth STANDARD fallback (confidence 0.65, below 0.6), workflow test-first from its protected test; {REST}")
+        r = route(workflow="fix-then-regression-test", decided_by="rule + jev", answers={"depth": DEPTH})
+        self.assertIn("workflow fix-then-regression-test from its Bug label;", fc_routerec.route_reason(r, state(ONE, 1, bug={**NO_BUG, "label": True})))
 
 
 CHECK = {"choice": "CHECK_ONLY", "probabilities": {"CHECK_ONLY": 0.81, "TEST_FIRST": 0.19}, "confidence": 0.81}
