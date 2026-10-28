@@ -92,7 +92,7 @@ def main():
                             ("resume", fc_run.cmd_resume, "continue a run or verify that stopped on PAYMENT REQUIRED"),
                             ("done", fc_status.cmd_done, "record tasks the team lead finished by hand: --only ids --note why"),
                             ("sync", fc_linear.cmd_sync, "store the feature and its tasks, read from Linear with the workspace key; --stdin reads them as JSON instead"),
-                            ("linear", fc_linear_cmd.cmd_linear, "read and write Linear with the workspace key: get | list | create | update | comment | cancel | labels | project | doc"),
+                            ("linear", fc_linear_cmd.cmd_linear, "read and write Linear with the workspace key: get | list | create | update | comment | cancel | labels | project | doc | next-task-id"),
                             ("tasks", fc_spec.cmd_tasks, "the task list to review before dispatch: ids, titles, files, after, tests; warns on shared files"),
                             ("route", fc_route.cmd_route, "route each task: a workflow and a depth, project policies first, Jev for the rest; --recalculate recomputes"),
                             ("quick", fc_quick.cmd_quick, "pin check-only on tasks, stories, or the feature, then route them"),
@@ -159,7 +159,7 @@ def main():
         if name == "sync":
             s.add_argument("--stdin", action="store_true", help="read the sync JSON from stdin instead of Linear")
         if name == "linear":
-            s.add_argument("action", choices=("get", "list", "create", "update", "comment", "cancel", "labels", "project", "doc"))
+            s.add_argument("action", choices=("get", "list", "create", "update", "comment", "cancel", "labels", "project", "doc", "next-task-id"))
             s.add_argument("target", nargs="*")
             for flag in ("--body", "--comments", "--json", "--append", "--description", "--any-project", "--fresh"):
                 s.add_argument(flag, action="store_true")

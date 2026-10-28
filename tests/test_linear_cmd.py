@@ -243,6 +243,30 @@ class LinearGet(unittest.TestCase):
             self.assertEqual(out.getvalue(), "")
         self.assertEqual(self.get("ENG-7", any_project=True, fresh=True), ["ENG-7 In Progress bug Fix the cart"])
 
+class NextTaskId(unittest.TestCase):
+    """The planner's source of a free task id: every compose block of the Linear project, whatever linear.json scopes, and results/."""
+    args = LinearProject.args
+
+    def test_it_is_one_above_the_highest_id_in_the_project_or_in_results(self):
+        repo = self.repo = Path(tempfile.mkdtemp()).resolve()
+        (repo / ".compose" / "shop" / "results").mkdir(parents=True)
+        (repo / ".compose" / "linear.json").write_text(json.dumps({"project": URL, "team": "Engineering"}))
+        (repo / ".compose" / "shop" / "results" / "051.json").write_text("{}")
+        block = lambda n: f"## Goal\n\nx\n\n```compose\nid: {n}\nfiles: a.css\ntest: t\n```\n"
+        pages = {None: [{"description": block("048")}, {"description": "no block"}], "c1": [{"description": block("049")}]}
+        calls = []
+        def gql(query, variables):
+            calls.append(variables)
+            if "projects(" in query:
+                return {"projects": {"nodes": [{"id": "p1", "name": "Shop", "url": URL, "teams": {"nodes": [{"id": "t1", "name": "Engineering", "key": "ENG"}]}}]}}
+            after = variables.get("after")
+            return {"issues": {"pageInfo": {"hasNextPage": after is None, "endCursor": "c1"}, "nodes": pages[after]}}
+        with mock.patch.object(fc.fc_linear, "linear_gql", gql), mock.patch.object(fc.fc_core, "project_dir", return_value=repo / ".compose" / "shop"), redirect_stdout(io.StringIO()) as out:
+            fc.fc_linear_cmd.verb_next_task_id(self.args("next-task-id", project="shop"))
+        self.assertEqual(out.getvalue(), "052\n")
+        self.assertEqual(calls[1]["f"], {"project": {"id": {"eq": "p1"}}, "description": {"contains": "```compose"}})
+
+
 class LinearList(unittest.TestCase):
     QUERY = "issues(first: 100, after: $after, filter: $f) { pageInfo { hasNextPage endCursor } nodes { identifier title state { name } labels { nodes { name } } } }"
     args, fails = LinearProject.args, LinearProject.fails

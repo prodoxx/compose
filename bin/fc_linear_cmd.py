@@ -1,5 +1,5 @@
 """`compose linear <verb>`: read and write Linear with the workspace key, printing compact text."""
-import hashlib, json, os, select, sys, time, urllib.parse
+import hashlib, json, os, re, select, sys, time, urllib.parse
 from pathlib import Path
 
 import fc_core, fc_config, fc_linear, fc_plan, fc_tasks
@@ -255,6 +255,33 @@ def verb_list(a):
     for n in nodes:
         print(issue_line(n))
 
+TASK_IDS = "query($after: String, $f: IssueFilter) { issues(first: 100, after: $after, filter: $f) { pageInfo { hasNextPage endCursor } nodes { description } } }"
+
+def used_task_ids(a):
+    """Every task id already taken in the project: the `id:` of each compose block on any issue of the Linear project, whatever linear.json's
+    stories scope (one paged query, filtered by Linear to the issues that carry a block), plus the ids this project's results/ holds."""
+    f = {"project": {"id": {"eq": linear_project(a.repo)["id"]}}, "description": {"contains": "```compose"}}
+    used, after = set(), None
+    while True:
+        page = fc_linear.linear_gql(TASK_IDS, {"after": after, "f": f})["issues"]
+        for n in page["nodes"]:
+            for block in fc_tasks.TASK_BLOCK.finditer(n["description"] or ""):
+                m = re.search(r"(?m)^\s*id:\s*(\S+)", block.group(1))
+                if m:
+                    used.add(m.group(1))
+        if not page["pageInfo"]["hasNextPage"]:
+            break
+        after = page["pageInfo"]["endCursor"]
+    results = fc_core.project_dir(a) / "results"
+    used |= {p.stem for p in results.glob("*.json") if p.stem.isdigit()} if results.is_dir() else set()
+    return used
+
+def verb_next_task_id(a):
+    """Print the next free task id: one above the highest taken, so ids stay monotonic and none is reused."""
+    used = used_task_ids(a)
+    nums = [int(i) for i in used if i.isdigit()]
+    print(f"{max(nums, default=0) + 1:03d}")
+
 def verb_create(a):
     if not a.title:
         sys.exit("create needs --title")
@@ -420,7 +447,7 @@ def cmd_linear(a):
     if a.action != "update" and (getattr(a, "add_blocked_by", None) or getattr(a, "drop_blocked_by", None)):
         sys.exit("--add-blocked-by and --drop-blocked-by change an existing issue: compose linear update <id> takes them, and create takes --blocked-by")
     try:
-        globals()[f"verb_{a.action}"](a)
+        globals()[f"verb_{a.action.replace('-', '_')}"](a)
     except (RuntimeError, OSError) as e:
         sys.exit(f"linear {a.action}: {e}")
     finally:

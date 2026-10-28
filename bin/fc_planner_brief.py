@@ -58,7 +58,7 @@ Cut only this ticket's feature. Teammates you start run in own panes; never do t
    - `files:` names every file it may touch, new files too
    - no file shared by two tasks: one task, or one is `after:` the other
    - `after:` for code a task needs (calls, imports, edits what the other creates), as blocked-by links
-   - ids numbered in review order
+   - ids numbered in review order; take each new id from `compose linear next-task-id --project {slug}` (it reads every task of the Linear project, not only the stories `sync` shows, and the project's results/), never pick one yourself
    - split where a reviewer could reject one half while approving the other; setup and scaffolding fold into the task that needs them
    Groundwork never finishes a story: each code, dependency, lockfile, toolchain change is a task. A choice it needs is a question (checks 1, 3, 6), settled before the cut.
 
