@@ -309,6 +309,17 @@ def run_alive(proj):
     m = run_marker(proj)
     return bool(m and pid_alive(m.get("pid")))
 
+def mark_fixing(proj, rnd):
+    """Verify's fix round `rnd` is about to run in this process: `fixing` tells watch that a fix loop, not an ordinary run, is going."""
+    fc_core.atomic_write(proj / "results" / "fixing.json", json.dumps({"pid": os.getpid(), "round": rnd}))
+
+def fixing(proj):
+    """Whether the verify process that marked a fix round (mark_fixing) is still alive."""
+    try:
+        return pid_alive(json.loads((proj / "results" / "fixing.json").read_text()).get("pid"))
+    except (OSError, ValueError, AttributeError):
+        return False
+
 def mark_interrupted(proj):
     """Ctrl-C stopped the run on purpose: keep its marker for `resume`, and say so in it."""
     m = run_marker(proj)

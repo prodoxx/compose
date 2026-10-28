@@ -1020,6 +1020,14 @@ class OwnerDigest(unittest.TestCase):
     def tell(self, before, after):
         return fc.fc_watch.owner_lines("hw", before, after)
 
+    def test_a_fix_round_is_live_only_while_the_verify_that_marked_it_is(self):
+        proj = Path(tempfile.mkdtemp()); (proj / "results").mkdir()
+        self.assertFalse(fc.fc_tasks.fixing(proj))
+        fc.fc_tasks.mark_fixing(proj, 1)
+        self.assertTrue(fc.fc_tasks.fixing(proj))
+        with mock.patch.object(fc.fc_tasks, "pid_alive", return_value=False):
+            self.assertFalse(fc.fc_tasks.fixing(proj))
+
     def test_a_failed_verify_says_why_and_a_passed_one_says_in_review(self):
         a, b = wsnap(), wsnap()
         b["verify"], b["verify_why"] = (1, False), "checks 1/3 failed"
@@ -1035,8 +1043,10 @@ class OwnerDigest(unittest.TestCase):
         self.assertEqual(self.tell(live, wsnap("running", ended="interrupted")), ["event tell='run stopped by Ctrl-C - compose resume continues it'"])
         failed = wsnap(); failed["verify"] = (1, False)
         restarted = wsnap("running", run=True); restarted["verify"] = (1, False)
-        self.assertEqual(self.tell(failed, restarted), ["event tell='fix loop started: the run restarted after the failed verify'"])
-        self.assertEqual(self.tell(restarted, restarted), [])
+        self.assertEqual(self.tell(failed, restarted), [])  # an ordinary run after a failed verify is no fix loop
+        fixing = wsnap(); fixing["verify"], fixing["fixing"] = (1, False), True
+        self.assertEqual(self.tell(failed, fixing), ["event tell='fix loop started: verify is fixing its findings'"])
+        self.assertEqual(self.tell(fixing, fixing), [])
 
     def test_the_team_lead_done_is_told_and_working_is_not(self):
         a, b = wsnap(), wsnap()

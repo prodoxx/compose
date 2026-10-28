@@ -32,7 +32,7 @@ def watch_snapshot(repo, proj, agents=None):
         time.sleep(0.5)
         rows = fc_status.board(repo, proj)["rows"]
     # The marker alone is not enough: a run that crashes leaves it behind, and watch then waits on a dead run forever.
-    snap = {"tasks": {}, "agents": {}, "run": fc_tasks.run_alive(proj), "ended": fc_tasks.run_ended(proj), "verify": None, "halt": None,
+    snap = {"tasks": {}, "agents": {}, "run": fc_tasks.run_alive(proj), "ended": fc_tasks.run_ended(proj), "verify": None, "halt": None, "fixing": fc_tasks.fixing(proj),
             "crew": {f.stem: fc_crew.crew_reports(proj, f.stem) for f in sorted((proj / "results" / "crew").glob("*.status"))}
             if (proj / "results" / "crew").exists() else {},
             "refused": {f.stem: fc_reports.crew_refusals(proj, f.stem) for f in sorted((proj / "results" / "crew").glob("*.refused"))}
@@ -329,8 +329,8 @@ def owner_lines(slug, before, after):
         bad = [t for t, x in tasks.items() if x["state"] in fc_status.FAILED_STATES]
         ok = sum(x["state"].split(" ")[0] in ("merged", "passed", "hand_done", "already_green") for x in tasks.values())
         out.append({"crashed": "run crashed before finishing", "interrupted": "run stopped by Ctrl-C - compose resume continues it"}[after["ended"]] if after.get("ended") else f"run ended: {ok}/{len(tasks)} passed" + (f", failed {','.join(bad)}" if bad else ""))
-    elif after.get("run") and not before.get("run") and v and not v[1]:
-        out.append("fix loop started: the run restarted after the failed verify")
+    if after.get("fixing") and not before.get("fixing"):
+        out.append("fix loop started: verify is fixing its findings")
     orch = fc_herdr.agent_name(slug, "orchestrator")
     for r in after.get("crew", {}).get(orch, [])[len(before.get("crew", {}).get(orch, [])):]:
         if r["state"] == "done":

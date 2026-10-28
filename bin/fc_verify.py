@@ -477,6 +477,7 @@ def verify_rounds(repo, proj, cfg, a, rounds, t0, left_out=()):
         if rnd and fc_models.fallback_for(model):  # the first fix did not clear the findings; the fallback takes later rounds
             model = fc_models.fallback_for(model)
         fc_core.say(f"fix    start round {rnd + 1}  model={model}")
+        fc_tasks.mark_fixing(proj, rnd + 1)
         pack = fc_trailpack.trail_pack(repo, findings[:400])
         prompt = (f"REPOSITORY ROOT: {repo}\nEvery edit must be under that root.\n\n" +
                   (f"CONTEXT PACK from trail (exact file:line). Use it instead of exploring.\n{pack}\n\n" if pack else "") +
