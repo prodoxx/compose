@@ -409,6 +409,20 @@ def conflict_line(tid, sha, branch, out):
     """The conflict report naming the writer's task, the commit, and the branch kept, with the tail of git's output."""
     return f"tests-{tid}: {sha[:7]} conflicts with the project branch; its branch {branch} is kept.\n{out[-600:]}"
 
+def foreign_writes(files, tid, tasks):
+    """{file: owners} for the `files` a writer of task `tid` committed that another task protects and its own task does not. A test
+    commit goes to the layer of the task whose `protected:` it fills, so one written into another task's file lands in that task's
+    layer and fails its `test` there, where the code it tests does not exist yet (stack --submit is the first to run it)."""
+    mine = set(next((m.get("protected") or [] for m in tasks if m["id"] == tid), []))
+    owners = {f: sorted(m["id"] for m in tasks if m["id"] != tid and f in (m.get("protected") or [])) for f in sorted(set(files) - mine)}
+    return {f: o for f, o in owners.items() if o}
+
+def foreign_line(tid, branch, foreign):
+    """The collect report for a writer that wrote into other tasks' test files: its branch is kept and nothing of it is collected."""
+    wrote = "; ".join(f"{f} (protected by task {', '.join(o)})" for f, o in foreign.items())
+    return (f"tests-{tid}: nothing collected; it wrote {wrote}, not its own `protected:` file. Its branch {branch} is kept: "
+            f"give task {tid} a test file of its own (re-plan its `protected:`) or have the writer move the cases into it, then collect again")
+
 def collect_tests(proj, only=None, force=False):
     """Cherry-pick the own commits of every test-writing teammate that reported its test ready onto the project branch in task order,
     remove their worktrees and branches, then start the writers that waited for them. A writer not yet ready, or on a turn again, is skipped: returning
@@ -422,7 +436,8 @@ def collect_tests(proj, only=None, force=False):
 
 def collect_tests_locked(proj, wt, only, force):
     want = {x.strip() for x in only.split(",")} if only else None
-    by_id = {m["id"]: m for m in fc_tasks.load_tasks(proj, required=True) if not want or m["id"] in want}
+    everyone = fc_tasks.load_tasks(proj, required=True)
+    by_id = {m["id"]: m for m in everyone if not want or m["id"] in want}
     ids = sorted(by_id)
     conflicts = []
     for tid in ids:
@@ -442,6 +457,10 @@ def collect_tests_locked(proj, wt, only, force):
         picked = fc_core.sh(["git", "log", *fmt, f"{branch}..HEAD"], wt).stdout.splitlines()
         ahead = fc_core.sh(["git", "rev-list", "--count", "--no-merges", f"HEAD..{branch}"], wt).stdout.strip()
         commits = to_pick(picked, fc_core.sh(["git", "log", "--reverse", "--right-only", "--cherry-pick", *fmt, f"HEAD...{branch}"], wt).stdout.splitlines())
+        touched = [f for c in commits for f in fc_core.sh(["git", "show", "--no-renames", "--name-only", "--format=", c], wt).stdout.split()]
+        if foreign := foreign_writes(touched, tid, everyone):
+            conflicts.append(foreign_line(tid, branch, foreign))
+            continue
         for c in commits:
             p = fc_core.sh(["git", "cherry-pick", "--allow-empty", c], wt, check=False)
             if p.returncode:

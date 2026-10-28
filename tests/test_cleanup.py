@@ -256,16 +256,18 @@ class BriefDecisions(unittest.TestCase):
         self.assertTrue(line.startswith("tests-002: abcdef0 conflicts with the project branch; its branch compose/p-tests-002 is kept.\n"))
         self.assertTrue(line.endswith("CONFLICT")); self.assertLess(len(line), 700)
 
-    def collect(self, states, pick_fail=()):
+    def collect(self, states, pick_fail=(), wrote=None):
         proj = Path(tempfile.mkdtemp()) / "p"; proj.mkdir()
         picks = []
         def sh(args, *a, **k):
             if args[1] == "cherry-pick" and args[2] != "--abort":
                 picks.append(args[-1]); return mock.Mock(returncode=int(args[-1] in pick_fail), stdout="", stderr="boom")
+            if args[1] == "show":
+                return mock.Mock(returncode=0, stdout=(wrote or {}).get(args[-1].rsplit("b-", 1)[-1], "") , stderr="")
             out = f"c-{args[-1]}\0w <w> 1 s" if args[1] == "log" and "--right-only" in args else "0" if args[1] == "rev-list" else ""
             return mock.Mock(returncode=0, stdout=out, stderr="")
         reports = lambda p, w: [states[w.rsplit("tests-", 1)[1]]] if w.rsplit("tests-", 1)[1] in states else []
-        tasks = [{"id": t} for t in ("003", "001", "002")]
+        tasks = [{"id": t, "protected": [f"{t}.test.ts"]} for t in ("003", "001", "002")]
         say, closed = [], []
         with mock.patch.object(fc.fc_briefs.fc_core, "sh", sh), mock.patch.object(fc.fc_briefs.fc_tasks, "load_tasks", return_value=tasks), \
              mock.patch.object(fc.fc_briefs, "test_open", return_value=True), mock.patch.object(fc.fc_briefs.fc_crew, "crew_reports", reports), \
@@ -294,6 +296,13 @@ class BriefDecisions(unittest.TestCase):
         self.assertEqual([c.rsplit("b-", 1)[1] for c in picks], ["001", "002", "003"])
         self.assertEqual(len(closed), 2)
         self.assertIn("tests-001:", err)
+
+    def test_a_writer_that_wrote_another_tasks_test_file_is_not_collected_and_its_branch_is_kept(self):
+        ready = {"state": "done"}
+        picks, say, closed, err = self.collect({"001": ready, "002": ready}, wrote={"001": "001.test.ts\n", "002": "001.test.ts\n"})
+        self.assertEqual([c.rsplit("b-", 1)[1] for c in picks], ["001"])
+        self.assertEqual(len(closed), 1)
+        self.assertIn("tests-002: nothing collected; it wrote 001.test.ts (protected by task 001)", err)
 
 
 class SharedSpaceClean(unittest.TestCase):
