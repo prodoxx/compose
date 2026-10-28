@@ -145,5 +145,19 @@ class FakedLayerGate(unittest.TestCase):
         self.assertEqual(len(self.pushes), 3)
 
 
+class LockfileTaskInstall(unittest.TestCase):
+    def test_a_clone_that_borrows_nothing_still_gets_the_configured_install(self):
+        ran = []
+        def sh(cmd, cwd=None, check=True):
+            ran.append(cmd)
+            return done("" if cmd[0] != "git" else "/tmp/compose-install")
+        with tempfile.TemporaryDirectory() as t, mock.patch.object(fc.fc_core, "sh", side_effect=sh), \
+                mock.patch.object(fc.fc_worktree, "dep_dirs", return_value=["node_modules"]), mock.patch.object(fc.fc_worktree, "env_files", return_value=[]), \
+                mock.patch.object(fc.fc_worktree, "exclude_paths"), mock.patch.object(fc.fc_worktree, "stamp_trail_wiring"), \
+                mock.patch.object(Path, "write_text"), mock.patch.object(Path, "exists", return_value=False):
+            fc.fc_worktree.ready_checkout(Path(t), Path(t) / "clone", borrow=False, install="bun install")
+        self.assertIn("bun install", ran)
+
+
 if __name__ == "__main__":
     unittest.main()

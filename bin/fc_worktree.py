@@ -476,6 +476,7 @@ def ready_checkout(repo, wt, borrow=True, install=None):
     (node_modules at any depth, vendor, .venv) and each git-ignored .env or .env.* file from it, and keep those links and
     trail's graph out of git status through the checkout's info/exclude. A link is a file to git, so a `node_modules/` rule would not cover it; `/client/node_modules` does.
     `borrow=False` (a task that rewrites a lockfile) links no installs: an install there would write through the link into everyone's.
+    With `install` set such a task still gets a real install of its own, made here before the implementer starts (its sandbox cannot install).
     `install` (verify.json `install`) runs in the checkout instead of linking: bundlers write a dependency's real path into
     unminified output, so a borrowed install builds different bytes than the project worktree's own. Links from an earlier
     borrow are removed first, so the command never writes through one. Call it with `install` once the checkout sits on the
@@ -487,7 +488,7 @@ def ready_checkout(repo, wt, borrow=True, install=None):
         link = wt / e
         if link.parent.is_dir() and not link.exists() and not link.is_symlink():
             link.symlink_to(repo / e)
-    if install and borrow:
+    if install:
         stamp = Path(fc_core.sh(["git", "rev-parse", "--path-format=absolute", "--git-path", "compose-install"], wt).stdout.strip())
         locks = "".join(l + "\n" for l in fc_core.sh(["git", "ls-tree", "-r", "HEAD"], wt, check=False).stdout.splitlines()
                         if l.rsplit("/", 1)[-1].split("\t")[-1] in LOCKFILES)
