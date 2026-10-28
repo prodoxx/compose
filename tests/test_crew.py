@@ -856,6 +856,13 @@ class EndedSlots(unittest.TestCase):
         self.record("shop-toolsmith", cwd=str(self.slot))  # no branch, no worktree: it ran where it was pointed
         self.assertEqual(self.release(), [])
 
+    def test_an_ended_team_lead_started_in_a_project_worktree_never_gives_that_worktree_back(self):
+        """#248: a record with a branch whose cwd is a live project's worktree (--repo <project worktree>) looks like a teammate slot."""
+        self.record("shop-toolsmith", cwd=str(self.slot), branch="shop-lead-1")
+        self.holder = "compose:shop-toolsmith"  # even a holder that matches the record's name
+        with mock.patch.object(fc.fc_core, "all_projects", return_value={"live": (str(self.slot), None)}):
+            self.assertEqual(self.release(), [])
+
 
 class AwaitStart(unittest.TestCase):
     """The brief is the session's initial prompt, so a prompt sent right after start cannot come first. crew start returns only
