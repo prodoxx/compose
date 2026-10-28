@@ -18,14 +18,17 @@ COVERS = {
 }
 
 
+def reads_figma(role):
+    """A role that works with Figma: the designer, its builders and reviewer, and a helper started to read a file (`--role figma`)."""
+    return bool(re.fullmatch(r"design-\d+", role)) or role in ("designer", "design-review", "figma")
+
+
 def servers_for(role):
-    if re.fullmatch(r"design-\d+", role) or role in ("designer", "design-review"):
-        return DESIGNER
-    return ROLE_MCP.get(role, ())
+    return DESIGNER if reads_figma(role) else ROLE_MCP.get(role, ())
 
 
 def keeps_skills(role):
-    return bool(re.fullmatch(r"design-\d+", role)) or role in ("designer", "design-review")
+    return reads_figma(role)
 
 
 def installed_servers(cwd):

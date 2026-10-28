@@ -43,9 +43,9 @@ class RoleMcp(unittest.TestCase):
 
     def test_disallowed(self):
         self.assertEqual(set(fc_mcp.disallowed("planner", P)), pat(*P))
-        for r, s in [(r, s) for r in ("designer", "design-review", "design-003") for s in (P, P + ["claude_ai_Figma"])]:
+        for r, s in [(r, s) for r in ("designer", "design-review", "design-003", "figma") for s in (P, P + ["claude_ai_Figma"])]:
             self.assertEqual(set(fc_mcp.disallowed(r, s)), pat(*P) - pat("framelink-figma"))
-        for r in ("designer", "design-review", "design-003"):  # the Figma plugin's connector counts as the Figma connector; another plugin's Figma server does not
+        for r in ("designer", "design-review", "design-003", "figma"):  # the Figma plugin's connector counts as the Figma connector; another plugin's Figma server does not
             self.assertEqual(set(fc_mcp.disallowed(r, P + ["plugin_figma_figma"])), pat(*P) - pat("framelink-figma"))
         for r in ("toolsmith", "implementer", "no-such-role", "orchestrator", "architect", "designer", "design-003"):  # graft, trail, and Linear are denied for every role
             self.assertLessEqual(pat("graft", "trail", "claude_ai_Linear"), set(fc_mcp.disallowed(r, P)), r)
