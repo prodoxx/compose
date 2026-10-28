@@ -379,6 +379,16 @@ class Tracks(Fake):
         self.assertNotIn("3. Old", self.doc_writes[0])
         self.assertIn(f'- 2026-01-01: first\n- {TODAY}: tracks set', self.doc_writes[0])
 
+    def test_a_reconcile_that_fails_after_the_tracks_still_leaves_tracks_and_waves_written(self):
+        self.content = fc_plan.with_history(PLAN, "- 2026-01-01: first")
+        self.mark.side_effect = RuntimeError("Linear is busy")
+        with self.assertRaises(SystemExit) as e:
+            self.run_verb("tracks", file=self.tracks_file, quote="x")
+        self.assertIn("## Tracks\n\n1. Sign-in: NEB-7, NEB-9", self.doc_writes[0])
+        self.assertIn("### Wave 1", self.doc_writes[0])
+        self.assertIn("tracks and waves are written", e.exception.code)
+        self.assertIn("compose delivery reconcile", e.exception.code)
+
     def test_an_unknown_id_or_a_bad_line_writes_nothing(self):
         for text, msg in (("1. A: NEB-311\n", "delivery tracks: NEB-311 is no issue in this project; nothing written"),
                           ("1. A NEB-7\n", 'delivery tracks: the Tracks section does not parse: line 1: not a track: "1. A NEB-7"')):
@@ -407,7 +417,7 @@ class Tracks(Fake):
         self.content = "## Why this order\n\nAuth first.\n\n## History\n\n- 2026-01-01: first\n"
         self.run_verb("tracks", file=self.tracks_file, quote="x")
         heads = [l for l in self.doc_writes[0].splitlines() if l.startswith("## ")]
-        self.assertEqual(heads, ["## Tracks", "## Why this order", "## History"])
+        self.assertEqual(heads, ["## Tracks", "## Why this order", "## Waves", "## History"])
 
     def test_new_tracks_survive_linear_serving_the_old_document_for_a_while_after_the_write(self):
         # delivery tracks while the factory ran: the reconcile read the plan from before the write and put the old tracks back,

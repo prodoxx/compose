@@ -293,9 +293,15 @@ def _write_tracks(a, text, product):
         if _tracks_text(content) == text:  # the same tracks again: nothing to write, no new History line
             return content
         content = fc_plan.replace_product_section(content, "## Tracks", "## Tracks\n\n" + text)
+        # Waves follow from the tracks alone, so they land in this same write: a reconcile that fails after it cannot leave Tracks without Waves
+        content = fc_plan.replace_product_section(content, "## Waves", fc_plan.product_sections(product["tracks"], product["features"], [], [])["## Waves"])
         return fc_plan.with_history(content, f'- {time.strftime("%Y-%m-%d")}: tracks set; the product owner said: "{words}"')
     write_doc(doc, build)
-    return _reconciled(a.repo)
+    try:
+        return reconcile(a.repo)
+    except RuntimeError as e:
+        sys.exit(f"delivery tracks: tracks and waves are written to {doc['url']}, but the reconcile after them failed: {e}; "
+                 "run `compose delivery reconcile` (the factory does it on its next turn) to refresh Start today and Linear's blocks")
 
 def cmd_delivery(a):
     if not fc_config.LINEAR_KEY:
