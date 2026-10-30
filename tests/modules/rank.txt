@@ -1,4 +1,5 @@
 fc_core
+fc_toolsdir
 fc_harness
 fc_prompt
 fc_proc

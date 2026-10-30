@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import contextlib, importlib.machinery, importlib.util, io, json, os, tempfile, unittest
+import contextlib, importlib.machinery, importlib.util, io, json, os, shutil, subprocess, tempfile, unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -35,6 +35,34 @@ class StackWorktree(unittest.TestCase):
         self.assertEqual(json.loads((self.proj / "results" / "slots.json").read_text()), want)
         for role in ("stackroot", "tests-001"):
             self.assertIn(f"{role} {theirs}", out.getvalue())
+
+
+class ToolsMirror(unittest.TestCase):
+    def test_an_e2e_spec_in_the_verify_checkout_imports_that_checkouts_code_not_the_project_worktrees(self):  # #428
+        root = Path(tempfile.mkdtemp()).resolve()
+        repo, wt = root / "repo", root / "wt"
+        for d in (repo, wt):
+            (d / "app").mkdir(parents=True)
+            (d / "app" / "support.js").write_text(f"module.exports = {d.name!r}\n")
+        (repo / ".compose" / "p" / "e2e").mkdir(parents=True)
+        (repo / ".compose" / "p" / "results").mkdir()
+        (repo / ".compose" / "linear.json").write_text("{}")
+        (repo / ".compose" / "p" / "e2e" / "a.spec.js").write_text("console.log(require('../../../app/support.js'))\n")
+        (wt / ".compose").symlink_to(repo / ".compose")  # the layout before #428
+        mirror = fc.fc_worktree.fc_toolsdir.mirror
+        mirror(repo / ".compose", wt / ".compose")
+        self.assertFalse((wt / ".compose").is_symlink())
+        self.assertTrue((wt / ".compose" / "linear.json").is_symlink() and (wt / ".compose" / "p" / "results").is_symlink())
+        if shutil.which("node"):
+            got = subprocess.run(["node", ".compose/p/e2e/a.spec.js"], cwd=wt, capture_output=True, text=True).stdout.strip()
+            self.assertEqual(got, "wt")
+        (repo / ".compose" / "p" / "e2e" / "a.spec.js").write_text("// edited\n")
+        (repo / ".compose" / "p" / "results").rmdir()
+        mirror(repo / ".compose", wt / ".compose")
+        self.assertEqual((wt / ".compose" / "p" / "e2e" / "a.spec.js").read_text(), "// edited\n")  # copied fresh each time
+        self.assertFalse((wt / ".compose" / "p" / "results").is_symlink())  # a link to a gone entry is dropped
+        mirror(repo / ".compose", repo / ".compose")  # never onto itself
+        self.assertEqual((repo / ".compose" / "p" / "e2e" / "a.spec.js").read_text(), "// edited\n")
 
 
 class BranchNames(unittest.TestCase):

@@ -1,6 +1,6 @@
 import json, os, re, shutil, sys, threading, time
 from pathlib import Path
-import fc_core, fc_config, fc_tasks
+import fc_core, fc_config, fc_tasks, fc_toolsdir
 
 
 # ---------- stacks (gh stack) ----------
@@ -392,8 +392,8 @@ def stack_worktree(repo, proj, trunk):
                 fc_core.sh(["git", "checkout", "-q", "--detach", trunk], wt, check=False)
         ready_checkout(repo, wt)
         tools, link = repo / ".compose", wt / ".compose"  # e2e scripts live there, and verify points them at this worktree
-        if tools.is_dir() and not link.exists() and not link.is_symlink():
-            link.symlink_to(tools)
+        if tools.is_dir() and (link.is_symlink() or not link.exists() or link.is_dir()):
+            fc_toolsdir.mirror(tools, link)
             exclude_paths(wt, ["/.compose"])  # the `/.compose/` rule does not cover a link
     return wt
 
