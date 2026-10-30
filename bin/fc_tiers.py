@@ -13,7 +13,7 @@ def ceiling(role):
         if role in CEILINGS[t]:
             return t
     for t in ORDER:
-        if role.partition("-")[0] in CEILINGS[t]:
+        if role.partition("-")[0].rstrip("0123456789") in CEILINGS[t]:
             return t
     return None
 
