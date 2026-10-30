@@ -19,14 +19,26 @@ def headings(lines):
         elif not fence and heading_level(line):
             yield i, heading_level(line)
 
+def compose_block_start(lines):
+    """Index of the line that opens a task's `compose` block outside fenced code, else None."""
+    fence = False
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith(("```", "~~~")):
+            if not fence and line.startswith("```compose"):
+                return i
+            fence = not fence
+
 def section_span(lines, heading):
     """The section's lines as (start, end): from its heading to the next heading of the same or a higher level, so an H2
-    takes its H3s and an H3 leaves its siblings alone. None when the heading is not there."""
+    takes its H3s and an H3 leaves its siblings alone, or to the task's `compose` block, which is no section's text.
+    None when the heading is not there."""
     marks = list(headings(lines))
     start = next((i for i, _ in marks if lines[i] == heading), None)
     if start is None:
         return None
-    return start, next((i for i, n in marks if i > start and n <= heading_level(heading)), len(lines))
+    block = compose_block_start(lines)
+    stop = block if block is not None and block > start else len(lines)
+    return start, next((i for i, n in marks if start < i < stop and n <= heading_level(heading)), stop)
 
 LINEAR_BULLET, LINEAR_NUMBER = re.compile(r"^([ \t]*)[-+*](?=[ \t])"), re.compile(r"^([ \t]*)\d+[.)](?=[ \t])")
 LINEAR_RULE, LINEAR_HASHES, LINEAR_TASK = re.compile(r"^[ \t]*([-*_])(?:[ \t]*\1){2,}$"), re.compile(r"^(#{1,6} .*?)[ \t]+#+$"), re.compile(r"^([ \t]*\* )\[x\]")
