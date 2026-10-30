@@ -512,6 +512,13 @@ class LinearUpdate(unittest.TestCase):
         self.assertEqual(rs(body, "## Notes", "kept"), "## Plan\n\n```sh\n# install\n## Notes\nmake\n```\n\n~~~\n### Steps\n~~~\n\n## Notes\n\nkept\n")
         self.assertEqual([h for h, _ in fc_plan.section_hashes(body)], ["## Plan", "## Notes"])
 
+    def test_replace_section_leaves_the_compose_block_of_a_task_alone(self):
+        rs, block = fc_plan.replace_section, "```compose\nid: 001\ntest: t\n```\n"
+        body = f"## Goal\n\ng\n\n## Interfaces\n\n- old\n\n{block}"
+        self.assertEqual(rs(body, "## Interfaces", "- new"), f"## Goal\n\ng\n\n## Interfaces\n\n- new\n\n{block}")
+        self.assertEqual(rs(body, "## Interfaces", ""), f"## Goal\n\ng\n\n{block}")
+        self.assertEqual(fc_plan.section_hash(body, "## Interfaces"), fc_plan.section_hash(body.replace(block, ""), "## Interfaces"))
+
     def test_a_section_write_with_a_stale_hash_refuses_and_writes_nothing(self):
         read = "# Cart\n\n## Notes\n\nspec line\n"  # what the team lead read
         seen = fc_plan.section_hash(read, "## Notes")
