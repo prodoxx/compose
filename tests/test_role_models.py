@@ -114,6 +114,20 @@ class PlannerChain(unittest.TestCase):
             self.assertEqual(fc.fc_crew.fc_crewpick.crew_pick("groundwork")[:2], ("claude:claude-sonnet-5-5", None))
             self.assertEqual(fc.fc_crew.fc_crewpick.crew_pick("helper")[:2], ("claude:claude-sonnet-5-5", None))
 
+    def test_a_role_lowered_to_a_tier_keeps_its_effort_and_says_why(self):
+        opus = "claude:claude-opus-5-5"
+        crew = {"planner": {"model": opus, "effort": "high"}, "groundwork": opus, "default": "claude:claude-sonnet-5-5"}
+        with self.probe(True), mock.patch.dict(fc.fc_config.CREW_MODELS, {k: v["model"] if isinstance(v, dict) else v for k, v in crew.items()}), \
+                mock.patch.dict(fc.fc_config.CREW_EFFORT, {"planner": "high"}), mock.patch.dict(fc.fc_config.CREW_FALLBACK, {}, clear=True):
+            self.assertEqual(fc.fc_crew.fc_crewpick.crew_pick_full("planner")[:3], (opus, "high", "models.crew.planner"))
+            model, effort, note, _ = fc.fc_crew.fc_crewpick.crew_pick_full("planner", None, "standard")  # the frontier budget holds it at standard
+            self.assertEqual((model, effort), ("claude:claude-sonnet-5-5", "high"))
+            self.assertEqual(note, "models.crew.planner, lowered to the standard tier by a tier pin or the frontier budget")
+            for role in ("groundwork", "groundwork2", "groundwork-2"):  # a numbered role is its entry's role
+                model, effort, note, _ = fc.fc_crew.fc_crewpick.crew_pick_full(role)
+                self.assertEqual((model, effort), ("claude:claude-sonnet-5-5", None))
+                self.assertEqual(note, "models.crew.groundwork, lowered to the standard tier by its role's tier ceiling")
+
     def test_fallback_when_the_planner_model_is_unavailable(self):
         with self.probe(False):
             model, effort, note = fc.fc_crew.fc_crewpick.crew_pick("architect")

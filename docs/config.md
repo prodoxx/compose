@@ -148,6 +148,8 @@ A cheap model that fails `fallback_after` attempts moves to the first standard m
 
 `models.tiers` replaces the list of a tier, and an entry is a model id or `{"model": ..., "effort": "high"}` as in [Crew models](#crew-models).
 The first entry of a tier is the model its implementers use, and a teammate whose `models.crew` chain holds models above its tier drops them.
+A teammate that starts on a lower model than its entry keeps the entry's effort, and `crew start` and the teammate's record name the tier and what lowered it (the role's ceiling, or a tier pin or the frontier budget).
+A role name with a number after its name, such as `groundwork2` or `groundwork-2`, takes the entry and ceiling of `groundwork`.
 The default lists are:
 
 | Tier | Models |
