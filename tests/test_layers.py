@@ -132,6 +132,30 @@ class FakedLayers(unittest.TestCase):
                          [("p-layer-01", ["groundwork"]), ("p-layer-02", ["001", "002"]), ("p-layer-03", ["003"]), (None, ["004", "005"])])
 
 
+    def test_new_groundwork_is_not_dropped_for_sharing_the_key_of_a_landed_groundwork_layer(self):
+        (self.proj / "layers.json").write_text(json.dumps({"p-layer-01": ["groundwork"], "p-layer-02": ["004"]}))
+        old, new = unit("groundwork", 40), unit("groundwork", 12)
+        us = [old, new, unit("004", 50), unit("005", 50)]
+        groups = lambda on_base: [(b, [u["name"] for u in g], [u is new for u in g]) for b, g, _ in
+                                  fc.fc_layers.group_by_record(self.proj, us, 300, landed=["p-layer-01", "p-layer-02"], on_base=on_base)]
+        self.assertEqual(groups(lambda u: u is not new), [(None, ["groundwork"], [True]), (None, ["005"], [False])])
+        self.assertEqual(groups(None), [(None, ["005"], [False])])
+
+
+class AlreadyOnBase(unittest.TestCase):
+    """A layer squash merged leaves its commits on the project branch under other hashes: only the ones whose change the base lacks are new."""
+    def test_a_commit_is_on_the_base_when_merging_it_there_changes_nothing_and_not_when_it_adds_or_conflicts(self):
+        merged = {"old": (0, "base-tree\n"), "new": (0, "other-tree\n"), "clash": (1, "base-tree\nCONFLICT\n")}
+        def sh(cmd, *a, **k):
+            if cmd[1] == "rev-parse":
+                return subprocess.CompletedProcess(cmd, 0, "base-tree\n", "")
+            rc, out = merged[cmd[-1]]
+            return subprocess.CompletedProcess(cmd, rc, out, "")
+        on = lambda *cs: fc.fc_layers.already_on("repo", "main", {"commits": list(cs)})
+        with mock.patch.object(fc.fc_core, "sh", sh):
+            self.assertEqual((on("old"), on("new"), on("clash"), on("old", "new")), (True, False, False, False))
+
+
 class PrText(unittest.TestCase):
     def test_pr_text_is_a_title_why_and_bullets_and_anything_else_is_refused_with_the_reason(self):
         f = Path(tempfile.mkdtemp()) / "001.md"

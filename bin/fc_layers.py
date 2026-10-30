@@ -358,19 +358,30 @@ def record_layers(proj, layers):
     (Path(proj) / "results" / "land.json").unlink(missing_ok=True)
     fc_core.atomic_write(Path(proj) / "layers.json", json.dumps({l["branch"]: list(dict.fromkeys(l.get("keys", l["tasks"]))) for l in layers}, indent=2))
 
-def group_by_record(proj, units, budget, max_prs=None, landed=()):
+def already_on(repo, base, unit):
+    """Whether every commit of `unit` would cherry-pick onto `base` as nothing: its change is in `base` already, as when the layer that
+    held it was squash merged. A merge that conflicts is not already there."""
+    tree = fc_core.sh(["git", "rev-parse", f"{base}^{{tree}}"], repo).stdout.strip()
+    def empty(c):
+        m = fc_core.sh(["git", "merge-tree", "--write-tree", f"--merge-base={c}^", base, c], repo, check=False)
+        return m.returncode == 0 and m.stdout.split()[0] == tree
+    return all(empty(c) for c in unit["commits"])
+
+def group_by_record(proj, units, budget, max_prs=None, landed=(), on_base=None):
     """Groups of units: each recorded layer keeps its own tasks (groundwork commits go to the layer that held groundwork, or
     groundwork above that task), and
     units no layer holds yet are grouped as usual into new layers above. `max_prs` caps the groups (None: no cap): while the
     groups outnumber it, the adjacent unrecorded pair of the same kind (both all-groundwork, or both holding tasks) with the
     fewest combined lines folds, the lower pair on a tie, else the adjacent pair of any kind with the fewest; recorded layers
-    never fold. A `landed` layer gets no group: the units its keys hold are on the base already.
+    never fold. A `landed` layer gets no group: the units its keys hold are on the base already, except a groundwork unit
+    (all of them share one key) that `on_base` says the base lacks: it is new work and goes into a new layer.
     [(recorded branch or None, units, folded)]."""
     rec_file = Path(proj) / "layers.json"
     rec = json.loads(rec_file.read_text()) if rec_file.exists() else {}
     groups, seen = [], set()
     for b, keys in rec.items():
-        held = [i for i, u in enumerate(units) if i not in seen and u.get("key", u["name"]) in keys]
+        held = [i for i, u in enumerate(units) if i not in seen and u.get("key", u["name"]) in keys
+                and not (b in landed and u["name"] == "groundwork" and on_base and not on_base(u))]
         seen.update(held)
         if held and b not in landed:
             groups.append((b, [units[i] for i in held], False))
@@ -398,7 +409,7 @@ def build_layers(repo, proj, base, trunk, chain, wt, budget, max_prs=None, held=
     the layer branches move only once all of them are built and add up to the same tree as the task chain; else nothing is
     changed, STACK_STOP says why, and it returns None."""
     units = review_units(repo, proj, base, trunk, chain, held)  # groundwork is layers of its own, never mixed into a task's
-    groups = group_by_record(proj, units, budget, max_prs, landed)
+    groups = group_by_record(proj, units, budget, max_prs, landed, lambda u: already_on(repo, base, u))
     layers, tips, prev, prefix = [], [], base, layer_prefix(repo, proj)
     code_at, test_at = {}, {}  # task -> index of the layer with its code, and of the last layer with a test commit for it
     cfg_file = Path(proj) / "verify.json"
