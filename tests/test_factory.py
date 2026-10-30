@@ -323,6 +323,23 @@ class PlanChange(unittest.TestCase):
         b = ft.fingerprint('## Decisions so far\n\n- Q1: A. Google only (Apple later) (product owner, 2026-10-27; said: "yes")\n', "s")
         self.assertEqual(ft.changed_refs(a, b, "NEB-10"), ["Q1"])
 
+    def test_a_decision_added_on_the_story_is_no_change_but_striking_or_rewording_one_is(self):
+        scope = "## Scope\n\nGoogle only\n\n"
+        a = ft.fingerprint(FEATURE, scope + "## Not yet specified\n\n- Q1: which store?\n\n## Decisions so far\n\n- D1: use bun (product owner)\n")
+        b = ft.fingerprint(FEATURE, scope + "## Not yet specified\n\nNone\n\n## Decisions so far\n\n- D1: use bun (product owner)\n"
+                                    "- D2: the task list is approved (closes Q1) (product owner)\n")
+        self.assertEqual(ft.changed_refs(a, b, "NEB-10"), [])
+        struck = ft.fingerprint(FEATURE, scope + "## Decisions so far\n\n- ~~D1: use bun~~ (C1)\n- D2: use npm\n")
+        self.assertEqual(ft.changed_refs(b, struck, "NEB-10"), ["NEB-10"])
+        reworded = ft.fingerprint(FEATURE, scope + "## Decisions so far\n\n- D1: use npm (product owner)\n")
+        self.assertEqual(ft.changed_refs(a, reworded, "NEB-10"), ["NEB-10"])
+        self.assertEqual(ft.changed_refs(a, ft.fingerprint(FEATURE, scope.replace("Google", "Apple") + "## Decisions so far\n\n- D1: use bun (product owner)\n"),
+                                         "NEB-10"), ["NEB-10"])
+
+    def test_a_print_from_before_story_decisions_were_kept_is_adopted(self):
+        old = {"decisions": ft.fingerprint(FEATURE, "s")["decisions"], "story": "hash of the whole text"}
+        self.assertEqual(ft.changed_refs(old, ft.fingerprint(FEATURE, "## Scope\n\nGoogle only\n"), "NEB-10"), [])
+
     def test_hold_changed_holds_what_rests_on_the_refs_or_says_nothing_does(self):
         self.rests_on.return_value = {"002": "cites D1", "003": "under NEB-10"}
         line = ft.hold_changed(self.repo, self.proj, "NEB-10", ["D1"], "D1 changed on NEB-9")

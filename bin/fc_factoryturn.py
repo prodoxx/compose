@@ -231,12 +231,14 @@ def dispatch(repo, plan, entry, kind, state, now):
 
 DECISION_ID = re.compile(r"^([A-Z]+)(\d+):")
 TAG = re.compile(r'\s*\((?:product owner[^()"]*; said: ".*"|[^()]*)\)\s*$')  # the one tag saying who or when: '(product owner, <date>; said: "<their words>")', "(away, 2026-10-26)", "(C1)"
-OPEN_QUESTIONS = re.compile(r"^#+[ \t]*Open questions[^\n]*$.*?(?=^#|\Z)", re.M | re.S)
+STORY_NOTES = re.compile(r"^#+[ \t]*(?:Open questions|Not yet specified|Decisions so far)[^\n]*$.*?(?=^#|\Z)", re.M | re.S)  # what the loop and `compose decide` write on a story
 
 def fingerprint(feature_desc, story_desc):
-    """What a plan change would touch: the feature's live decision lines, and a hash of the story without its Open questions (the loop writes those)."""
-    body = OPEN_QUESTIONS.sub("", story_desc or "").rstrip()
-    return {"decisions": fc_change.decision_lines(feature_desc), "story": hashlib.sha256(body.encode()).hexdigest()}
+    """What a plan change would touch: the feature's live decision lines, the story's own, and a hash of the story without the sections
+    the loop and `compose decide` write (Open questions, Not yet specified, Decisions so far: a decision added there changes no course)."""
+    body = STORY_NOTES.sub("", story_desc or "").rstrip()
+    return {"decisions": fc_change.decision_lines(feature_desc), "story_decisions": fc_change.decision_lines(story_desc),
+            "story": hashlib.sha256(body.encode()).hexdigest()}
 
 def _decisions(lines):
     """({id: (sort key, text without tags)}, {text without tags of the lines with no id})."""
@@ -250,12 +252,19 @@ def _decisions(lines):
             bare.add(text)
     return ids, bare
 
+def _lost(old_lines, new_lines):
+    """(ids of the decisions removed, struck or reworded in id order, whether a line with no id went away or was reworded): an added one is neither."""
+    (old_ids, old_bare), (new_ids, new_bare) = _decisions(old_lines or []), _decisions(new_lines or [])
+    return sorted((i for i, (_, text) in old_ids.items() if new_ids.get(i, (None, None))[1] != text), key=lambda i: old_ids[i][0]), bool(old_bare - new_bare)
+
 def changed_refs(old, new, story):
-    """What changed between two fingerprints: the ids of decisions removed, struck or reworded (an added one changes no course), in id order,
-    then the story when its text changed or a decision line without an id went away or was reworded."""
-    (old_ids, old_bare), (new_ids, new_bare) = _decisions(old.get("decisions") or []), _decisions(new.get("decisions") or [])
-    ids = sorted((i for i, (_, text) in old_ids.items() if new_ids.get(i, (None, None))[1] != text), key=lambda i: old_ids[i][0])
-    return ids + ([story] if old.get("story") != new.get("story") or old_bare - new_bare else [])
+    """What changed between two fingerprints: the ids of the feature's decisions removed, struck or reworded (an added one changes no course), in id order,
+    then the story when its text changed or a decision line without an id went away or was reworded, or one of its own decisions was removed, struck or reworded.
+    A print from before the story's decisions were kept (no story_decisions) is adopted, so only the feature's decisions are compared."""
+    ids, bare = _lost(old.get("decisions"), new.get("decisions"))
+    kept = "story_decisions" in old
+    story_ids, story_bare = _lost(old.get("story_decisions"), new.get("story_decisions")) if kept else ([], False)
+    return ids + ([story] if kept and old.get("story") != new.get("story") or bare or story_ids or story_bare else [])
 
 def hold_changed(repo, proj_dir, story, refs, why):
     """Hold the tasks that rest on what changed; returns the event line."""
