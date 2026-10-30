@@ -142,6 +142,31 @@ class FakedLayers(unittest.TestCase):
         self.assertEqual(groups(None), [(None, ["005"], [False])])
 
 
+class ReviewUnits(unittest.TestCase):
+    """review_units on a faked git: where the test commits of a task with no branch (already green) land."""
+
+    def test_a_test_edit_of_a_task_not_in_the_chain_rides_with_the_commit_it_rewrites_not_with_the_last_task(self):
+        files = {"t1": ["stub.test.ts"], "t2": ["stub.test.ts", "g.ts"], "t3": ["stub.test.ts", "g.ts"], "c1": ["stub.ts"], "c2": ["other.ts"]}
+        diffs = {"t1": "+it('one text part')\n+});\n", "t2": "-it('one text part')\n-});\n+it('text and file')\n", "t3": "-import a\n-});\n+it('more')\n"}
+        def sh(cmd, *a, **k):  # t2 is task 063's edit of t1's test, t3 063's addition beside it; 063 is already green, so it has no branch
+            out = ""
+            if cmd[1] == "show":
+                out = diffs[cmd[-1]] if "--numstat" not in cmd and "--diff-filter=D" not in cmd else "" if "--diff-filter=D" in cmd else "".join(f"1\t0\t{f}\n" for f in files[cmd[-1]])
+            elif cmd[1] == "log" and "--reverse" in cmd:
+                out = "t1 100\nt2 200\nt3 300\n"
+            elif cmd[1] == "log":
+                out = "\n".join(files["c1" if cmd[-1] == "trunk..p-001" else "c2"])
+            elif cmd[1] == "rev-list":
+                out = "c1\n" if cmd[-1] == "trunk..p-001" else "c2\n"
+            return subprocess.CompletedProcess(cmd, 0, out, "")
+        tasks = [{"id": "001", "protected": ["stub.test.ts"]}, {"id": "002", "protected": ["other.test.ts"]},
+                 {"id": "063", "protected": ["stub.test.ts", "g.ts"]}]
+        with mock.patch.object(fc.fc_core, "sh", sh), mock.patch.object(fc.fc_tasks, "load_tasks", return_value=tasks), \
+             mock.patch.object(fc.fc_worktree, "task_prefix", return_value="p-"):
+            units = fc.fc_layers.review_units(Path("."), Path("p"), "main", "trunk", ["p-001", "p-002"])
+        self.assertEqual({u["name"]: u["commits"] for u in units}, {"001": ["t1", "t2", "c1"], "002": ["t3", "c2"]})
+
+
 class AlreadyOnBase(unittest.TestCase):
     """A layer squash merged leaves its commits on the project branch under other hashes: only the ones whose change the base lacks are new."""
     def test_a_commit_is_on_the_base_when_merging_it_there_changes_nothing_and_not_when_it_adds_or_conflicts(self):

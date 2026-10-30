@@ -237,12 +237,23 @@ def applies_without(repo, c, drop, files):
         return git("read-tree", f"{c}^") and all(git("apply", "--cached", "-R", patch=diff(p, *sorted(files))) for p in reversed(drop)) \
             and git("apply", "--cached", patch=diff(c))
 
+def supersedes(repo, c, earlier):
+    """Whether commit c takes out a line that one of the `earlier` commits added: it rewrites what they put there, as opposed to adding
+    beside it. Import lines and lines with no word in them (a closing bracket) are shared by unrelated edits and prove nothing."""
+    lines = lambda x, sign: {l[1:].strip() for l in fc_core.sh(["git", "show", "--format=", "--no-renames", x], repo).stdout.splitlines()
+                             if l[:1] == sign and l[:3] != sign * 3}
+    meaningful = lambda l: re.search(r"\w", l) and not l.startswith(("import ", "from "))
+    added = set().union(*(lines(x, "+") for x in earlier))
+    return any(meaningful(l) and l in added for l in lines(c, "-"))
+
 def review_units(repo, proj, base, trunk, chain, held=()):
     """The project's work as ordered units: every commit the project branch carries over `base` that no task owns (groundwork,
     one unit per commit), then each chain task with its acceptance-test commits first and its own commits after. A test commit
     is a task's when every file it touches is in that task's `protected:`; when its author date falls in the span of a test
     writer whose task protects its files, it is that writer's task's alone. The tests of a task not in the chain yet ride with
-    the first one whose own commits edit their files (it was built on them), else the last one. The layers must apply: an owned commit goes to its writer's task, or without one to the first task that
+    the first one whose own commits edit their files (it was built on them), else the last one; a test that edits lines an earlier
+    commit placed (it does not apply without it) rides with that commit instead, so it never lands in a layer above the code that
+    satisfies it. The layers must apply: an owned commit goes to its writer's task, or without one to the first task that
     protects its files, as long as it applies there without the earlier commits on its files placed higher (a test written in
     its own part of a shared file skips them; one written on top of them does not). Else it goes no lower than the highest of
     them, to the first task at or above it that protects its files; one no task owns is a groundwork unit of its own right
@@ -268,10 +279,10 @@ def review_units(repo, proj, base, trunk, chain, held=()):
         owners = [i for i, t in enumerate(ids) if files and files <= protected.get(t, set()) and writer in (None, t)]
         if not owners and files and any(files <= protected[t] for t in held):
             continue
-        if not owners and files and any(files <= protected[t] for t in set(protected) - set(ids)):
-            owners = [next((i for i, e in enumerate(edits) if e & files), len(ids) - 1)]
         on = [(p, s) for p, s, f in placed if f & files]
         floor = max((s for _, s in on), default=None)
+        if not owners and files and any(files <= protected[t] for t in set(protected) - set(ids)):
+            owners = [floor // 2 if on and supersedes(repo, c, [p for p, _ in on]) else next((i for i, e in enumerate(edits) if e & files), len(ids) - 1)]
         fits = lambda slot: floor is None or slot >= floor or applies_without(repo, c, [p for p, s in on if s > slot], files)
         if owners:
             slot = next((2 * i for i in owners if fits(2 * i)), floor)
