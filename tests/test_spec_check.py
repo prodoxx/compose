@@ -157,6 +157,19 @@ class SpecCheck(unittest.TestCase):
         self.assertEqual(parse("* wraps onto\n  a second line\n* next"), ["wraps onto a second line", "next"])
         self.assertEqual(parse("  - indented base\n  - same level\n    - child"), ["indented base", "same level; child"])
 
+    def test_numbered_and_plain_given_when_then_criteria_count(self):  # #435
+        parse = lambda body: fc.fc_tasks.parse_criteria("## Acceptance criteria\n\n" + body)
+        self.assertEqual(parse("1. Given a user, then a price.\n2) Given a payer, then it succeeds.\n   wrapped\n"),
+                         ["Given a user, then a price.", "Given a payer, then it succeeds. wrapped"])
+        self.assertEqual(parse("**1.** Given a user\nWhen they scan\nThen they see a price\n**2.** Given a payer\n"),
+                         ["Given a user When they scan Then they see a price", "Given a payer"])
+        self.assertEqual(parse("Given a user\nWhen they scan\nThen a price\n\nGiven a payer\nThen it succeeds\n"),
+                         ["Given a user When they scan Then a price", "Given a payer Then it succeeds"])
+        self.assertEqual(parse("* **1.** Given a user\n  * When they scan\n*emphasis* wraps\n"), ["**1.** Given a user; When they scan *emphasis* wraps"])
+        story = {**STORY, "id": "ENG-2", "description": STORY["description"].split("## Acceptance criteria")[0]
+                 + "## Acceptance criteria\n\n1. Given a user, when they scan, then they see a price.\n"}
+        self.assertFalse(has(check([story])["ENG-2"][2], "no bullet"), check([story])["ENG-2"])
+
     def test_size_lint_counts_top_level_bullets_only(self):
         sub = "".join(f"  * s{n}\n" for n in range(6))
         self.assertFalse(has(check([task("ENG-3", "001", crit=f"* parent:\n{sub}* two")])["ENG-3"][2], "Acceptance criteria"))

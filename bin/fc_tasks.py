@@ -188,23 +188,32 @@ def task_finished(proj, meta, redo=False, since=None):
     return None
 
 
+CRITERION = re.compile(r"^(?:[-*+]|\d+[.)]|\*\*\d+[.)]\*\*)(?:\s+|$)")  # `- a`, `* a`, `1. a`, `1) a`, `**1.** a`; never `**bold**`
+GIVEN = re.compile(r"^(?:[*_]+)?Given\b", re.I)
+
+
 def parse_criteria(text):
-    """Criteria under '## Acceptance criteria' in a task or issue body: one per top-level bullet.
-    Top level is the first bullet's indent (Linear stores "-" as "*" and nests with 2 or 4 spaces); deeper bullets and
-    wrapped lines fold into their parent, sub-items joined with "; "."""
+    """Criteria under '## Acceptance criteria' in a task or issue body: one per top-level bullet or numbered item.
+    Top level is the first item's indent (Linear stores "-" as "*" and nests with 2 or 4 spaces); deeper items and
+    wrapped lines fold into their parent, sub-items joined with "; ".
+    A list with no markers at all is read as plain Given/When/Then lines: each Given starts a criterion."""
     m = re.search(r"## Acceptance criteria\n(.*?)(?:\n## |\Z)", text or "", re.S)
-    out, base = [], None
+    out, base, plain = [], None, False
     for line in (m.group(1) if m else "").splitlines():
         body = line.strip()
         if not body:
             continue
         flat = line.expandtabs(4)
         indent = len(flat) - len(flat.lstrip())
-        if body[0] in "-*" and (base is None or indent <= base):
-            base = indent if base is None else base
-            out.append([body[1:].strip()])
-        elif out and body[0] in "-*":
-            out[-1].append(body[1:].strip())
+        mark, top = CRITERION.match(body), base is None or indent <= base
+        if mark and top:
+            base, plain = indent if base is None else base, False
+            out.append([body[mark.end():].strip()])
+        elif mark and out:
+            out[-1].append(body[mark.end():].strip())
+        elif GIVEN.match(body) and top and (plain or not out):
+            base, plain = indent if base is None else base, True
+            out.append([body])
         elif out:
             out[-1][-1] += " " + body
     def join(parts):
