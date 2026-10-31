@@ -191,6 +191,14 @@ def task_finished(proj, meta, redo=False, since=None):
 CRITERION = re.compile(r"^(?:[-*+]|\d+[.)]|\*\*\d+[.)]\*\*)(?:\s+|$)")  # `- a`, `* a`, `1. a`, `1) a`, `**1.** a`; never `**bold**`
 GIVEN = re.compile(r"^(?:[*_]+)?Given\b", re.I)
 
+# A test runner's flag that runs only the tests whose names match: vitest, jest and bun `-t` / `--testNamePattern`, pytest `-k`
+# and `file::name`, go `-run`, mocha and playwright `-g` / `--grep`, node `--test-name-pattern`, dotnet `--filter`, gradle `--tests`.
+NAME_FILTER = re.compile(r"(?:^|\s)(?:-t|-k|-g|-run|--grep|--filter|--tests|--testNamePattern|--test-name-pattern)(?:\s|=)|\S::\S")
+
+def name_filter(test):
+    """Whether the test command runs only the tests it names, not every test of its file."""
+    return bool(NAME_FILTER.search(test or ""))
+
 
 def parse_criteria(text):
     """Criteria under '## Acceptance criteria' in a task or issue body: one per top-level bullet or numbered item.

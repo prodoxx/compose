@@ -163,6 +163,7 @@ A task is ready when it meets all four of these:
 
 - It touches one or two files.
 - It has one test command, and it runs only the task's own test (its file, or a name filter), never the whole suite.
+  When another open task writes to the same test file, the command filters by this task's test names (`-t`, `-k`, `-run`, `--grep`), or the other task's red cases fail this task's gate until they land; `spec-check` and `compose tasks` flag a whole-file command on a shared file.
 - It has at most five criteria.
 - Its test fails on HEAD.
 

@@ -51,7 +51,7 @@ Cut only this ticket's feature. Teammates you start run in own panes; never do t
 
 3. Cut each checked story into task issues with `compose linear create`. A task is right-sized when all hold:
    - one or two files in `files:` (a named lockfile does not count), one test command, at most five acceptance criteria
-   - test command runs only its own test (its file or a name filter)
+   - test command runs only its own test: its file, or a name filter (-t, -k, -run, --grep) whenever another open task writes to the same test file, so its gate never fails on cases that land later
    - description under 2500 characters
    - branch at most 350 lines, added plus deleted
    - no documents: no .md, .txt, .rst, or docs/ files

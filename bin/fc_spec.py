@@ -28,6 +28,30 @@ def file_clashes(tasks):
             clashes[f] = loose
     return clashes
 
+def whole_shared_tests(tasks):
+    """Open tasks whose `test:` runs a whole test file another open task also writes to: {task id: {file: [the other ids]}}.
+    Every writer's test is collected onto the project branch before `run`, so the file holds the other tasks' tests too, and
+    they fail until those tasks land: a whole-file run fails this task's gate on code it does not own. A sharer below the task
+    through `after:` has landed by then and is left out; a command with a name filter (fc_tasks.name_filter) runs its own tests only."""
+    writers = {}
+    for m in tasks:
+        for f in m.get("protected") or []:
+            writers.setdefault(f, []).append(m["id"])
+    out = {}
+    for m in tasks:
+        if fc_tasks.name_filter(m.get("test")):
+            continue
+        for f in m.get("protected") or []:
+            others = [i for i in writers[f] if i != m["id"] and not ordered(tasks, m["id"], i)]
+            if others:
+                out.setdefault(m["id"], {})[f] = others
+    return out
+
+def whole_shared_text(found):
+    """The gap for each file a task runs whole while other tasks write to it."""
+    return [f"`protected:` {f} also holds the tests of {', '.join(ids)}, and `test:` runs the whole file: their tests fail this task's gate "
+            "until they land; filter by this task's test names (-t, -k, -run, --grep) or give each task its own file" for f, ids in found.items()]
+
 def path_pattern(path):
     """The regex for `path` named in prose, with or without its extension, never as part of a longer path or name: the path followed
     by another extension (`x.test.ts` for `x.ts`, `.env.example` for `.env`) or a hyphen (`auth-client.ts` for `auth.ts`) is another
@@ -177,6 +201,13 @@ def cmd_tasks(a):
         print("\n  WARNING a task names code another task owns, with no `after:` on it (its test cannot pass until that code is in its worktree):")
         for line in loose:
             print(f"    {line}")
+    whole = whole_shared_tests(fc_tasks.code_tasks(open_tasks))
+    if whole:
+        print("\n  WARNING a task's test runs a whole test file other open tasks write to (their tests fail its gate until they land): "
+              "filter by the task's own test names (-t, -k, -run, --grep) or give each task its own file:")
+        for tid, found in whole.items():
+            for f, ids in found.items():
+                print(f"    {tid}: {f} also holds the tests of {', '.join(ids)}")
     pages = {}
     for m in (t for t in open_tasks if t.get("kind") == "design"):
         for n in m["nodes"]:
@@ -265,6 +296,7 @@ def spec_check(data, checks=(), defined=None, scripts=None):
     loose = missing_after(tasks, defined)
     to_run = [t for t in tasks if (t["linear_state"] or "").lower() not in ("in review", "done")]  # a passed or merged layer never runs again
     waves = run_waves(to_run)
+    whole = whole_shared_tests(to_run)
     if len(to_run) >= 3 and len(waves) > len(to_run) / 2:
         gaps.append(f"serial chain: {len(to_run)} tasks run in {len(waves)} waves, mostly one after another")
     out.append((not gaps, data["feature"]["id"], "feature", gaps))
@@ -293,6 +325,7 @@ def spec_check(data, checks=(), defined=None, scripts=None):
                 gaps.append(f"`kind: toolchain` sets up the tools every layer runs, so its layer is the bottom one: drop its `after:` (blocked-by {after})")
             if " ".join(meta["test"].split()) in suite:
                 gaps.append(f"`test:` is the verify check `{meta['test']}`, the whole suite: run only this task's test (its file, or a name filter)")
+            gaps += whole_shared_text(whole.get(meta["id"], {}))
             if re.search(r"(?i)contract\.md|\b(?:from|in|per|see) the (?:groundwork )?contract\b", desc):
                 gaps.append("the brief points at the contract, which implementers never see: state its signatures and exact lines in the brief")
             gaps += scenario_gaps(desc)

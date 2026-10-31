@@ -526,3 +526,67 @@ class ScenarioGaps(unittest.TestCase):
         gaps = self.gaps((1, FULL), ("", "scenario: s"))[2]
         self.assertEqual(gaps[0], "scenario 2 lacks id, given, when, then, test_type, oracle")
         self.assertEqual(gaps[1], "scenario ids 1, ? do not match the 2 criteria (expected 1 to 2)")
+
+
+class SharedTestFile(unittest.TestCase):
+    """Every writer's test is collected onto the project branch before `run`, so a task whose `test:` runs a whole file other open
+    tasks also write to fails its gate on their tests until they land; its command filters by its own test names instead."""
+    WHOLE = "bunx vitest run src/CaseFile.test.tsx"
+
+    def shared(self, *tests, blocked=()):
+        """spec-check of 001 and 002, both protecting shared_test.go, with these `test:` commands; `blocked` makes 002 wait on 001."""
+        a, b = tests
+        issues = [task("ENG-3", "001", protected="shared_test.go", test=a), task("ENG-4", "002", ["ENG-3"] if blocked else (), protected="shared_test.go", test=b)]
+        got = check(issues)
+        return [[g for g in got[i][2] if "shared_test.go" in g] for i in ("ENG-3", "ENG-4")]
+
+    def test_a_name_filter_is_told_from_a_whole_file_run(self):
+        for cmd in ("bunx vitest run src/a.test.tsx -t 'CaseFile tab row'", "npx jest a.test.ts --testNamePattern 'row'", "npx jest a.test.ts -t=row",
+                    "go test ./pkg -run '^TestRow$'", "pytest tests/test_a.py -k row", "pytest tests/test_a.py::test_row", "npx mocha a.spec.js --grep row",
+                    "npx playwright test a.spec.ts -g 'row'", "node --test --test-name-pattern row a.test.js", "dotnet test --filter Name~Row", "bun test a.test.ts -t row"):
+            self.assertTrue(fc.fc_tasks.name_filter(cmd), cmd)
+        for cmd in (self.WHOLE, "go test ./pkg", "pytest tests/test_a.py", "npx jest a.test.ts", "bun test a.test.ts", "cd web && bunx vitest run src/a.test.tsx --reporter dot", ""):
+            self.assertFalse(fc.fc_tasks.name_filter(cmd), cmd)
+
+    def test_two_open_tasks_on_one_file_each_need_a_filter_and_the_gap_names_the_other(self):
+        a, b = self.shared(self.WHOLE, self.WHOLE)
+        self.assertEqual((len(a), len(b)), (1, 1))
+        self.assertTrue("002" in a[0] and "001" in b[0], (a, b))
+        a, b = self.shared(self.WHOLE + " -t 'one'", self.WHOLE + " -t 'two'")
+        self.assertEqual((a, b), ([], []))
+        a, b = self.shared(self.WHOLE + " -t 'one'", self.WHOLE)
+        self.assertEqual((a, len(b)), ([], 1))
+
+    def test_the_writers_brief_asks_for_names_the_filter_matches_only_when_the_command_has_one(self):
+        meta = {"id": "001", "title": "T", "files": ["a.go"], "protected": ["s_test.go"], "body": "", "test": "go test ./a -run '^TestRow'"}
+        self.assertIn("name filter", fc.fc_briefs.test_brief(meta, ""))
+        self.assertNotIn("name filter", fc.fc_briefs.test_brief({**meta, "test": "go test ./a"}, ""))
+
+    def test_a_task_above_the_other_sharer_through_after_may_run_the_whole_file_but_the_one_below_may_not(self):
+        a, b = self.shared(self.WHOLE, self.WHOLE, blocked=True)
+        self.assertEqual((len(a), b), (1, []))
+
+    def test_a_sharer_already_in_review_or_done_counts_for_nothing(self):
+        for state in ("In Review", "Done"):
+            issues = [task("ENG-3", "001", protected="shared_test.go", test=self.WHOLE), {**task("ENG-4", "002", protected="shared_test.go", test=self.WHOLE), "status": state}]
+            self.assertEqual([g for g in check(issues)["ENG-3"][2] if "shared_test.go" in g], [], state)
+
+    def test_tasks_warns_once_per_whole_file_run_on_a_shared_file(self):
+        shared = [task("ENG-3", "001", protected="s_test.go", test="go test ./a"), task("ENG-4", "002", protected="s_test.go", test="go test ./a -run '^TestTwo$'"),
+                  task("ENG-5", "003", protected="s_test.go", test="go test ./a")]
+        repo = Path(tempfile.mkdtemp())
+        proj = repo / ".compose" / "p"
+        proj.mkdir(parents=True)
+        (proj / "linear.json").write_text('{"feature": "ENG-1"}')
+        fc.fc_tasks.sync_tasks(proj, data(shared, ""))
+        out = io.StringIO()
+        with mock.patch.object(fc.fc_core, "project_dir", return_value=proj), mock.patch("sys.stdout", out), branches():
+            try:
+                fc.fc_spec.cmd_tasks(SimpleNamespace(repo=str(repo), project="p"))
+            except SystemExit:
+                pass
+        lines = out.getvalue().splitlines()
+        warned = [l.strip() for l in lines if l.strip().startswith(("001:", "002:", "003:")) and "s_test.go" in l]
+        self.assertEqual(len([l for l in lines if "WARNING" in l and "s_test.go" not in l and "whole" in l.lower()]), 1, lines)
+        self.assertEqual([w[:4] for w in warned], ["001:", "003:"])
+        self.assertTrue("002, 003" in warned[0] and "001, 002" in warned[1], warned)

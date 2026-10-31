@@ -203,12 +203,18 @@ def test_brief(meta, contract, budget=None, conv=None, rebuilt=False):
     fails = (f"The test {paths} holds is being replaced (the brief changed after it was written, or the team lead sent it back): rewrite it to "
              f"the TASK BRIEF. It must fail on the project branch for what the brief asks, and pass once {files} implement the brief.\n" if rebuilt else
              f"It must fail on current stubs for the reason this task fixes, and pass once {files} implement the brief.\n")
+    # a shared test file is run through a name filter so another task's red cases never fail this one's gate (see sections/3.md)
+    scoped = (f"The command has a name filter: name every case so the filter matches it and matches no other task's case, "
+              "and run the command once to see the filter picks up each of yours (a run of 0 tests proves nothing).\n" if fc_tasks.name_filter(meta.get("test")) else "")
     return (f"Write the acceptance test for task {meta['id']} ({meta.get('title', '')}) and nothing else.\n"
-            f"Test file: {paths}. Test command: {meta.get('test')}\n" + fails +
+            f"Test file: {paths}. Test command: {meta.get('test')}\n" + fails + scoped +
             "Use exactly the types, signatures, helpers, and fixtures in the CONTRACT below; never guess a shape it lacks "
             "(report `blocked` naming it).\n"
             "Assert only what the TASK BRIEF states or the code shows: implementer never sees the contract, "
-            "so a line or value only it gives is not asserted.\n"
+            "so a line or value only it gives is not asserted; a behavior the brief does not ask for (an element that disappears, "
+            "a count, a layout) is not asserted either.\n"
+            "Find elements by role and accessible name or by the text the brief or design gives, never by a label or class you "
+            "guessed; await what renders after a fetch or an effect before asserting on it.\n"
             "Cover the brief's acceptance criteria plus holdout cases it does not list. One file; "
             "test behavior through the interface the brief names, one behavior per case, each named for the behavior it checks, "
             "expected and actual in every failure; never mock what the task owns, and never assert an implementation detail "
