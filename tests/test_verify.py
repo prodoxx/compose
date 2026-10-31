@@ -18,10 +18,10 @@ class SufficiencyVerify(unittest.TestCase):
         self.repo, self.proj = Path(tempfile.mkdtemp()), Path(tempfile.mkdtemp()) / "feat"
         self.proj.mkdir()
 
-    def run_round(self, ok=True, cfg=None, skip_review=False, events=EVENTS):
+    def run_round(self, ok=True, cfg=None, skip_review=False, events=EVENTS, report=None):
         cfg, rounds = {"review_base": "main", **(cfg or {})}, []
         parent = mock.Mock()
-        with mock.patch.object(fc.fc_verify, "run_stages", return_value=(ok, {"checks": []}, "" if ok else "finding")), \
+        with mock.patch.object(fc.fc_verify, "run_stages", return_value=(ok, report or {"checks": []}, "" if ok else "finding")), \
                 mock.patch.object(fc_ledger, "verify_record", parent.verify_record), \
                 mock.patch.object(fc.fc_accept, "jev_sufficiency", parent.jev_sufficiency), \
                 mock.patch.object(fc.fc_verify, "verify_failed"), mock.patch.object(fc.fc_linear, "linear_reconcile"), \
@@ -35,8 +35,13 @@ class SufficiencyVerify(unittest.TestCase):
     def test_the_round_keeps_jev_s_events_after_recording_its_own(self):
         _, rounds, _, parent = self.run_round(cfg={"jev_acceptance": True})
         self.assertEqual([c[0] for c in parent.mock_calls], ["verify_record", "jev_sufficiency"])
-        self.assertEqual(parent.jev_sufficiency.call_args.args, ({"review_base": "main", "jev_acceptance": True}, self.proj, self.repo))
+        self.assertEqual(parent.jev_sufficiency.call_args.args, ({"review_base": "main", "jev_acceptance": True}, self.proj, self.repo, None))
         self.assertEqual(rounds[0]["sufficiency"], EVENTS)
+
+    def test_sufficiency_gets_the_rounds_acceptance_so_a_reused_verdict_is_not_judged_again(self):
+        acc = {"criteria": [{"task": "031", "criterion": "a", "choice": "MET", "reused": True}]}
+        _, _, _, parent = self.run_round(cfg={"jev_acceptance": True}, report={"checks": [], "acceptance": acc})
+        self.assertIs(parent.jev_sufficiency.call_args.args[3], acc)
 
     def test_skip_review_or_jev_acceptance_off_does_not_ask_jev(self):
         for kw in ({"skip_review": True}, {"cfg": {"jev_acceptance": False}}):

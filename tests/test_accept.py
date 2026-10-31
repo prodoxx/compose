@@ -155,3 +155,101 @@ class SufficiencyAsk(unittest.TestCase):
         events = fc_accept.jev_sufficiency({}, self.proj, self.repo)
         self.assertEqual(self.said, [f"jev    sufficiency 031: not judged ({err[:200]})", "jev    sufficiency 032: 2 proven, 0 unproven, 0 contradicted"])
         self.assertEqual(([e["task_ids"] for e in events], self.record_task.call_count), ([["032"], ["032"]], 1))
+
+
+class AcceptanceReuse(unittest.TestCase):
+    """A task whose criteria, judged hunks, and files are as they were at its last verify keeps that verdict: jev is not asked again,
+    and neither is sufficiency once it has judged that verdict."""
+    def setUp(self):
+        self.proj = Path(tempfile.mkdtemp()) / "feat"; (self.proj / "results").mkdir(parents=True)
+        (self.proj / "linear.json").write_text('{"feature": "ENG-1"}')
+        self.repo, self.head, self.changed = Path(tempfile.mkdtemp()), "a" * 40, set()
+        self.asked, self.said = [], []
+        def ask(env, cfg, state, questions, label):
+            self.asked.append((label, next(iter(questions.values()))["instructions"]["task"]))
+            return {"model": "m", "answers": {k: {"choice": "MET", "probabilities": {"MET": 0.9}} if q["type"] == "choice" else {"noul": 1} for k, q in questions.items()}}
+        def sh(argv, cwd, check=True):  # rev-parse answers HEAD; diff --quiet says whether a path of the task moved since the judged commit
+            if argv[1] == "diff":
+                return subprocess.CompletedProcess(argv, int(bool(set(argv[argv.index("--") + 1:]) & self.changed)), "", "")
+            return subprocess.CompletedProcess(argv, 0, self.head + "\n", "")
+        for mod, name, kw in ((fc.fc_config, "ENV_FILE", {"new": self.proj / "none.env"}), (fc.fc_models, "jev_ask", {"side_effect": ask}),
+                              (fc.fc_models, "fast_json", {"return_value": {"confirmed": False, "evidence": ""}}), (fc_evidence, "task_rows", {"return_value": []}),
+                              (fc_ledger, "counted", {"side_effect": lambda *a: a[-1]}), (fc_ledger, "record_task", {"return_value": True}),
+                              (fc.fc_core, "say", {"new": self.said.append}), (fc.fc_core, "sh", {"side_effect": sh})):
+            p = mock.patch.object(mod, name, **kw); p.start(); self.addCleanup(p.stop)
+        self.tasks()
+
+    def tasks(self, crit2="* beta\n"):
+        body = lambda c: "## Goal\ng\n\n## Acceptance criteria\n" + c
+        (self.proj / "results" / "tasks.json").write_text(json.dumps({"tasks": [
+            {"id": "031", "title": "one", "linear": "ENG-4", "kind": "code", "files": ["a.go"], "protected": ["a_test.go"], "test": "t1", "body": body("* alpha\n")},
+            {"id": "032", "title": "two", "linear": "ENG-5", "kind": "code", "files": ["b.go"], "protected": ["b_test.go"], "test": "t2", "body": body(crit2)}]}))
+
+    @staticmethod
+    def diff(a="+a", b="+b"):
+        return f"diff --git a/a.go b/a.go\n{a}\ndiff --git a/b.go b/b.go\n{b}\n"
+
+    def judge(self, diff=None, **kw):
+        self.asked.clear(); self.said.clear()
+        return fc_accept.jev_acceptance({}, self.proj, diff or self.diff(), repo=self.repo, **kw)
+
+    def acceptance_asked(self):
+        return [t for label, t in self.asked if label == "Jev acceptance"]
+
+    def sufficiency(self, acc):
+        self.asked.clear(); self.said.clear()
+        out = fc_accept.jev_sufficiency({}, self.proj, self.repo, acc)
+        return out, [t for label, t in self.asked if label == "Jev sufficiency"]
+
+    def test_a_second_verify_of_the_same_code_and_criteria_asks_jev_for_no_task(self):
+        first = self.judge()
+        self.assertEqual(self.acceptance_asked(), ["031", "032"])
+        self.assertFalse(any(r.get("reused") for r in first["criteria"]))
+        again = self.judge()
+        self.assertEqual(self.acceptance_asked(), [])
+        self.assertEqual([(r["task"], r["criterion"], r["choice"], r["reused"]) for r in again["criteria"]], [("031", "alpha", "MET", True), ("032", "beta", "MET", True)])
+        self.assertEqual((again["pass"], again["unclear"], again["failed"]), (True, [], []))
+        self.assertEqual([s for s in self.said if "not rejudged" in s], ["jev    acceptance 2 of 2 tasks unchanged since their last verify, not rejudged"])
+
+    def test_a_task_whose_hunks_criteria_or_files_changed_is_judged_again_and_the_other_is_not(self):
+        self.judge()
+        self.judge(self.diff(b="+b2"))
+        self.assertEqual(self.acceptance_asked(), ["032"])
+        self.tasks(crit2="* gamma\n")
+        self.judge(self.diff(b="+b2"))
+        self.assertEqual(self.acceptance_asked(), ["032"])
+        self.changed = {"a_test.go"}  # a path of 031 differs between the judged commit and HEAD, although its hunks against the base read the same
+        self.judge(self.diff(b="+b2"))
+        self.assertEqual(self.acceptance_asked(), ["031"])
+        self.changed = set()
+        self.judge(self.diff(b="+b2"))
+        self.assertEqual(self.acceptance_asked(), [])
+
+    def test_fresh_judges_every_task_again(self):
+        self.judge()
+        self.judge(fresh=True)
+        self.assertEqual(self.acceptance_asked(), ["031", "032"])
+        self.assertEqual([s for s in self.said if "not rejudged" in s], [])
+
+    def test_without_a_repo_nothing_is_kept_and_every_verify_judges(self):
+        fc_accept.jev_acceptance({}, self.proj, self.diff())
+        fc_accept.jev_acceptance({}, self.proj, self.diff())
+        self.assertEqual(self.acceptance_asked(), ["031", "032"] * 2)
+        self.assertFalse((self.proj / "results" / "acceptance").exists())
+
+    def test_sufficiency_is_not_asked_again_for_a_reused_task_it_judged_before(self):
+        out, asked = self.sufficiency(self.judge())
+        self.assertEqual((asked, [e["task_ids"] for e in out]), (["031", "032"], [["031"], ["032"]]))
+        out, asked = self.sufficiency(self.judge(self.diff(b="+b2")))  # 031 reused, 032 judged again
+        self.assertEqual((asked, [e["task_ids"] for e in out]), (["032"], [["032"]]))
+        self.assertEqual(len([s for s in self.said if "not rejudged" in s]), 1)
+        out, asked = self.sufficiency(self.judge(self.diff(b="+b2")))
+        self.assertEqual((asked, out), ([], []))
+
+    def test_a_reused_task_whose_sufficiency_never_ran_is_judged(self):
+        self.judge()
+        acc = self.judge()
+        self.assertEqual(acc["criteria"][0]["reused"], True)
+        out, asked = self.sufficiency(acc)
+        self.assertEqual((asked, [e["task_ids"] for e in out]), (["031", "032"], [["031"], ["032"]]))
+        self.assertEqual([s for s in self.said if "not rejudged" in s], [])

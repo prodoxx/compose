@@ -352,7 +352,7 @@ class VerifyTasks(unittest.TestCase):
     def ev(self, t, ids, phase, result, detail):
         return fc_ledger.event(fc_ledger.run_id(self.proj, t["id"]), self.sha, [t["id"]], ids, phase, "verify", result, None, detail)
 
-    def test_each_code_task_gets_scoped_then_acceptance_events_even_when_empty(self):
+    def test_each_code_task_gets_one_batch_of_its_scoped_then_acceptance_events(self):
         t1, t2 = self.tasks[:2]
         ids, x = fc_ledger.criterion_ids(t1), fc_ledger.criterion_ids(t2)
         e = lambda **kw: {"tool_error": False, "output": "", **kw}
@@ -364,18 +364,25 @@ class VerifyTasks(unittest.TestCase):
         _, calls = self.record(scoped, {"criteria": rows})
         miss = "NOT_MET: p_met 0.9, p_not_met 0.1"
         self.assertEqual([c for c in calls if c[0] != "ENG-1"], [
-            ("ENG-4", [self.ev(t1, ids, "scoped", r, f"{self.T1}: exit {n}") for r, n in (("fail", 1), ("error", 0), ("pass", 0))]),
-            ("ENG-4", [self.ev(t1, [ids[1]], "acceptance", "fail", miss), self.ev(t1, [ids[0]], "acceptance", "pass", "MET: p_met 0.9, p_not_met 0.1"),
-                       self.ev(t1, [ids[2]], "acceptance", "pass", miss + ", proven by test event f1"), self.ev(t1, [ids[3]], "acceptance", "error", miss),
-                       self.ev(t1, [ids[4]], "acceptance", "error", "None: p_met None, p_not_met None")]),
-            ("ENG-5", []), ("ENG-5", [self.ev(t2, x, "acceptance", "pass", "MET: p_met 0.9, p_not_met 0.1")]), ("ENG-7", []), ("ENG-7", [])])
+            ("ENG-4", [self.ev(t1, ids, "scoped", r, f"{self.T1}: exit {n}") for r, n in (("fail", 1), ("error", 0), ("pass", 0))]
+             + [self.ev(t1, [ids[1]], "acceptance", "fail", miss), self.ev(t1, [ids[0]], "acceptance", "pass", "MET: p_met 0.9, p_not_met 0.1"),
+                self.ev(t1, [ids[2]], "acceptance", "pass", miss + ", proven by test event f1"), self.ev(t1, [ids[3]], "acceptance", "error", miss),
+                self.ev(t1, [ids[4]], "acceptance", "error", "None: p_met None, p_not_met None")]),
+            ("ENG-5", [self.ev(t2, x, "acceptance", "pass", "MET: p_met 0.9, p_not_met 0.1")]), ("ENG-7", [])])
+
+    def test_a_verdict_reused_from_an_earlier_verify_is_not_written_again(self):
+        """Its rows from that verify are on the issue already and still count: the task's files are unchanged since."""
+        t1, t2 = self.tasks[:2]
+        row = lambda t, c, **kw: {"task": t, "criterion": c, "choice": "MET", "p_met": 0.9, "p_not_met": 0.1, **kw}
+        _, calls = self.record((), {"criteria": [row("021", "a", reused=True), row("022", "x")]})
+        self.assertEqual([c for c in calls if c[0] != "ENG-1"], [("ENG-4", []), ("ENG-5", [self.ev(t2, fc_ledger.criterion_ids(t2), "acceptance", "pass", "MET: p_met 0.9, p_not_met 0.1")]), ("ENG-7", [])])
 
     def test_acceptance_that_did_not_judge_is_one_feature_event(self):
         for acceptance, result, detail in ((None, "skipped", "acceptance did not run"), ({"error": "boom"}, "error", "boom"), ({"criteria": [], "note": "no criteria"}, "skipped", "no criteria")):
             ok, calls = self.record(acceptance=acceptance)
             events = [e for issue, es in calls if issue == "ENG-1" for e in es if e["phase"] == "acceptance"]
             self.assertEqual(events, [fc_ledger.event("", self.sha, [], [], "acceptance", "verify", result, None, detail)], acceptance)
-            self.assertEqual((ok, len([c for c in calls if c[0] != "ENG-1"])), (True, 6))
+            self.assertEqual((ok, len([c for c in calls if c[0] != "ENG-1"])), (True, 3))
 
     def test_false_when_a_task_record_fails(self):
         ok, _ = self.record(saved=lambda issue, events: issue != "ENG-5")
@@ -424,15 +431,15 @@ class VerifyUnsaved(unittest.TestCase):
         self.assertEqual((code, final["passed"], self.batches(add), failed.call_count, "Unresolved" in out), (1, False, [("ENG-1", ["cost"])], 1, True))
         self.assertFalse([s for s in said if "not saved" in s])
 
-    def test_verify_record_writes_each_tasks_scoped_then_acceptance_with_record_task(self):
+    def test_verify_record_writes_each_tasks_scoped_then_acceptance_in_one_record_task(self):
         task = {"id": "021", "linear": "ENG-4", "test": "t1", "body": "## Acceptance criteria\n* a\n"}
         (self.proj / "results" / "tasks.json").write_text(json.dumps({"tasks": [task]}))
         report = {"checks": [], "e2e": [], "review": None, "scoped": [{"cmd": "t1", "exit": 0, "tool_error": False, "output": ""}],
                   "acceptance": {"criteria": [{"task": "021", "criterion": "a", "choice": "MET", "p_met": 0.9, "p_not_met": 0.1}]}}
         with mock.patch.object(fc_ledger, "record", return_value=True) as record, mock.patch.object(fc_ledger, "record_task", return_value=True) as record_task:
             fc_ledger.verify_record(self.proj, self.repo, report)
-        self.assertEqual([c.args[:3] for c in record_task.call_args_list], [(self.repo, self.proj, task)] * 2)
-        self.assertEqual([[e["phase"] for e in c.args[3]] for c in record_task.call_args_list], [["scoped"], ["acceptance"]])
+        self.assertEqual([c.args[:3] for c in record_task.call_args_list], [(self.repo, self.proj, task)])
+        self.assertEqual([[e["phase"] for e in c.args[3]] for c in record_task.call_args_list], [["scoped", "acceptance"]])
         self.assertEqual({c.args[0] for c in record.call_args_list}, {"ENG-1"})
 
 
@@ -520,6 +527,12 @@ class RecordTask(unittest.TestCase):
     def test_unsaved_events_refresh_nothing_and_return_false(self):
         self.assertIs(self.record(saved=False), False)
         self.assertEqual((self.writes, self.description), ([], "## Goal\nx\n"))
+
+    def test_no_events_write_nothing_and_leave_the_table_as_it_is(self):
+        """A verify round with nothing new for the task costs it no Linear round trip: the table already shows the rows that count."""
+        with mock.patch.object(fc_ledger, "add_row") as add_row, mock.patch.object(fc_evidence, "refresh") as refresh:
+            self.assertIs(fc_ledger.record_task(self.repo, self.proj, self.meta, []), True)
+        self.assertEqual((add_row.called, refresh.called), (False, False))
 
     def test_without_linear_json_or_a_feature_the_table_holds_the_task_issue_rows_only(self):
         self.issues["ENG-1"] = None  # reading the feature issue would fail

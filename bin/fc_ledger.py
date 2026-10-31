@@ -149,7 +149,10 @@ def counted(repo, proj, meta, rows):
     return out
 
 def record_task(repo, proj, meta, events):
-    """`record` for a task issue: write the events, then refresh its `## Evidence` section from the rows that count."""
+    """`record` for a task issue: write the events, then refresh its `## Evidence` section from the rows that count. No events,
+    no Linear round trip: the section already shows the rows that count."""
+    if not events:
+        return True
     issue = meta.get("linear")
     path = proj / "linear.json"
     feature = json.loads(path.read_text()).get("feature") if path.exists() else None
@@ -159,7 +162,9 @@ def record_task(repo, proj, meta, events):
     return ok
 
 def verify_record(proj, repo, report):
-    """Record one verify round's evidence: checks, e2e, review on the feature issue, scoped and acceptance on each task issue; True when all saved"""
+    """Record one verify round's evidence: checks, e2e, review on the feature issue, scoped and acceptance on each task issue in
+    one batch; True when all saved. An acceptance row the round reused from an earlier verify is on its issue already and
+    still counts (the task's files are unchanged since), so it is not written again."""
     path = proj / "linear.json"
     feature = json.loads(path.read_text()).get("feature") if path.exists() else None
     sha = fc_core.sh(["git", "rev-parse", "HEAD"], repo, check=False).stdout.strip()
@@ -196,10 +201,9 @@ def verify_record(proj, repo, report):
         scoped = [tev(ids, "scoped", result(c), f"{c['cmd']}: exit {c['exit']}") for c in report.get("scoped", []) if c["cmd"] == t["test"]]
         acceptance = []
         for row in (rows or []):
-            if row["task"] != t["id"]:
+            if row["task"] != t["id"] or row.get("reused"):
                 continue
             r = "error" if row.get("judge_error") or row["choice"] is None else "pass" if row["choice"] == "MET" or row.get("proven_by") else "fail" if row.get("confirmed") else "unclear"
             acceptance.append(tev([ids[texts.index(row["criterion"])]], "acceptance", r, f"{row['choice']}: p_met {row['p_met']}, p_not_met {row['p_not_met']}" + (f", proven by test event {row['proven_by']}" if row.get("proven_by") else "")))
-        oks.append(record_task(repo, proj, t, scoped))
-        oks.append(record_task(repo, proj, t, acceptance))
+        oks.append(record_task(repo, proj, t, scoped + acceptance))
     return all(oks)

@@ -265,7 +265,7 @@ def run_stages(repo, proj, cfg, a, tests=None):
         fc_herdr.herdr_stage(panes, "jev", "working")
         diff, _, _, _ = review_inputs(repo, proj, cfg)
         try:
-            acc = fc_accept.jev_acceptance(cfg, proj, diff, repo=repo)
+            acc = fc_accept.jev_acceptance(cfg, proj, diff, repo=repo, fresh=getattr(a, "fresh", False))
         except Exception as e:  # noqa: BLE001
             acc = {"pass": False, "criteria": [], "failed": [], "error": str(e)}
         acc["seconds"] = round(time.time() - t1, 1)
@@ -450,7 +450,7 @@ def verify_rounds(repo, proj, cfg, a, rounds, t0, left_out=()):
         rounds.append(report)
         round_logged(ok)
         fc_ledger.verify_record(proj, repo, report)
-        report["sufficiency"] = fc_accept.jev_sufficiency(cfg, proj, repo) if not a.skip_review and cfg.get("jev_acceptance", True) else None
+        report["sufficiency"] = fc_accept.jev_sufficiency(cfg, proj, repo, report.get("acceptance")) if not a.skip_review and cfg.get("jev_acceptance", True) else None
         while True:
             raised, failed = fc_reroute.after_round(cfg.get("main_repo") or repo, proj, base)
             if failed or not raised:
@@ -459,7 +459,7 @@ def verify_rounds(repo, proj, cfg, a, rounds, t0, left_out=()):
             rounds.append(report)
             round_logged(ok)
             fc_ledger.verify_record(proj, repo, report)
-            report["sufficiency"] = fc_accept.jev_sufficiency(cfg, proj, repo) if not a.skip_review and cfg.get("jev_acceptance", True) else None
+            report["sufficiency"] = fc_accept.jev_sufficiency(cfg, proj, repo, report.get("acceptance")) if not a.skip_review and cfg.get("jev_acceptance", True) else None
         if failed:
             ok = False
             break
