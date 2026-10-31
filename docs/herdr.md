@@ -29,6 +29,13 @@ Use the name `compose crew list` shows in every `herdr agent` command; `watch --
 New panes get `PATH` and each harness row's `home_env` (`CODEX_HOME` for Codex) from the caller.
 A pane on a sign-in screen gets no key: compose stops and names the pane and the screen.
 
+herdr starts an agent by typing its command into the new pane's interactive shell, since `agent start` cannot launch the command as the pane's process.
+A prompt that shell asks first (oh-my-zsh's `Would you like to update? [Y/n]`) takes the first letters of that command as its answer, the shell then runs `laude`, and the start times out.
+New panes get `DISABLE_AUTO_UPDATE=true` and `DISABLE_UPDATE_PROMPT=true` to keep oh-my-zsh quiet.
+A prompt still on screen before the start is declined with `n`, and a start that times out on one is declined once and started again.
+A timeout that stays names what the pane waits on, such as `the new pane's shell is waiting on a prompt: '...'`, instead of a bare `timeout`.
+An explicit `zstyle ':omz:update' mode prompt` in `~/.zshenv`, `~/.zprofile`, `~/.zshrc` or `~/.zlogin` outranks those variables, so `compose doctor` lists it as `MISSING: shell startup` with the line to change (`mode reminder` or `disabled`).
+
 The engineering manager is the session you started, so compose sets neither its model nor its compaction.
 It relays and supervises while planning goes to the planner on the strongest model, so Sonnet serves it well.
 Cap its context with `"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "200000"` in the `env` of `~/.claude/settings.json`, as compose caps every teammate at 150k.

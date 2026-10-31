@@ -16,20 +16,27 @@ def herdr_env():
     return os.environ.get("HERDR_ENV") == "1" and bool(os.environ.get("HERDR_SOCKET_PATH")) and not os.environ.get("COMPOSE_NO_HERDR")
 
 PANE_MAKERS = (("tab", "create"), ("pane", "split"), ("workspace", "create"))
+# herdr types the agent's command into the new pane's interactive shell (`agent start` cannot launch it as the pane's process), so a
+# prompt that shell asks first takes the command's first letters as its answer. oh-my-zsh's update prompt is the known one; both
+# variables are its old-style switches (an explicit `zstyle ':omz:update' mode` in the user's files outranks them: shell_startup_check).
+SHELL_GUARD = (("DISABLE_AUTO_UPDATE", "true"), ("DISABLE_UPDATE_PROMPT", "true"))
 def herdr_argv(args):
     """The herdr command line for `args`. A new pane gets the herdr server's env, not ours, so a call that makes one passes the
     caller's COMPOSE_CONFIG and HOME on: a scratch config stays scratch in the CLI, agent, or teammate that pane runs. Each harness
     row's home variable goes too, when set in the caller: the pane's harness must use the home compose wrote hooks, trust and skills
     into, and its sign-in. PATH too: compose decides a harness is installed by its own PATH, so the pane must run with that PATH.
-    They go last: herdr reads `pane split`'s pane id only as the argument right after the subcommand."""
+    They go last: herdr reads `pane split`'s pane id only as the argument right after the subcommand. A new pane's shell also
+    gets SHELL_GUARD, so a startup prompt does not swallow the agent command herdr types."""
     args = [str(a) for a in args]
     if tuple(args[:2]) in PANE_MAKERS:
         homes = [h for k in fc_harness.rows() if (h := fc_harness.HARNESSES[k].get("home_env")) and os.environ.get(h)]
+        args += [x for k, v in SHELL_GUARD for x in ("--env", f"{k}={v}")]
         args += [x for k in ("COMPOSE_CONFIG", "HOME", *homes, "PATH") if os.environ.get(k) for x in ("--env", f"{k}={os.environ[k]}")]
     return ["herdr", *args]
 
 def herdr(*args, check=False, timeout=120):
-    """One herdr CLI call. Returns the JSON `result`, or None when not inside herdr or the call failed (raises if check)."""
+    """One herdr CLI call. Returns the JSON `result`, or None when not inside herdr or the call failed (raises if check).
+    `pane read` answers plain text, so it returns that text."""
     if not herdr_env():
         return None
     try:
@@ -38,6 +45,8 @@ def herdr(*args, check=False, timeout=120):
         if check:
             raise RuntimeError(f"herdr {' '.join(map(str, args[:2]))}: {e}")
         return None
+    if tuple(map(str, args[:2])) == ("pane", "read"):
+        return p.stdout if p.returncode == 0 else None
     try:
         out = json.loads((p.stdout or p.stderr or "{}").strip().splitlines()[-1])
     except (json.JSONDecodeError, IndexError):
@@ -69,6 +78,65 @@ def herdr_text(*args, timeout=30):
     except (OSError, subprocess.TimeoutExpired):
         return ""
     return p.stdout if p.returncode == 0 else ""
+
+SHELL_PROMPTS = (  # (pattern for the last visible line of a pane stopped before its command prompt, the key that declines it, "" when unknown)
+    (re.compile(r"Would you like to update\? \[Y/n\]"), "n"),  # oh-my-zsh: it reads one key, so "n" alone answers it
+    (re.compile(r"[\[(]y(es)?/n(o)?[\])]", re.I), ""),  # any other yes/no question: named in the error, never answered blind
+)
+
+def pane_screen(pane):
+    """The non-blank lines on `pane`'s screen; empty outside herdr or when it cannot be read. Read through herdr()
+    so the callers that already stand in for it (a fake herdr answering {}) get an empty screen, not a call to the real one."""
+    out = herdr("pane", "read", pane, "--source", "visible", "--lines", "40")
+    return [ln.strip() for ln in out.splitlines() if ln.strip()] if isinstance(out, str) else []
+
+def pane_blocker(pane):
+    """(line, key) for the prompt the shell in `pane` is stopped on, else None: only the last line on screen counts, so an
+    answered prompt above a command prompt is no blocker. `key` declines a prompt SHELL_PROMPTS knows, else ""."""
+    lines = pane_screen(pane)
+    for pattern, key in SHELL_PROMPTS if lines else ():
+        if pattern.search(lines[-1]):
+            return lines[-1], key
+    return None
+
+def pane_unblock(pane):
+    """Answer the prompt `pane`'s shell is stopped on when SHELL_PROMPTS knows the key that declines it; True when it did."""
+    blocker = pane_blocker(pane)
+    if not (blocker and blocker[1]):
+        return False
+    herdr("pane", "send-text", pane, blocker[1])
+    time.sleep(1)  # the shell echoes the answer and goes on to its command prompt
+    return True
+
+def pane_diagnosis(pane):
+    """Why a start in `pane` timed out, as one sentence for the error: the prompt its shell waits on (its first typed letters were the
+    answer, so the agent never started) or else the last lines it shows; "" when it shows nothing."""
+    if blocker := pane_blocker(pane):
+        return (f"the new pane's shell is waiting on a prompt: '{blocker[0]}' - the typed agent command went into it as the answer; "
+                "answer it in the pane, and run `compose doctor` for the setting that stops it")
+    shown = pane_screen(pane)
+    return "the pane shows: " + " / ".join(shown[-3:]) if shown else ""
+
+ZSH_STARTUP = (".zshenv", ".zprofile", ".zshrc", ".zlogin")  # what a pane's zsh reads, login or not (herdr's shell_mode)
+OMZ_QUIET_MODES = ("disabled", "auto", "reminder", "background-alpha")  # the update modes that never ask
+
+def shell_startup_check(home):
+    """(ok, detail) for the zsh startup files in `home`: not ok when one sets oh-my-zsh's update mode to one that asks, with the file
+    and line of each. That `zstyle` outranks SHELL_GUARD, so a pane compose makes would stop on `Would you like to update? [Y/n]`."""
+    found = []
+    for name in ZSH_STARTUP:
+        try:
+            lines = (Path(home) / name).read_text().splitlines()
+        except (OSError, UnicodeDecodeError):
+            continue
+        for n, line in enumerate(lines, 1):
+            m = re.match(r"\s*zstyle\s+['\"]:omz:update['\"]\s+mode\s+(\S+)", re.sub(r"(^|\s)#.*$", "", line))
+            if m and m.group(1) not in OMZ_QUIET_MODES:
+                found.append(f"~/{name}:{n} sets the oh-my-zsh update mode to {m.group(1)}")
+    if not found:
+        return True, ""
+    return False, ("; ".join(found) + ", which asks 'Would you like to update? [Y/n]' in every new shell and takes the first letter of "
+                   "the agent command compose types into a teammate's pane, so its start times out")
 
 def herdr_ready(agent, timeout=60):
     """Return once a Claude session's input box (its `❯` line) is on screen, or it is already on a turn, blocked on a dialog, or done.
@@ -132,7 +200,11 @@ def herdr_await_start(agent, first=None, tries=3):
 def herdr_start_crew(*args, tries=8):
     """`herdr agent start` for a teammate, retried while its pane is still coming up: starts running in parallel (designcrews,
     testcrews) race each other and the new pane answers agent_pane_busy until its shell is there, or agent_name_not_found while herdr
-    has not yet registered the name the start waits for (the session may be up under its pane's default name: it is renamed)."""
+    has not yet registered the name the start waits for (the session may be up under its pane's default name: it is renamed).
+    A shell prompt on the new pane takes the typed command's first letters, so one on screen is answered first (pane_unblock), and a
+    start that times out on one is answered once and started again; a timeout that stays says what the pane shows (pane_diagnosis)."""
+    pane = args[args.index("--pane") + 1] if "--pane" in args else None
+    answered = bool(pane and pane_unblock(pane))
     for i in range(tries):
         try:
             r = herdr("agent", "start", *args, check=True, timeout=90)
@@ -150,6 +222,11 @@ def herdr_start_crew(*args, tries=8):
                 if pane_launching(args[0], pane):  # one last look by name and by pane: an agent that can still come up is never declared dead
                     print(f"herdr agent start timed out but {args[0]} is still starting in its pane; continuing")
                     return None
+                if "timeout" in str(e) and not answered and pane_unblock(pane):  # the shell was stopped on a prompt: it is answered, so the command is typed again
+                    answered = True
+                    continue
+                if "timeout" in str(e) and (why := pane_diagnosis(pane)):
+                    raise RuntimeError(f"{e}: {why}") from e
             if not any(c in str(e) for c in ("agent_pane_busy", "agent_name_not_found")) or i == tries - 1:
                 raise
             time.sleep(0.5 * (i + 1))
@@ -394,13 +471,21 @@ def herdr_implementer_pane(space, cwd, env, label=IMPLEMENTERS_TAB):
 
 def herdr_agent_start(*args, tries=8):
     """`herdr agent start`, retried while the pane is still coming up: a pane split a moment ago answers agent_pane_busy
-    until its shell prompt is there, which is the harness racing itself and never a reason to fail a task."""
+    until its shell prompt is there, which is the harness racing itself and never a reason to fail a task. A shell prompt on the
+    pane is answered like herdr_start_crew does, and a timeout that stays says what the pane shows."""
+    pane = args[args.index("--pane") + 1] if "--pane" in args else None
+    answered = bool(pane and pane_unblock(pane))
     for i in range(tries):
         started, err = herdr_error("agent", "start", *args, timeout=90)
+        if err == "timeout" and pane and not answered and pane_unblock(pane):
+            answered = True
+            continue
         if err not in ("agent_pane_busy", "agent_name_not_found") or i == tries - 1:
             break
         time.sleep(0.5 * (i + 1))
     if err:
+        if err == "timeout" and pane and (why := pane_diagnosis(pane)):
+            err = f"{err}: {why}"
         raise RuntimeError(f"herdr agent start: {err}")
     if "--pane" in args:
         agent_pids(args[args.index("--pane") + 1])

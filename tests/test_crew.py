@@ -157,21 +157,21 @@ class Crew(unittest.TestCase):
             fc.fc_crew.cmd_crew(a)
         awake.assert_called_once_with(4242)  # the Mac stays awake for as long as the teammate's session lives
         verbs = [c[:2] for c in calls]
-        self.assertEqual(verbs, [("agent", "list"), ("tab", "create"), ("pane", "rename"), ("agent", "start"),
-                                 ("pane", "process-info"), ("pane", "process-info"), ("agent", "get"),  # the start's renice and the record read the pane's processes; the brief waits for Claude's input box
+        self.assertEqual(verbs, [("agent", "list"), ("tab", "create"), ("pane", "rename"), ("pane", "read"), ("agent", "start"),
+                                 ("pane", "process-info"), ("pane", "process-info"), ("agent", "get"),  # the start looks at the pane's screen for a shell prompt first; its renice and the record read the pane's processes; the brief waits for Claude's input box
                                  ("agent", "prompt"), ("pane", "report-metadata"), ("agent", "get"), ("pane", "process-info")])
         self.assertEqual(calls[2], ("pane", "rename", "w9:p7", "Payment provider"))  # the pane carries its tab's label
         self.assertIn("COMPOSE_ROLE=crew", calls[1])  # only the team lead's tab is marked for the guard
         self.assertIn("COMPOSE_PROJECT=shop", calls[1])  # the Stop hook's watch finds its project from the tab
         self.assertIn("COMPOSE_TEAMMATE=shop-q-neb-12", calls[1])  # the compaction hook finds its brief from the tab: COMPOSE_ROLE is only `crew`
         self.assertIn(f"COMPOSE_REPO={fc.fc_herdr.project_worktree(self.proj)}", calls[1])
-        start = calls[3]
+        start = calls[4]
         self.assertEqual(start[2], "shop-q-neb-12")
         self.assertIn("claude", start)
         self.assertEqual(json.loads(start[start.index("--settings") + 1])["attribution"], {"commit": "", "pr": ""})  # no co-author trailer on a crew commit
         self.assertFalse(any("brief.md" in str(x) for x in start))  # a session launched on a prompt works on it at once and never shows herdr the idle box its start waits for
-        self.assertEqual(calls[7][2], "shop-q-neb-12")
-        self.assertIn("brief.md", calls[7][3])  # the brief goes in once the session is idle and its box is on screen
+        self.assertEqual(calls[8][2], "shop-q-neb-12")
+        self.assertIn("brief.md", calls[8][3])  # the brief goes in once the session is idle and its box is on screen
         prompt = (self.proj / "results" / "crew" / "shop-q-neb-12.brief.md").read_text()
         self.assertIn("compose report", prompt)
         self.assertIn("shop-orchestrator, your team lead", prompt)
@@ -377,7 +377,7 @@ class Crew(unittest.TestCase):
                 fc.fc_crew.cmd_crew(a)
             self.assertEqual(calls[1][:2], ("tab", "create"))
             self.assertIn(f"COMPOSE_ROLE={env}", calls[1], role)
-            self.assertEqual(calls[3][2], f"shop-{role}")
+            self.assertEqual(next(c for c in calls if c[:2] == ("agent", "start"))[2], f"shop-{role}")
 
     def test_a_story_planner_is_named_after_its_ticket_so_it_runs_beside_the_feature_planner(self):
         (self.proj / "linear.json").write_text(json.dumps({"feature": "NEB-1"}))
@@ -977,7 +977,7 @@ class StartPaneBusy(unittest.TestCase):
         calls = []
         def herdr(*args, **kw):
             calls.append(args)
-            if args[:2] == ("agent", "start") and len(calls) == 1:
+            if args[:2] == ("agent", "start") and [c[:2] for c in calls].count(("agent", "start")) == 1:
                 raise RuntimeError("herdr agent start: agent_name_not_found")
             return {"agents": []} if args[:2] == ("agent", "list") else {}
         with mock.patch.object(fc.fc_herdr, "herdr", herdr):

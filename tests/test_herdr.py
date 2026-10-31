@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import importlib.machinery, importlib.util, json, os, shutil, tempfile, unittest
+import importlib.machinery, importlib.util, io, json, os, shutil, tempfile, unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -11,6 +11,8 @@ fc = importlib.util.module_from_spec(_spec)
 for _m in [m for m in sys.modules if m.startswith("fc_") and m not in ("fc_cost", "fc_mcp", "fc_sessions")]: del sys.modules[_m]
 _spec.loader.exec_module(fc)
 import fc_harness
+
+GUARD = ["--env", "DISABLE_AUTO_UPDATE=true", "--env", "DISABLE_UPDATE_PROMPT=true"]  # what keeps oh-my-zsh from asking in a pane compose makes
 
 
 class AgentNames(unittest.TestCase):
@@ -335,18 +337,18 @@ class CallerEnv(unittest.TestCase):
         with mock.patch.dict(os.environ, {"COMPOSE_CONFIG": "/s/config.json", "HOME": "/s/home", "PATH": "/c/bin:/usr/bin"}):
             self.assertEqual(fc.fc_herdr.herdr_argv(["pane", "split", "w4:p5", "--direction", "down", "--no-focus"]),
                              ["herdr", "pane", "split", "w4:p5", "--direction", "down", "--no-focus",
-                              "--env", "COMPOSE_CONFIG=/s/config.json", "--env", "HOME=/s/home", "--env", "PATH=/c/bin:/usr/bin"])
+                              *GUARD, "--env", "COMPOSE_CONFIG=/s/config.json", "--env", "HOME=/s/home", "--env", "PATH=/c/bin:/usr/bin"])
 
     def test_every_pane_maker_carries_the_callers_path_last_and_other_calls_do_not(self):
         env = {"COMPOSE_CONFIG": "/s/config.json", "HOME": "/s/home", "PATH": "/c/bin:/usr/bin"}
-        tail = ["--env", "COMPOSE_CONFIG=/s/config.json", "--env", "HOME=/s/home", "--env", "PATH=/c/bin:/usr/bin"]
+        tail = [*GUARD, "--env", "COMPOSE_CONFIG=/s/config.json", "--env", "HOME=/s/home", "--env", "PATH=/c/bin:/usr/bin"]
         with mock.patch.dict(os.environ, env):
             for args in (["tab", "create", "--cwd", "/x"], ["pane", "split", "w1:p1"], ["workspace", "create", "--label", "x"]):
                 self.assertEqual(fc.fc_herdr.herdr_argv(args), ["herdr", *args, *tail])
             self.assertEqual(fc.fc_herdr.herdr_argv(["pane", "run", "w1:p1", "ls"]), ["herdr", "pane", "run", "w1:p1", "ls"])
             self.assertEqual(fc.fc_herdr.herdr_argv(["tab", "list"]), ["herdr", "tab", "list"])
         with mock.patch.dict(os.environ, {"HOME": "/s/home"}, clear=True):  # an unset PATH is not passed
-            self.assertEqual(fc.fc_herdr.herdr_argv(["tab", "create"]), ["herdr", "tab", "create", "--env", "HOME=/s/home"])
+            self.assertEqual(fc.fc_herdr.herdr_argv(["tab", "create"]), ["herdr", "tab", "create", *GUARD, "--env", "HOME=/s/home"])
 
     def test_a_command_only_on_the_callers_path_runs_in_a_new_pane(self):
         d = Path(tempfile.mkdtemp()); (d / "bin").mkdir(); (d / "tools").mkdir()
@@ -369,14 +371,14 @@ class CallerEnv(unittest.TestCase):
     def test_a_harness_home_set_in_the_caller_goes_after_home_and_before_path(self):
         env = {"COMPOSE_CONFIG": "/s/config.json", "HOME": "/s/home", "CODEX_HOME": "/s/codex", "PATH": "/c/bin"}
         for args in (["tab", "create", "--cwd", "/x"], ["pane", "split", "w1:p1", "--direction", "down"], ["workspace", "create", "--label", "x"]):
-            self.assertEqual(self.argv(env, args), ["herdr", *args, "--env", "COMPOSE_CONFIG=/s/config.json", "--env", "HOME=/s/home",
+            self.assertEqual(self.argv(env, args), ["herdr", *args, *GUARD, "--env", "COMPOSE_CONFIG=/s/config.json", "--env", "HOME=/s/home",
                                                     "--env", "CODEX_HOME=/s/codex", "--env", "PATH=/c/bin"])
 
     def test_an_unset_or_empty_home_is_not_passed_and_a_second_row_is_passed_in_table_order(self):
         for env in ({"HOME": "/s/home"}, {"HOME": "/s/home", "CODEX_HOME": ""}):
-            self.assertEqual(self.argv(env, ["tab", "create"]), ["herdr", "tab", "create", "--env", "HOME=/s/home"])
+            self.assertEqual(self.argv(env, ["tab", "create"]), ["herdr", "tab", "create", *GUARD, "--env", "HOME=/s/home"])
         env = {"HOME": "/s/home", "OTHER_HOME": "/s/other", "CODEX_HOME": "/s/codex", "PATH": "/c/bin"}
-        self.assertEqual(self.argv(env, ["pane", "split", "w1:p1"]), ["herdr", "pane", "split", "w1:p1", "--env", "HOME=/s/home",
+        self.assertEqual(self.argv(env, ["pane", "split", "w1:p1"]), ["herdr", "pane", "split", "w1:p1", *GUARD, "--env", "HOME=/s/home",
                          "--env", "CODEX_HOME=/s/codex", "--env", "OTHER_HOME=/s/other", "--env", "PATH=/c/bin"])
 
     def test_other_calls_do_not_carry_a_harness_home(self):
@@ -427,7 +429,7 @@ class AgentNice(unittest.TestCase):
 
     def start(self, starter, patched, result, *args):
         calls = []
-        with mock.patch.object(fc.fc_herdr, patched, side_effect=lambda *a, **k: calls.append("start") or result), \
+        with mock.patch.object(fc.fc_herdr, patched, side_effect=lambda *a, **k: calls.append("start") or result if a[:2] != ("pane", "read") else None), \
              mock.patch.object(fc.fc_herdr, "agent_pids", side_effect=lambda pane: calls.append(pane)) as ap:
             out = getattr(fc.fc_herdr, starter)("a", *args)
         return out, calls, ap
@@ -652,3 +654,136 @@ class HerdrPromptSession(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+OMZ = "[oh-my-zsh] Would you like to update? [Y/n]"
+
+
+class ShellStartupPrompt(unittest.TestCase):
+    """A new pane's interactive shell can stop on a prompt before its command prompt, and then eats the first letter of the typed
+    agent command (`laude`), so `agent start` times out. The pane is made with the variables that quiet the known prompts, a prompt
+    still on screen is answered before the start, and a start that times out says what the pane shows."""
+    def pane(self, *screens):
+        shown = iter(screens)
+        return mock.patch.object(fc.fc_herdr, "pane_screen", lambda pane: [l.strip() for l in (next(shown, screens[-1]) if screens else "").splitlines() if l.strip()])
+
+    def test_a_known_prompt_on_the_last_line_is_found_with_the_key_that_declines_it(self):
+        with self.pane(f"Last login: Fri\n{OMZ}\n"):
+            self.assertEqual(fc.fc_herdr.pane_blocker("p1"), (OMZ, "n"))
+
+    def test_an_unknown_yes_no_prompt_is_found_without_an_answer(self):
+        with self.pane("Install the plugin? (y/n) "):
+            self.assertEqual(fc.fc_herdr.pane_blocker("p1"), ("Install the plugin? (y/n)", ""))
+
+    def test_a_shell_prompt_or_an_old_prompt_line_is_no_blocker(self):
+        for screen in ("", "~/repo main % ", f"{OMZ}\nn\n~/repo main % "):
+            with self.subTest(screen), self.pane(screen):
+                self.assertIsNone(fc.fc_herdr.pane_blocker("p1"))
+
+    def test_the_diagnosis_names_the_prompt_and_the_fix(self):
+        with self.pane(f"{OMZ}\n"):
+            why = fc.fc_herdr.pane_diagnosis("p1")
+        self.assertIn("the new pane's shell is waiting on a prompt: '" + OMZ + "'", why)
+        self.assertIn("compose doctor", why)
+
+    def test_the_diagnosis_of_a_pane_with_no_prompt_shows_its_last_lines(self):
+        with self.pane("one\ntwo\n~/repo % laude\nzsh: command not found: laude\n"):
+            why = fc.fc_herdr.pane_diagnosis("p1")
+        self.assertIn("zsh: command not found: laude", why)
+        self.assertNotIn("waiting on a prompt", why)
+        with self.pane(""):
+            self.assertEqual(fc.fc_herdr.pane_diagnosis("p1"), "")
+
+    def start_crew(self, screens, starts):
+        """herdr_start_crew on a pane: `starts` is what each `agent start` does (an error text, or None for success)."""
+        calls, outcomes = [], iter(starts)
+        def herdr(*args, **kw):
+            calls.append(args)
+            if args[:2] == ("agent", "start") and (err := next(outcomes)):
+                raise RuntimeError(f"herdr agent start: {err}")
+            return {"agents": []} if args[:2] == ("agent", "list") else {}
+        with mock.patch.object(fc.fc_herdr, "herdr", herdr), self.pane(*screens), mock.patch.object(fc.fc_herdr, "pane_launching", return_value=False), \
+             mock.patch.object(fc.fc_herdr, "agent_pids"), mock.patch.object(time, "sleep"):
+            try:
+                fc.fc_herdr.herdr_start_crew("a", "--kind", "claude", "--pane", "p1")
+                err = None
+            except RuntimeError as e:
+                err = str(e)
+        return calls, err
+
+    def test_a_prompt_on_screen_before_the_start_is_answered_first(self):
+        calls, err = self.start_crew([OMZ, "~/repo % "], [None])
+        self.assertIsNone(err)
+        heads = [c[:2] for c in calls]
+        self.assertLess(calls.index(("pane", "send-text", "p1", "n")), heads.index(("agent", "start")))
+
+    def test_a_start_that_timed_out_on_a_known_prompt_answers_it_and_starts_again(self):
+        calls, err = self.start_crew(["~/repo % ", OMZ, OMZ, "~/repo % "], ["timeout", None])
+        self.assertIsNone(err)
+        self.assertEqual([c[:2] for c in calls].count(("agent", "start")), 2)
+        self.assertEqual(calls.count(("pane", "send-text", "p1", "n")), 1)
+
+    def test_a_start_that_timed_out_on_a_prompt_nobody_can_answer_says_what_the_pane_waits_on(self):
+        prompt = "Run the setup wizard? [y/N]"
+        calls, err = self.start_crew([prompt] * 6, ["timeout"] * 4)
+        self.assertIn("timeout", err)
+        self.assertIn("the new pane's shell is waiting on a prompt: '" + prompt + "'", err)
+        self.assertNotIn(("pane", "send-text", "p1", "n"), calls)
+
+    def test_a_start_that_timed_out_again_after_the_prompt_was_answered_fails_instead_of_looping(self):
+        calls, err = self.start_crew([OMZ] * 12, ["timeout"] * 4)
+        self.assertIn("waiting on a prompt", err)
+        self.assertEqual(calls.count(("pane", "send-text", "p1", "n")), 1)
+        self.assertEqual([c[:2] for c in calls].count(("agent", "start")), 1)
+
+    def test_the_implementer_start_gets_the_same_answer_and_the_same_diagnosis(self):
+        errs = iter([(None, "timeout"), ({"agent": {}}, None)])
+        sent = []
+        with mock.patch.object(fc.fc_herdr, "herdr_error", lambda *a, **k: next(errs)), self.pane("~/repo % ", OMZ, OMZ), \
+             mock.patch.object(fc.fc_herdr, "herdr", lambda *a, **k: sent.append(a) or {}), mock.patch.object(time, "sleep"):
+            fc.fc_herdr.herdr_agent_start("a", "--pane", "p1")
+        self.assertEqual(sent.count(("pane", "send-text", "p1", "n")), 1)
+        with mock.patch.object(fc.fc_herdr, "herdr_error", return_value=(None, "timeout")), self.pane("Run the setup wizard? [y/N]"), \
+             mock.patch.object(fc.fc_herdr, "herdr", return_value={}), mock.patch.object(time, "sleep"):
+            with self.assertRaisesRegex(RuntimeError, r"herdr agent start: timeout.*waiting on a prompt: 'Run the setup wizard\? \[y/N\]'"):
+                fc.fc_herdr.herdr_agent_start("a", "--pane", "p1")
+
+
+class ShellStartupCheck(unittest.TestCase):
+    """doctor's check of the user's zsh startup files for what blocks a new pane: an oh-my-zsh update mode that asks."""
+    def home(self, **files):
+        d = Path(tempfile.mkdtemp())
+        for name, text in files.items():
+            (d / f".{name}").write_text(text)
+        return d
+
+    def test_an_update_mode_that_asks_is_a_problem_with_its_line_and_fix(self):
+        h = self.home(zshrc="export ZSH=~/.oh-my-zsh\nzstyle ':omz:update' mode prompt\nsource $ZSH/oh-my-zsh.sh\n")
+        ok, detail = fc.fc_herdr.shell_startup_check(h)
+        self.assertFalse(ok)
+        self.assertIn(".zshrc:2", detail)
+        self.assertIn("Would you like to update? [Y/n]", detail)
+
+    def test_a_mode_that_never_asks_or_none_at_all_is_fine(self):
+        for text in ("zstyle ':omz:update' mode disabled\n", "zstyle ':omz:update' mode auto\n", "zstyle ':omz:update' mode reminder  # quiet\n",
+                     "# zstyle ':omz:update' mode prompt\n", "zstyle ':omz:update' frequency 13\nsource $ZSH/oh-my-zsh.sh\n", ""):
+            with self.subTest(text):
+                self.assertEqual(fc.fc_herdr.shell_startup_check(self.home(zshrc=text)), (True, ""))
+        self.assertEqual(fc.fc_herdr.shell_startup_check(Path(tempfile.mkdtemp())), (True, ""))
+
+    def test_every_zsh_startup_file_is_read(self):
+        ok, detail = fc.fc_herdr.shell_startup_check(self.home(zshenv="zstyle ':omz:update' mode prompt\n"))
+        self.assertFalse(ok)
+        self.assertIn(".zshenv:1", detail)
+
+    def test_doctor_lists_it_as_one_optional_row(self):
+        home = self.home(zshrc="zstyle ':omz:update' mode prompt\n")
+        out = io.StringIO()
+        with mock.patch.object(Path, "home", return_value=home), mock.patch.object(fc.fc_init.fc_steps, "STEPS", ()), mock.patch.object(fc.fc_init, "herdr_loud", return_value=(True, "")), \
+             mock.patch.object(fc.fc_init.fc_providers, "doctor_rows", return_value=[]), mock.patch("sys.stdout", out):
+            bad = fc.fc_init.check_deps()
+        line = next(l for l in out.getvalue().splitlines() if l.startswith("MISSING: shell startup"))
+        self.assertIn(".zshrc:1", line)
+        self.assertIn("(install: in that file use zstyle ':omz:update' mode reminder (or disabled))", line)
+        self.assertTrue(line.endswith(" - optional"), line)
+        self.assertNotIn("shell startup", bad)
