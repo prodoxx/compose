@@ -15,6 +15,8 @@ FRAMELINK_SETUP = (f"Framelink is not set up. Put a Figma personal access token 
                    f"  {fc_steps.FRAMELINK_ADD}\n"
                    "The token never goes on a command line; only --env names the file.")
 
+FRAMELINK_TIMEOUT = 300  # seconds for one fetch; a node Framelink read in over 120s has been seen to finish
+
 def framelink_fetch(key, node=None, depth=None, env_file=None):
     """Framelink's JSON for a Figma file or node via the REST API, which does not count against the MCP read cap. The fetch takes
     its turn in the fleet's Figma pace (fc_figmaplan.figma_pace), and a fetch Figma refused for its rate holds the fleet a minute.
@@ -28,10 +30,15 @@ def framelink_fetch(key, node=None, depth=None, env_file=None):
         cmd += ["--node-id", node]
     if depth is not None:
         cmd += ["--depth", str(depth)]
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-    except (OSError, subprocess.TimeoutExpired) as e:
-        raise RuntimeError(f"framelink fetch failed: {e}")
+    for attempt in (1, 2):  # a fetch that outlasts the timeout is tried once more before the task stops
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=FRAMELINK_TIMEOUT)
+            break
+        except subprocess.TimeoutExpired as e:
+            if attempt == 2:
+                raise RuntimeError(f"framelink fetch failed: {e}")
+        except OSError as e:
+            raise RuntimeError(f"framelink fetch failed: {e}")
     secrets = [v.strip().strip("\"'") for line in env_file.read_text().splitlines() if "=" in line and not line.startswith("#")
                for v in [line.split("=", 1)[1]] if len(v.strip()) > 3]
     if r.returncode or not r.stdout.strip():
