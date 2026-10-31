@@ -806,6 +806,19 @@ class FigmaPublish(unittest.TestCase):
         with fc.fc_figma.fc_pace.state("figma") as s:
             self.assertAlmostEqual(s["hold_until"], time.time() + 60, delta=1)
 
+    def test_a_slow_framelink_read_is_tried_once_more_with_a_longer_timeout(self):
+        env = self.proj / "fl.env"; env.write_text("FIGMA_API_KEY=figd_secret_token\n")
+        ok = SimpleNamespace(returncode=0, stdout='{"nodes": []}', stderr="")
+        slow = subprocess.TimeoutExpired(["npx"], 300)
+        with mock.patch.object(subprocess, "run", side_effect=[slow, ok]) as run:
+            self.assertEqual(fc.fc_figma.framelink_fetch("K", node="1:2", env_file=env), '{"nodes": []}')
+        self.assertEqual(run.call_count, 2)
+        self.assertGreater(run.call_args[1]["timeout"], 120)
+        with mock.patch.object(subprocess, "run", side_effect=[slow, slow]) as run, self.assertRaises(RuntimeError) as e:
+            fc.fc_figma.framelink_fetch("K", node="1:2", env_file=env)
+        self.assertEqual(run.call_count, 2)
+        self.assertIn("framelink fetch failed", str(e.exception))
+
     def test_every_figma_read_takes_its_turn_at_ten_a_minute(self):
         os.environ.pop("COMPOSE_NO_PACE")  # the suite's switch: off here
         env = self.proj / "fl.env"; env.write_text("FIGMA_API_KEY=figd_secret_token\n")
