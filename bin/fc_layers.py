@@ -116,7 +116,7 @@ def _linearize(repo, proj, trunk, wt, through=()):
     """Rebase the project's unmerged task branches into one chain on the current trunk tip, layer on layer, inside the CLI's
     worktree. Returns the branches that now form a clean chain; a conflict stops the chain there and is reported, and STACK_STOP
     says where: a caller that acts on the stack top (verify, top, the stack) refuses the partial chain then. With `through`, the
-    chain stops once the last of those branches is placed: the layers above stay as they are, carrying what they were built on."""
+    chain holds only those branches and stops once the last of them is placed: the others, held back, stay as they are, carrying what they were built on."""
     global STACK_STOP
     STACK_STOP = ""
     chain = chain_order(repo, proj)
@@ -128,6 +128,8 @@ def _linearize(repo, proj, trunk, wt, through=()):
     contains = lambda anc, b: fc_core.sh(["git", "merge-base", "--is-ancestor", anc, b], repo, check=False).returncode == 0
     waiting = set(through)
     for b in chain:
+        if through and b not in through:  # held back: not in the chain, so the ones above it carry none of its commits
+            continue
         # A replaced layer's old commits are dropped even while it is not back in the chain (still running, failed, or moved
         # above b by a re-plan): b may already sit on prev and carry them.
         stale = [t for rb, t in replaced if rb != b and contains(t, b) and not contains(t, prev)]
@@ -257,7 +259,8 @@ def review_units(repo, proj, base, trunk, chain, held=()):
     protects its files, as long as it applies there without the earlier commits on its files placed higher (a test written in
     its own part of a shared file skips them; one written on top of them does not). Else it goes no lower than the highest of
     them, to the first task at or above it that protects its files; one no task owns is a groundwork unit of its own right
-    above the highest one's unit, never inside it. A unit's `owned` says which tasks each of its test commits is for (its writer's
+    above the highest one's unit, never inside it. A commit no chain task owns is left out when it was written for a `held` task
+    (or has no known writer and only held tasks protect its files); one written for any other task is placed as above. A unit's `owned` says which tasks each of its test commits is for (its writer's
     task, else every task that protects its files), so build_layers can tell where a task's tests exist."""
     protected = {m["id"]: set(m["protected"]) for m in fc_tasks.code_tasks(fc_tasks.load_tasks(proj))}
     ids = [b.removeprefix(fc_worktree.task_prefix(repo, proj)) for b in chain]
@@ -277,8 +280,9 @@ def review_units(repo, proj, base, trunk, chain, held=()):
         files = set(commit_facts(repo, c)[0])
         writer = next((t for t, a, b in writers if a <= int(at) <= b and files and files <= protected[t]), None)
         owners = [i for i, t in enumerate(ids) if files and files <= protected.get(t, set()) and writer in (None, t)]
-        if not owners and files and any(files <= protected[t] for t in held):
-            continue
+        protectors = {t for t in protected if files and files <= protected[t]}
+        if not owners and files and (writer in held if writer else protectors and protectors <= set(held)):
+            continue  # written for a held task, or with no writer known and only held tasks protect its files
         on = [(p, s) for p, s, f in placed if f & files]
         floor = max((s for _, s in on), default=None)
         if not owners and files and any(files <= protected[t] for t in set(protected) - set(ids)):

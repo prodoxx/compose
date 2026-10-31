@@ -346,9 +346,13 @@ def base_ahead(base, upstream, ahead, submit):
 
 HELD_STATUSES = ("passed", "already_green", "hand_done")
 
-def held_tasks(order, statuses, finished):
-    """The ids of `order` (bottom to top) a submit leaves out: from the first one whose result in `statuses` is not passed, already green or done by hand and that is not `finished` on Linear, up to the top, so a failed task holds back the ones after it."""
-    return order[next((i for i, t in enumerate(order) if statuses[t] not in HELD_STATUSES and t not in finished), len(order)):]
+def held_tasks(order, statuses, finished, after=None):
+    """The ids of `order` (bottom to top) a submit leaves out: each one not `finished` on Linear whose result in `statuses` is not passed, already green or done by hand, or whose `after` tasks (`after`: {id: {ids}}) include a held one, so a failed task holds back the tasks built on it and no others."""
+    held = []
+    for t in order:
+        if t not in finished and (statuses[t] not in HELD_STATUSES or (after or {}).get(t, set()) & set(held)):
+            held.append(t)
+    return held
 
 def register_stack(repo, proj, trunk, submit=False, preview=False, gate=None):
     """Make the project's passed task branches one gh stack, layer by layer, without touching the user's checkout. Branches built
@@ -394,11 +398,12 @@ def register_stack(repo, proj, trunk, submit=False, preview=False, gate=None):
         def status(t):
             f = proj / "results" / f"{t}.json"
             return (json.loads(f.read_text()).get("status") if f.exists() else None) or "pending"
-        held = held_tasks(order, {t: status(t) for t in order}, {t for t in order if fc_tasks.linear_done(by_id[t])})
-        cut = len(order) - len(held)
+        after = {t: {d.strip() for d in str(by_id[t].get("after") or "").split(",") if d.strip()} for t in order}
+        held = held_tasks(order, {t: status(t) for t in order}, {t for t in order if fc_tasks.linear_done(by_id[t])}, after)
         if held:
             fc_core.say(f"stack  hold  {held[0]} is {status(held[0])}; {', '.join(held)} not submitted")
-            through = [b for b in fc_worktree.stack_order(repo, proj) if b.removeprefix(fc_worktree.task_prefix(repo, proj)) in order[:cut]]
+            prefix = fc_worktree.task_prefix(repo, proj)
+            through = [b for b in fc_worktree.stack_order(repo, proj) if b.removeprefix(prefix) in order and b.removeprefix(prefix) not in held]
             if not through:
                 fc_layers.STACK_STOP = f"nothing to submit: {held[0]} is {status(held[0])}"
                 fc_core.say(f"stack  STOP  {fc_layers.STACK_STOP}")
