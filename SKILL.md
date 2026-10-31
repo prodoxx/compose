@@ -268,7 +268,10 @@ model: pi:openrouter-fast/z-ai/glm-5.3-flash@preset/glm-5-3-flash-fast
   When the user says the account is fixed, run `resume`.
 - A task branch changes at most 350 lines and never adds a document.
   The CLI enforces both; plan tasks that fit.
-- Never push or submit a stack without the user's explicit permission for that push; `compose away --push` or `compose yolo --push` is that permission for the project's stack, given in advance; neither posture without --push ever pushes. `compose land --yes` merges on GitHub only when the user said to land; neither posture covers it. `run` registers stacks locally only.
+- Never push or submit a stack without the user's explicit permission for that push; `compose away --push` or `compose yolo --push` is that permission for the project's stack, given in advance; neither posture without --push ever pushes.
+  A project whose `verify.json` has `"submit_after_verify": true` carries that go for good: a passed verify submits the stack with a plain push, never `--update` or `land`, and nobody asks.
+  Without it, ask once per verified stack, in the `verify passed` line the watch gives you, and ask again only when something new would be pushed (a later verify PASS, tasks added); never repeat it in a later report.
+  `compose land --yes` merges on GitHub only when the user said to land; neither posture covers it. `run` registers stacks locally only.
 - While the product owner is away (`results/yolo.json`, `event away=on` or `event yolo=on`), decisions follow 0h's Away or Yolo paragraph: the recommendation, logged; the never-set still waits.
 - Parallelize by default: before every step ask what else can start now.
   Whatever has no real dependency (tasks with no `after:`, test writers, groundwork, reviews, merges of independent branches, toolsmith fixes, file checks) runs at once, on as many agents as the machine and configured parallel limits allow.

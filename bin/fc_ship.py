@@ -1,7 +1,8 @@
 """Shipping a verified stack: check every layer before it is submitted, reword its commits, land it on the base."""
 import hashlib, json, os, re, subprocess, sys, time
 from pathlib import Path
-import fc_core, fc_proc, fc_tasks, fc_worktree, fc_layers, fc_stack, fc_green, fc_gate, fc_jev, fc_verify, fc_update
+import fc_core, fc_proc, fc_tasks, fc_worktree, fc_layers, fc_stack, fc_green, fc_gate, fc_jev, fc_verify, fc_update, fc_crew, fc_herdr
+from types import SimpleNamespace
 
 LAND_POLL = 20      # seconds between looks at a pull request that is not ready yet
 LAND_SETTLE = 15    # seconds after a push before its required checks are read: GitHub registers them a moment later
@@ -228,6 +229,52 @@ def cmd_stack(a):
         if fc_layers.STACK_STOP:
             sys.exit(1)  # the STOP line already said why and what to do
         print("stack  nothing to register: no unmerged task branches")
+
+def verify_passed_now(proj, since):
+    """True when a full verify wrote a passing results/verify.json at or after `since` (smoke and review-only runs write other files)."""
+    f = proj / "results" / "verify.json"
+    try:
+        return f.stat().st_mtime >= since and json.loads(f.read_text()).get("passed") is True
+    except (OSError, ValueError, AttributeError):
+        return False
+
+def submit_stop_state(why):
+    """`needs-user` when the stop is a push only the product owner may allow (a changed layer needs `--update`, a force push; a base
+    ahead of its remote needs its own push), else `blocked`."""
+    return "needs-user" if "--update" in why or " ahead of " in why else "blocked"
+
+def submit_after_verify(a, proj):
+    """The project's standing go (verify.json submit_after_verify) after a passing verify: one plain `compose stack --submit`, which pushes
+    new branches and opens draft PRs. Never --update (a force push), never land. A stop is reported to the team lead and tried no more."""
+    fc_core.say("verify passed and submit_after_verify is on: submitting the stack with a plain push (no --update, no land)")
+    ns = SimpleNamespace(repo=a.repo, project=getattr(a, "project", None), trunk=getattr(a, "trunk", None), submit=True, update=False, fresh=False)
+    fc_layers.STACK_STOP = ""
+    try:
+        cmd_stack(ns)
+        return
+    except SystemExit as e:
+        why = fc_layers.STACK_STOP or f"compose stack exited {e.code}"
+    state = submit_stop_state(why)
+    ask = " A force push (`compose stack --submit --update`, --force-with-lease) needs your go." if "--update" in why else ""
+    message = f"verified stack not pushed: {why}.{ask}"
+    name = fc_herdr.agent_name(proj.name, "orchestrator")
+    if fc_crew.crew_record(proj, name):
+        fc_crew.write_report(proj, name, state, message)
+        fc_crew.crew_attention(proj, name, state, message)
+    fc_core.say(f"submit_after_verify {state}: {message}")
+
+def cmd_verify(a):
+    """`compose verify`, then the project's standing go for the push: with verify.json submit_after_verify on, a full verify that passed submits the stack."""
+    proj = fc_core.project_dir(a)
+    started = time.time()
+    code = 0
+    try:
+        fc_verify.cmd_verify(a)
+    except SystemExit as e:
+        code = e.code
+    if code in (0, None) and fc_tasks.submit_after_verify(proj) and verify_passed_now(proj, started):
+        submit_after_verify(a, proj)
+    sys.exit(code)
 
 def layer_commits(repo, proj, trunk):
     """[(branch, [commit, ...])] bottom first: each layer's own commits, oldest first."""

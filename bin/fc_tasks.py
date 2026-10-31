@@ -284,6 +284,23 @@ def yolo_state(proj):
         return None
     return {**y, "mode": y.get("mode") or "away"}
 
+def submit_after_verify(proj):
+    """The product owner's standing go for a plain submit: verify.json `submit_after_verify` is exactly true. Off when it is missing,
+    anything else, or the file does not read, so a typo never pushes."""
+    try:
+        cfg = json.loads((proj / "verify.json").read_text())
+    except (OSError, ValueError):
+        return False
+    return isinstance(cfg, dict) and cfg.get("submit_after_verify") is True
+
+def push_stance(proj):
+    """Who pushes a verified stack: `auto` (the project's submit_after_verify; compose submits when verify passes), `posture`
+    (away/yolo with push: the team lead submits), or `ask` (the product owner is asked once)."""
+    if submit_after_verify(proj):
+        return "auto"
+    y = yolo_state(proj)
+    return "posture" if y and y.get("push") else "ask"
+
 def yolo_by(y):
     """Who turned yolo on or last changed it, as this session sees it (yolo is per project, so another engineering manager session
     on it changes how this one answers): `this session`, `an engineering manager session in herdr pane w1:p2`, or `unknown` for

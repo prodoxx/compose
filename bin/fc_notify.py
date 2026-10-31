@@ -40,7 +40,7 @@ def gates(proj, events):
     for e in events:
         if m := re.match(r"event agent=(\S+) status=blocked", e):
             send(proj, f"{m.group(1)} is waiting on a prompt only you can answer (sign-in or allow)")
-        elif e == "event verify=PASS" and y and not y.get("push"):
+        elif e == "event verify=PASS" and y and not y.get("push") and not fc_tasks.submit_after_verify(proj):
             send(proj, "verify passed; the stack waits for your push approval")
         elif y and (m := re.match(r"event crew=(\S+) state=(needs-user|blocked) message=(.*)$", e)) and GATE_RE.search(m.group(3)):
             send(proj, f"{m.group(1)} is {'asking' if m.group(2) == 'needs-user' else 'blocked'} on something only you can clear")

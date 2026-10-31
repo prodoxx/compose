@@ -33,7 +33,7 @@ def digest_sections(repo, proj, y):
         done.append(f"stack ok locally, not pushed: {' <- '.join(stack)}")
     t = fc_cost.total(fc_cost.rows(proj))
     task_cost = sum(v["cost"] for v in snap["tasks"].values())
-    sections = [("Your instructions", [y.get("words") or "(no words)", f"push: {'yes' if y.get('push') else 'no'}"]),
+    sections = [("Your instructions", [y.get("words") or "(no words)", push_line(y, fc_tasks.push_stance(proj))]),
                 ("Decided for you", [f"{d['ts']}  {d['text']}" for d in y.get("decisions", [])]),
                 ("To confirm", [f"the {len(y['decisions'])} decision(s) above are recommendations, not your answers: the map's Decisions so far shows them as "
                                 f"{YOLO_TAG.format(mode=y.get('mode', 'yolo'), date='<date>')}. Ask once: accept all, or name the ones to change; the engineering manager then "
@@ -42,6 +42,12 @@ def digest_sections(repo, proj, y):
                 ("Waiting on you", waiting), ("Tried and failed", failed), ("Done", done),
                 ("Cost", [f"{t['input']}in  {t['cache_created']}cc  {t['cache_read']}cr  {t['output']}out  ({t['teammates']} teammates)  tasks ${task_cost:.4f}"])]
     return sections
+
+def push_line(y, stance):
+    """The `push:` line of the instructions: the posture's push, or the project's standing submit_after_verify when that is what pushes."""
+    if stance == "auto":
+        return "push: yes, a passed verify submits the stack (verify.json submit_after_verify); --update and land still need your go"
+    return f"push: {'yes' if y.get('push') else 'no'}"
 
 def yolo_digest(repo, proj, y, verb="off"):
     """The digest rendered: a headline, then each section's items."""
@@ -105,6 +111,11 @@ def cmd_yolo(a):
     fc_core.atomic_write(path, json.dumps(y, indent=2))
     print(f"{P} on for {proj.name} since {y['since']}: the engineering manager answers with the recommendation and logs each answer")
     print(f"your words: {y['words'] or '(none)'}")
-    print(f"push: {'yes, the verified stack is submitted' if y['push'] else 'no, the stack waits for you'}")
+    if y["push"]:
+        print("push: yes, the verified stack is submitted")
+    elif fc_tasks.submit_after_verify(proj):
+        print(push_line(y, "auto"))
+    else:
+        print("push: no, the stack waits for you")
     print(YOLO_NEVER)
     print(f"back: `compose {P} off --project {proj.name}` prints what happened")

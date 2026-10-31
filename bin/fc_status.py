@@ -198,6 +198,12 @@ def load_lines():
         out.append(f"shed: paused {len(shed['paused'])}: " + ", ".join(f"{e['kind']} {e['pid']} ({e['project']})" for e in sorted(shed["paused"], key=lambda e: e["at"])))
     return out
 
+def submit_line(proj):
+    """Whether a passed verify submits the stack without asking (verify.json submit_after_verify), on the project's status."""
+    if fc_tasks.submit_after_verify(proj):
+        return "  submit_after_verify on: a passed verify pushes the stack as draft PRs; --update and land still need your go"
+    return "  submit_after_verify off: the verified stack waits for your go (verify.json submit_after_verify: true turns it on)"
+
 def render_status(repo, projects):
     out = []
     for proj in projects:
@@ -233,6 +239,7 @@ def render_status(repo, projects):
             out.append(f"  {y['mode']} on{' (push)' if y.get('push') else ''} since {y['since']}" + (f", set by {by}" if (by := fc_tasks.yolo_by(y)) != "unknown" else ""))
         t = fc_cost.total(fc_cost.rows(proj))
         out.append(f"  cost  {t['input']}in  {t['cache_created']}cc  {t['cache_read']}cr  {t['output']}out  ({t['teammates']} teammates)")
+        out.append(submit_line(proj))
         out.append(f"  {'id':4} {'title':38} {'state':16} {'route':33} {'att':>3} {'esc':>3} {'fix':>3} {'time':>8} {'cost':>8}  {'model':14} note")
         for r in rows:
             note = r["note"]

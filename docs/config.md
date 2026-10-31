@@ -302,7 +302,7 @@ With it, compose posts one line to that [ntfy](https://ntfy.sh) topic when a gat
 
 - A billing halt (the line says to top up, then `compose resume`).
 - An agent blocked on a prompt only you can answer, such as a sign-in or an allow.
-- A verified stack waiting for your push approval, while away or yolo is on with push off.
+- A verified stack waiting for your push approval, while away or yolo is on with push off and the project's `submit_after_verify` is not on ([verify.md](verify.md#config)).
 - A teammate's `needs-user` or `blocked` report that asks for a sign-in, a payment, an approval or a push, while away or yolo is on.
 
 The message is the project slug as the title and a fixed one-line summary, so it holds no key, no code and no free text from a report.

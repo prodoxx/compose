@@ -44,6 +44,11 @@ Each check prints a `<id> checks  `<command>` after the task, up to <N>s` or `on
 When that base run is unknown, a failing test outside the task's reach is run on the base tree, and it is accepted only when it fails there too.
 A task whose base run is unknown there as well is rejected as a regression, with a line naming the test and the reason, and gets no further attempt.
 `land_method` (`squash`, `merge`, or `rebase`; default `squash`) is how `compose land` merges each PR.
+`submit_after_verify` (`true`; default off, and only the JSON value `true` turns it on) is the product owner's standing go to push a verified stack, kept for the project in `.compose/<project>/verify.json`.
+With it on, a full `verify` that passes runs `compose stack --submit` itself: a plain push of the layers and one draft PR each, with no `--update` and no `land`.
+Verify's own exit code is unchanged.
+If the submit stops, it is tried no more: a layer that needs `--update` (a force push with `--force-with-lease`) or a base ahead of its remote is reported to the team lead as `needs-user`, any other stop as `blocked`, and the force push stays the product owner's go.
+`compose status` shows the setting on the project's lines, and `compose away` and `compose yolo` show it beside `push:`.
 `review_base` is the branch the project's work is reviewed and stacked against: `init` records the branch the project started from.
 One that names no branch (a project made before init recorded it holds `main`, also in a repository whose trunk is `master`) reads as the repository's default branch.
 `fix_model` overrides the fix model, which defaults to the implementer.

@@ -321,14 +321,22 @@ def watch_events(before, after, started=False):
             ev.append(f"event reflect={path} broken={r['counts'][0]} unclear={r['counts'][1]} trigger={r['trigger']}")
     return ev
 
-def owner_lines(slug, before, after):
+VERIFIED_PUSH = {
+    "ask": "; the stack waits for your go to push it as draft PRs (`compose stack --submit`)",
+    "auto": "; submitting the stack now as draft PRs (submit_after_verify is on)",
+    "posture": "; the team lead submits the stack as draft PRs (push is on)",
+}
+
+def owner_lines(slug, before, after, push=None):
     """What the product owner must hear when the project's state changes, as ready-to-send one-liners (`event tell=...`): a verify
     that passed or failed and why, a run that ended, a fix loop starting after a failed verify, the team lead done. Only changes:
-    nothing here repeats, and nothing says "still working" or "waiting on you"."""
+    nothing here repeats, and nothing says "still working" or "waiting on you". `push` (fc_tasks.push_stance) puts who pushes
+    the verified stack in the passed line, so that line is the one ask for the push (a later report does not repeat it) and says
+    nothing to ask when the project submits by itself."""
     out, v, was = [], after.get("verify"), before.get("verify")
     if v and v != was:
         why = after.get("verify_why")
-        out.append("verify passed - the feature is In Review" if v[1] else f"verify failed{': ' + why if why else ''}")
+        out.append("verify passed - the feature is In Review" + VERIFIED_PUSH.get(push, "") if v[1] else f"verify failed{': ' + why if why else ''}")
     if before.get("run") and not after.get("run"):
         tasks = after["tasks"]
         bad = [t for t, x in tasks.items() if x["state"] in fc_status.FAILED_STATES]
@@ -434,6 +442,8 @@ def cmd_watch(a, rewake=False):
         lines = yolo_mark(proj, watch_filter(watch_events(empty, cur, started=True), proj.name, sources or lead_sources(proj, others), direct, others))
         if y := fc_tasks.yolo_state(proj):
             lines.insert(0, f"event {y['mode']}=on push={'yes' if y.get('push') else 'no'} since={y['since']!r} by={fc_tasks.yolo_by(y)!r} words={y.get('words', '')!r}")
+        if fc_tasks.submit_after_verify(proj):
+            lines.insert(0, "event submit_after_verify=on a passed verify submits the stack with a plain push (no --update, no land); do not ask for that push")
         if cur["run"]:
             lines.append(f"event run=live pid={(fc_tasks.run_marker(proj) or {}).get('pid')}  (a run is in progress: supervise it with watch, "
                          f"read results/run.log; do not start a second)")
@@ -470,7 +480,7 @@ def cmd_watch(a, rewake=False):
         power_seen, power_tick = watch_mem(proj, key).get("power_seen"), 0.0  # the last battery stop this watcher announced
         scope = lambda snap: watch_scope(proj, snap)
         def look(after, stalls):
-            lines = watch_events(before, after) + (owner_lines(proj.name, before, after) if not os.environ.get("COMPOSE_ROLE") else [])
+            lines = watch_events(before, after) + (owner_lines(proj.name, before, after, fc_tasks.push_stance(proj)) if not os.environ.get("COMPOSE_ROLE") else [])
             direct, others = scope(after)
             return yolo_mark(proj, watch_filter(lines + stalls, proj.name, sources or lead_sources(proj, others), direct, others))
         while True:
