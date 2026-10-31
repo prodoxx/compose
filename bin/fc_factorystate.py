@@ -4,7 +4,7 @@ import contextlib, copy, fcntl, json, time
 import fc_core, fc_config
 
 EMPTY = {"pid": None, "started": None, "stopped": None, "mode": "day", "day_tickets": None, "dispatched": {}, "prints": {}, "offer": None,
-         "declined_until": None, "planning": None, "out_of_order": [], "said": {}, "turns": 0, "backoff": {}, "manager_pane": None,
+         "declined_until": None, "planning": None, "out_of_order": [], "said": {}, "turns": 0, "backoff": {}, "lead_wait": {}, "manager_pane": None,
          "night": None, "prep": {}, "prep_checked": None, "prd": {}}
 
 def state_path(repo):

@@ -175,6 +175,11 @@ After a context compaction, the plugin's SessionStart hook (`compose reenter`) p
 Every teammate's tab carries its name in `COMPOSE_TEAMMATE` for that, since `COMPOSE_ROLE` is `crew` for all but the team lead and the planner.
 
 Restarting the team lead in its tab loses nothing, because its first turn end reports whatever happened while it was down.
+The team lead is also replaced on purpose: its durable state lives in files, and its own handoff (`scratch/<agent>/handoff.md`: open threads, holds, pending go's, live teammates) is the one file only it can write.
+At a story boundary the factory runs `compose crew restart --role orchestrator`: it closes the team lead's tab and starts a fresh team lead under the same name, so the engineering manager's watch and every live teammate's reports reach it unchanged, briefed to read the handoff, the project's state and the first brief.
+It never restarts a team lead that is mid-turn, and it leaves one in place while a run, a verify or a teammate is live, a question is unanswered, or its handoff was not rewritten since its last story ended.
+After a compaction, `compose reenter` points the team lead at its handoff as well as its brief.
+`compose crew restart --force` restarts one that has work in flight, from the handoff and the project's state; mid-turn it always refuses.
 A `run` or `verify` it started keeps going meanwhile.
 Those work in their own session, so a closed tab or a crashed session never ends them.
 The engineering manager, and a team lead outside herdr, still run `watch` in the background themselves.

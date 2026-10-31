@@ -1,12 +1,13 @@
 """The build loop's decision step: what is in flight, and which ready stories to start next."""
 import copy, hashlib, json, os, re, subprocess, sys, time, traceback
 from pathlib import Path
-import fc_change, fc_config, fc_core, fc_delivery, fc_linearapi, fc_herdr, fc_linear, fc_load, fc_plan, fc_prd, fc_readiness, fc_reconcile, fc_tasks
-import fc_factorystate
+import fc_change, fc_config, fc_core, fc_crew, fc_delivery, fc_linearapi, fc_herdr, fc_linear, fc_load, fc_plan, fc_prd, fc_readiness, fc_reconcile, fc_tasks
+import fc_factorystate, fc_lead
 
 JUDGE_LIMIT = 6
 MOVE_UP_JUDGES = 2  # judges a turn spends on out-of-order tickets, beyond pick's
 BACKOFF_TURNS = 3  # turns a story whose dispatch failed waits before it is tried again
+LEAD_WAIT = 600  # seconds a story waits for a team lead that is mid-turn to finish it, so a fresh lead can take the story; then the same lead gets it
 PLANNING_HOURS = 24  # a planning conversation older than this no longer holds offers back
 PRD_FIRST = ("event factory=prd-missing  (no PRD and no product delivery plan yet: plan the PRD with the product owner from compose prd seed "
              "(sections/0q.md), then the delivery plan from it; nothing is dispatched before they exist)")
@@ -96,8 +97,6 @@ def pick(entries, plan, state, free, judge):
     return out
 
 CLI_TIMEOUT = 1800  # crew start waits while the machine is loaded
-LEAD_READS = ("SKILL.md, sections/0h.md, sections/0a.md, sections/0e.md, sections/0f.md, sections/0g.md, sections/4.md, sections/5.md, "
-              "sections/6.md, sections/6a.md, sections/7.md, sections/8.md and ~/.claude/skills/herdr/SKILL.md")
 HOW = {"build": "Its tasks are cut: run them through the 3b gate.",
        "cut": "It has no tasks yet: start the planner for this story only (0j, story), then run its tasks through the 3b gate."}
 
@@ -109,7 +108,7 @@ def lead_prompt(story, feature, title, kind):
 def lead_brief(slug, wt, feature, prompt):
     """The first brief of a new team lead: who it is, what to read, then the prompt."""
     return (f"You are the team lead of project {slug} in {wt}, building feature {feature} for the compose factory.\n"
-            f"Read {LEAD_READS}, then continue from 0e.\n{prompt}\n")
+            f"Read {fc_lead.LEAD_READS}, then continue from 0e.\n{prompt}\n")
 
 def slug_for(title, taken):
     """A short kebab project name from a title: at most 4 words within 24 characters, numbered while taken."""
@@ -207,8 +206,26 @@ def _new_project(repo, plan, feature, title, story, pane=None):
     fc_core.atomic_write(Path(proj) / "linear.json", json.dumps({"feature": feature, "stories": [story]}, indent=2) + "\n")
     return slug, Path(wt), Path(proj)
 
+def lead_boundary(proj, state, now):
+    """How a story reaches the project's live team lead, as (how, why): "fresh" (replace the lead: a story boundary, nothing in flight, a handoff
+    that carries a new one), "wait" (it is mid-turn: the boundary comes when the turn ends, for at most LEAD_WAIT), or "keep" (prompt the same
+    lead, with why it was not replaced when a replacement was wanted). A project with another story in flight is no boundary: "keep", no why."""
+    slug, waits = Path(proj).name, state.setdefault("lead_wait", {})
+    if any(r.get("project") == slug for r in state["dispatched"].values()):
+        return "keep", ""
+    how, why = fc_lead.verdict(proj)
+    if how == "wait":
+        since = waits.setdefault(slug, now)
+        if now - since < LEAD_WAIT:
+            return "wait", why
+        return "keep", f"{why} for {int((now - since) // 60)} minutes"
+    waits.pop(slug, None)
+    return how, why
+
 def dispatch(repo, plan, entry, kind, state, now):
-    """Hand a ready story to its feature's team lead, making the project and starting the lead when missing. Returns the event line."""
+    """Hand a ready story to its feature's team lead, making the project and starting the lead when missing. A live lead at a story boundary
+    is replaced by a fresh one that reads its handoff; one mid-turn is waited for (None: nothing recorded, the story is picked again next
+    turn). Returns the event line."""
     feature, story = entry["feature"], entry["id"]
     title = (plan["features"].get(feature) or {}).get("title") or feature
     leads = leads_or_none(repo)
@@ -216,17 +233,27 @@ def dispatch(repo, plan, entry, kind, state, now):
         raise HerdrDown(f"{HERDR_DOWN}; the next turn tries again")
     slug, wt, proj = project_for(repo, feature) or _new_project(repo, plan, feature, title, story, state.get("manager_pane"))
     prompt = lead_prompt(story, feature, title, kind)
-    lead = leads.get(slug)
+    lead, how, why = leads.get(slug), "", ""
     if lead:
-        if not prompt_lead(lead, prompt):
+        how, why = lead_boundary(proj, state, now)
+        if how == "wait":
+            return None
+        if how == "fresh":
+            _add_story(proj, story)
+            compose_cli(["crew", "restart", "--repo", str(wt), "--project", slug, "--role", "orchestrator", "--brief", "-"], stdin=prompt, pane=state.get("manager_pane"))
+        elif not prompt_lead(lead, prompt):
             raise RuntimeError(f"could not prompt {lead}")
-        _add_story(proj, story)
+        else:
+            _add_story(proj, story)
     else:
         _add_story(proj, story)  # a new lead reads its scope at start
+        replacing = fc_crew.crew_record(proj, fc_lead.lead_name(proj))  # one that had a lead before is briefed from its files
         compose_cli(["crew", "start", "--repo", str(wt), "--project", slug, "--role", "orchestrator", "--title", "orchestrator", "--brief", "-"],
-                    stdin=lead_brief(slug, wt, feature, prompt), pane=state.get("manager_pane"))
+                    stdin=fc_lead.restart_brief(proj, prompt) if replacing else lead_brief(slug, wt, feature, prompt), pane=state.get("manager_pane"))
+    state.get("lead_wait", {}).pop(slug, None)
     state["dispatched"][story] = {"feature": feature, "project": slug, "kind": kind, "at": now}
-    return (f"event factory=dispatched story={story} project={slug} kind={kind}  "
+    note = " lead=fresh" if how == "fresh" else (f' lead=kept why="{why}"' if why else "")
+    return (f"event factory=dispatched story={story} project={slug} kind={kind}{note}  "
             f"(its team lead builds it; relay it: compose watch --project {slug} --from orchestrator)")
 
 DECISION_ID = re.compile(r"^([A-Z]+)(\d+):")
@@ -392,7 +419,7 @@ def _dispatch_all(repo, plan, picks, state, now, stopping, saved, out):
             return False
         story = e["id"]
         try:
-            out.append(dispatch(repo, plan, e, kind, state, now))
+            line = dispatch(repo, plan, e, kind, state, now)
         except HerdrDown:
             fc_factorystate.say_once(state, "herdr", fc_factorystate.turn_failed(HERDR_DOWN), out)
             return True
@@ -400,6 +427,9 @@ def _dispatch_all(repo, plan, picks, state, now, stopping, saved, out):
             state["backoff"][story] = {"why": str(ex), "until_turn": state["turns"] + BACKOFF_TURNS}
             fc_factorystate.say_once(state, "backoff:" + story, fc_factorystate.turn_failed(str(ex), story, f"it waits {BACKOFF_TURNS} turns; the rest go on"), out)
             continue
+        if line is None:  # its team lead is finishing a turn: the story is picked again next turn
+            continue
+        out.append(line)
         said.pop("herdr", None); said.pop("backoff:" + story, None); state["backoff"].pop(story, None)
         if saved:
             saved(story, state["dispatched"][story])

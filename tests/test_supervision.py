@@ -460,6 +460,12 @@ class Reenter(unittest.TestCase):
         out, _ = self.reenter({**self.env, "COMPOSE_ROLE": "orchestrator"})
         self.assertIn("hw-orchestrator.brief.md", out)
 
+    def test_only_the_team_lead_is_pointed_at_its_handoff(self):
+        lead, _ = self.reenter({**self.env, "COMPOSE_ROLE": "orchestrator"})
+        self.assertIn(str(self.proj / "scratch" / "hw-orchestrator" / "handoff.md"), lead)
+        mate, _ = self.reenter(self.env)
+        self.assertNotIn("handoff", mate)
+
     def test_a_crew_teammate_is_pointed_at_its_own_brief_not_its_roles(self):
         """Every unguarded teammate's tab carries COMPOSE_ROLE=crew: the brief is named for the teammate, `<slug>-<role>.brief.md`."""
         crew = self.proj / "results" / "crew"; crew.mkdir()

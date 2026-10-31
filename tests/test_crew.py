@@ -490,6 +490,42 @@ class Crew(unittest.TestCase):
                 fc.fc_crew.cmd_report(type("A", (), {"as_": who, "state": "working", "message": msg.split()}))
             self.assertEqual(any("parallel:" in str(c) for c in out.call_args_list[:-1]), warned, (who, msg))
 
+    def test_the_team_lead_is_told_where_its_handoff_lives_and_what_goes_in_it(self):
+        lead = fc.fc_crew.crew_preamble(self.proj, "shop-orchestrator", "orchestrator")
+        self.assertIn(str(self.proj / "scratch" / "shop-orchestrator" / "handoff.md"), lead)
+        self.assertIn("## Open threads", lead)
+        self.assertNotIn("handoff", fc.fc_crew.crew_preamble(self.proj, "shop-tests", "tests"))
+
+    def test_a_handoff_is_current_when_written_since_the_lead_started_or_its_story_before_ended(self):
+        name = "shop-orchestrator"
+        def at(state, when):
+            with open(fc.fc_crew.crew_dir(self.proj) / f"{name}.status", "a") as f:
+                f.write(json.dumps({"at": when, "state": state, "message": "x"}) + "\n")
+        def handoff(when):
+            path = fc.fc_crew.handoff_path(self.proj, name)
+            path.parent.mkdir(parents=True, exist_ok=True); path.write_text("## Open threads\nnone\n")
+            os.utime(path, (time.mktime(time.strptime(when, "%Y-%m-%d %H:%M:%S")),) * 2)
+        self.assertIn("no handoff", fc.fc_crew.handoff_gap(self.proj, name))
+        at("working", "2026-10-30 09:00:00"); at("done", "2026-10-30 10:00:00")
+        handoff("2026-10-30 08:59:00")
+        self.assertIn("before", fc.fc_crew.handoff_gap(self.proj, name))  # written before the lead even started
+        handoff("2026-10-30 09:30:00")
+        self.assertIsNone(fc.fc_crew.handoff_gap(self.proj, name))  # written during its first story
+        at("working", "2026-10-30 10:05:00"); at("done", "2026-10-30 11:00:00")
+        self.assertIn("before", fc.fc_crew.handoff_gap(self.proj, name))  # the second story never touched it: the first story's write is old news
+        handoff("2026-10-30 10:30:00")
+        self.assertIsNone(fc.fc_crew.handoff_gap(self.proj, name))
+        fc.fc_crew.handoff_path(self.proj, name).write_text("  \n")
+        self.assertIn("empty", fc.fc_crew.handoff_gap(self.proj, name))
+
+    def test_the_team_lead_is_warned_when_it_reports_done_without_a_fresh_handoff(self):
+        fc.fc_crew.write_report(self.proj, "shop-orchestrator", "working", "started")
+        for who, warned in (("shop-orchestrator", True), ("shop-tests", False)):
+            with mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), mock.patch.object(fc.fc_crew, "teardown"), \
+                    mock.patch.object(fc.fc_crew, "close_after_turn"), mock.patch("builtins.print") as out:
+                fc.fc_crew.cmd_report(type("A", (), {"as_": who, "state": "done", "message": "NEB-1 verified".split()}))
+            self.assertEqual(any("handoff" in str(c) for c in out.call_args_list), warned, who)
+
     def test_start_in_an_untrusted_worktree_says_so_before_opening_a_tab(self):
         calls = []
         a = type("A", (), {"action": "start", "role": "orchestrator", "title": None, "brief": "x"})

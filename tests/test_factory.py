@@ -151,6 +151,8 @@ class Dispatch(unittest.TestCase):
         self.cli = unittest.mock.Mock(side_effect=self.fake_cli); self.prompt = unittest.mock.Mock(return_value=True)
         for name, m in (("compose_cli", self.cli), ("prompt_lead", self.prompt)):
             pa = unittest.mock.patch.object(ft, name, m); pa.start(); self.addCleanup(pa.stop)
+        self.verdict = unittest.mock.Mock(return_value=("keep", ""))  # what fc_lead says of the live lead: its own tests cover how
+        pa = unittest.mock.patch.object(ft.fc_lead, "verdict", self.verdict); pa.start(); self.addCleanup(pa.stop)
 
     def make_project(self, slug, linear):
         self.proj = self.wt / ".compose" / slug; self.proj.mkdir(parents=True, exist_ok=True)
@@ -181,6 +183,64 @@ class Dispatch(unittest.TestCase):
         self.make_project("sign-in", {"feature": "NEB-9"})
         ft.dispatch(self.repo, self.plan, entry("NEB-12", "NEB-9"), "build", self.state, 100.0)
         self.assertEqual(json.loads((self.proj / "linear.json").read_text()), {"feature": "NEB-9"})
+
+    def test_a_live_lead_at_a_story_boundary_is_replaced_by_a_fresh_one_briefed_with_the_story(self):
+        self.make_project("sign-in", {"feature": "NEB-9", "stories": ["NEB-10"]}); self.leads["sign-in"] = "sign-in-orchestrator"
+        self.verdict.return_value = ("fresh", ""); self.state["manager_pane"] = "p9"; self.state["lead_wait"] = {"sign-in": 50.0}
+        line = ft.dispatch(self.repo, self.plan, entry("NEB-11", "NEB-9"), "build", self.state, 100.0)
+        self.prompt.assert_not_called()
+        (call,) = self.cli.call_args_list
+        self.assertEqual(call.args[0], ["crew", "restart", "--repo", str(self.wt), "--project", "sign-in", "--role", "orchestrator", "--brief", "-"])
+        self.assertEqual((call.kwargs["stdin"], call.kwargs["pane"]), (ft.lead_prompt("NEB-11", "NEB-9", "Sign in", "build"), "p9"))
+        self.assertEqual(json.loads((self.proj / "linear.json").read_text())["stories"], ["NEB-10", "NEB-11"])
+        self.assertEqual(self.state["dispatched"]["NEB-11"], {"feature": "NEB-9", "project": "sign-in", "kind": "build", "at": 100.0})
+        self.assertEqual(self.state["lead_wait"], {})
+        self.assertIn("lead=fresh", line)
+
+    def test_a_lead_mid_turn_is_waited_for_not_prompted_nor_restarted_and_nothing_is_recorded(self):
+        self.make_project("sign-in", {"feature": "NEB-9", "stories": ["NEB-10"]}); self.leads["sign-in"] = "sign-in-orchestrator"
+        self.verdict.return_value = ("wait", "sign-in-orchestrator is mid-turn")
+        self.assertIsNone(ft.dispatch(self.repo, self.plan, entry("NEB-11", "NEB-9"), "build", self.state, 100.0))
+        self.assertIsNone(ft.dispatch(self.repo, self.plan, entry("NEB-11", "NEB-9"), "build", self.state, 100.0 + ft.LEAD_WAIT - 1))
+        self.cli.assert_not_called(); self.prompt.assert_not_called()
+        self.assertEqual((self.state["dispatched"], self.state["lead_wait"]), ({}, {"sign-in": 100.0}))
+        self.assertEqual(json.loads((self.proj / "linear.json").read_text())["stories"], ["NEB-10"])
+
+    def test_a_lead_that_stays_mid_turn_past_the_wait_is_prompted_as_before_and_the_event_says_why(self):
+        self.make_project("sign-in", {"feature": "NEB-9", "stories": ["NEB-10"]}); self.leads["sign-in"] = "sign-in-orchestrator"
+        self.verdict.return_value = ("wait", "sign-in-orchestrator is mid-turn")
+        self.assertIsNone(ft.dispatch(self.repo, self.plan, entry("NEB-11", "NEB-9"), "build", self.state, 100.0))
+        line = ft.dispatch(self.repo, self.plan, entry("NEB-11", "NEB-9"), "build", self.state, 100.0 + ft.LEAD_WAIT)
+        self.prompt.assert_called_once()
+        self.cli.assert_not_called()
+        self.assertIn('lead=kept why="sign-in-orchestrator is mid-turn for 10 minutes"', line)
+        self.assertEqual(self.state["lead_wait"], {})
+
+    def test_a_lead_with_work_in_flight_is_kept_and_the_event_says_what_stood_in_the_way(self):
+        self.make_project("sign-in", {"feature": "NEB-9", "stories": ["NEB-10"]}); self.leads["sign-in"] = "sign-in-orchestrator"
+        self.verdict.return_value = ("keep", "teammates are live: sign-in-planner")
+        line = ft.dispatch(self.repo, self.plan, entry("NEB-11", "NEB-9"), "build", self.state, 100.0)
+        self.prompt.assert_called_once_with("sign-in-orchestrator", ft.lead_prompt("NEB-11", "NEB-9", "Sign in", "build"))
+        self.cli.assert_not_called()
+        self.assertIn('lead=kept why="teammates are live: sign-in-planner"', line)
+
+    def test_a_second_story_while_one_is_in_flight_goes_to_the_same_lead_without_asking(self):
+        self.make_project("sign-in", {"feature": "NEB-9", "stories": ["NEB-10"]}); self.leads["sign-in"] = "sign-in-orchestrator"
+        self.state["dispatched"]["NEB-10"] = {"feature": "NEB-9", "project": "sign-in", "kind": "build", "at": 50.0}
+        self.verdict.return_value = ("fresh", "")
+        line = ft.dispatch(self.repo, self.plan, entry("NEB-11", "NEB-9"), "build", self.state, 100.0)
+        self.verdict.assert_not_called(); self.cli.assert_not_called()
+        self.prompt.assert_called_once()
+        self.assertNotIn("lead=", line)
+
+    def test_a_lost_lead_that_left_a_record_is_replaced_by_one_briefed_from_the_files(self):
+        self.make_project("sign-in", {"feature": "NEB-9", "stories": ["NEB-10"]})
+        (self.proj / "results" / "crew").mkdir(parents=True)
+        (self.proj / "results" / "crew" / "sign-in-orchestrator.json").write_text(json.dumps({"name": "sign-in-orchestrator"}))
+        ft.dispatch(self.repo, self.plan, entry("NEB-11", "NEB-9"), "build", self.state, 100.0)
+        (call,) = self.cli.call_args_list
+        self.assertEqual(call.args[0][:2], ["crew", "start"])
+        self.assertEqual(call.kwargs["stdin"], ft.fc_lead.restart_brief(self.proj, ft.lead_prompt("NEB-11", "NEB-9", "Sign in", "build")))
 
     def test_a_lost_team_lead_is_started_again_without_a_second_init(self):
         self.make_project("sign-in", {"feature": "NEB-9", "stories": ["NEB-10"]})
@@ -620,6 +680,18 @@ class Turn(unittest.TestCase):
         self.assertNotIn("turn-crash", self.state["said"])
         with unittest.mock.patch("traceback.print_exc"), unittest.mock.patch.object(ft, "_turn", side_effect=TypeError("bad record")):
             self.assertEqual(ft.turn(self.repo, self.state, 400.0), [crash])
+
+    def test_a_story_whose_lead_is_finishing_its_turn_waits_with_no_line_record_or_backoff(self):
+        real, saved = self.dispatch.side_effect, unittest.mock.Mock()
+        self.leads["sign-in"] = "sign-in-orchestrator"
+        self.dispatch.side_effect = lambda repo, plan, e, kind, state, now: None if e["id"] == "NEB-10" else real(repo, plan, e, kind, state, now)
+        lines = ft.turn(self.repo, self.state, 100.0, saved=saved)
+        self.assertEqual(self.dispatched(), ["NEB-10", "NEB-11"])
+        self.assertEqual((lines[:1], list(self.state["dispatched"]), self.state["backoff"], [c.args[0] for c in saved.call_args_list]),
+                         (["event factory=dispatched story=NEB-11"], ["NEB-11"], {}, ["NEB-11"]))
+        self.dispatch.side_effect = real; self.dispatch.reset_mock()
+        ft.turn(self.repo, self.state, 200.0)  # the next turn picks it again
+        self.assertEqual(self.dispatched(), ["NEB-10"])
 
     def test_a_failing_dispatch_backs_off_and_the_rest_still_start(self):
         self.leads["sign-in"] = "sign-in-orchestrator"

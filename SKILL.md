@@ -126,7 +126,9 @@ Then:
 - Inside herdr, as the engineering manager: `compose crew list --project <slug>`.
   A live `<slug>-orchestrator` owns the project: resume the relay loop (0h), and any brainstorm left mid-way (0b) from the feature issue, nothing else.
   None, or its tab closed: start it again with `crew start --role orchestrator`, briefed to continue from 0r.
-- As the team lead: `crew list` too; live teammates and helpers keep their work, so watch them, never duplicate.
+- As the team lead: read your handoff first (`scratch/<slug>-orchestrator/handoff.md`; the brief names it), then `crew list`; live teammates and helpers keep their work, so watch them, never duplicate.
+  A fresh team lead replaced the one before it at a story boundary (0h): the handoff and the project's state are all there is of it, and where they disagree the state wins.
+  Keep the handoff current as threads, holds and pending go's change, and rewrite it right before you report `done`.
   A feature with no approved design and no `shaped <issue>` prompt yet: report its shaping `needs-user` again (0h).
 - `status` shows `CHANGE <id> open`: a change of course was under way.
   Questions unanswered and no live architect teammate: start one again with `compose architect --change <id>`, briefed to poll the same page.

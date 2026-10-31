@@ -576,6 +576,8 @@ def cmd_reenter(a):
     name = os.environ.get("COMPOSE_TEAMMATE") or crew_in_pane(proj, os.environ.get("HERDR_PANE_ID")) or fc_herdr.agent_name(project, role)
     print("Your context was just compacted; the session continues by re-entering through 0r, not from scratch.")
     print(f"Re-read your brief file {fc_crew.crew_dir(proj) / f'{name}.brief.md'} now.")
+    if role == "orchestrator":
+        print(f"Then read your handoff {fc_crew.handoff_path(proj, name)}: the open threads, holds, pending go's and live teammates you wrote down; keep it current.")
     print(f"Run `compose status --repo {os.environ.get('COMPOSE_REPO') or '.'} --project {project}` and "
           f"`compose watch --repo {os.environ.get('COMPOSE_REPO') or '.'} --project {project} --now` to see the board.")
     print("Re-read the feature's Decisions so far and Plan on Linear before acting.")

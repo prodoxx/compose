@@ -112,6 +112,7 @@ fc_sleep
 fc_stall
 fc_watch
 fc_yolo
+fc_lead
 fc_bench
 fc_factoryturn
 fc_nightstate
