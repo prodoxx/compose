@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import importlib.machinery, importlib.util, os, shutil, tempfile, time, unittest
+import importlib.machinery, importlib.util, os, shutil, subprocess, tempfile, time, unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -127,7 +127,8 @@ class AcceptanceJudge(unittest.TestCase):
             sent.append((crit[len("CRITERION: "):], code))
             return True, "x"
         with mock.patch.object(fc.fc_config, "ENV_FILE", proj / "none.env"), mock.patch.object(fc.fc_models, "jev_ask", return_value=reply) as ask, \
-                mock.patch.object(fc.fc_accept.fc_ledger, "counted", lambda repo, proj, meta, rows: rows), mock.patch.object(fc.fc_models, "confirm_call", side_effect=confirm_call):
+                mock.patch.object(fc.fc_accept.fc_ledger, "counted", lambda repo, proj, meta, rows: rows), mock.patch.object(fc.fc_models, "confirm_call", side_effect=confirm_call), \
+                mock.patch.object(fc.fc_core, "sh", return_value=subprocess.CompletedProcess([], 0, "", "")):  # keep_verdict asks git for the tip
             res = fc.fc_accept.jev_acceptance({}, proj, diff, repo=repo)
         states = {c.args[2]["task"]: c.args[2] for c in ask.call_args_list if c.args[4] == "Jev acceptance"}
         a, b, c = states["002"], states["003"], states["004"]
@@ -165,7 +166,8 @@ class AcceptanceJudge(unittest.TestCase):
             sent.append((crit[len("CRITERION: "):], code))
             return True, "x"
         with mock.patch.object(fc.fc_config, "ENV_FILE", proj / "none.env"), mock.patch.object(fc.fc_models, "jev_ask", return_value=reply), \
-                mock.patch.object(fc.fc_accept.fc_ledger, "counted", lambda repo, proj, meta, rows: rows), mock.patch.object(fc.fc_models, "confirm_call", side_effect=confirm_call):
+                mock.patch.object(fc.fc_accept.fc_ledger, "counted", lambda repo, proj, meta, rows: rows), mock.patch.object(fc.fc_models, "confirm_call", side_effect=confirm_call), \
+                mock.patch.object(fc.fc_core, "sh", return_value=subprocess.CompletedProcess([], 0, "", "")):  # keep_verdict asks git for the tip
             res = fc.fc_accept.jev_acceptance({}, proj, hunk("a.py", "x"), repo=repo)  # raises IsADirectoryError if a directory is read
         whole = "==== a.py ====\n" + "A" * 50000
         a = sorted((code for crit, code in sent if crit.startswith("a")), key=len)

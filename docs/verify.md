@@ -69,6 +69,9 @@ A start stops while a target differs from the record or an env file sets one the
    A claim whose reply is still unusable is shown as `unjudged` and dropped, and it does not fail the stage.
 3. **jev** asks one MET / NOT_MET / UNCLEAR question per acceptance criterion.
    Failures above the threshold become findings.
+   Each task's verdict is kept in `results/acceptance/<id>.json` with the commit it judged, keyed by the task's title, criteria, and the hunks of its files.
+   The next verify reuses it, and asks jev nothing for that task, while the key matches and `git diff` shows the task's `files` and `protected` unchanged since that commit; it prints `jev    acceptance N of M tasks unchanged since their last verify, not rejudged`.
+   A verdict that judged nothing (a judge error, an unusable reply) is never kept, and `--fresh` rejudges every task.
    Then jev judges whether each task's evidence proves each criterion ([Evidence](#evidence)); that never changes the verdict.
 4. **e2e** has jev drive a real browser to each case's goal.
    Then the case's `assert` checks the real DOM or log.
@@ -174,6 +177,8 @@ An `error` is a tool error or a jev that gave up: it is never a `pass`, and neve
 | `verify` | `scoped` and `acceptance` (one per criterion), then `sufficiency` | each task issue |
 | `compose done` | `done` | the task issue |
 
+`verify` writes a task's `scoped` and `acceptance` rows in one comment per task, and writes nothing for a task whose rows are all reused from an earlier verify: its rows are on the issue already.
+
 ### What counts for a task
 
 A row counts for a task when all of these hold:
@@ -207,6 +212,7 @@ Each answer is a `sufficiency` row on the task issue, citing the rows jev ties t
 `needs` lists what further verification would help, from `test`, `prove`, `check`, `e2e`, `review`, `acceptance`, `manual`, and `none`; anything else is read as `manual`.
 jev reads at most the 30 newest rows per task.
 It runs unless `--skip-review` is set or `jev_acceptance` is `false`.
+A task whose acceptance verdict was reused, and whose sufficiency was judged at that earlier verify, is not judged again; verify prints `jev    sufficiency N of M tasks judged on this same code at their last verify, not rejudged`.
 
 A `proven` answer is stored as `unproven` when it cites no row, when it cites only `error` rows, or when a counted `attempt`, `final`, `checks`, `scoped`, or `e2e` row failed; those failed rows are then added to `cites`.
 A missing or unknown answer is `unproven`.
