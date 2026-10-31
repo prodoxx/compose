@@ -2,7 +2,7 @@
 A run or verify live on this machine freezes the CLI, and so does a teammate mid-turn: updating then changes the code and the skill under
 them. Each project pins the version it started on (~/.compose/pins), and an update names, per project, the skill files that changed
 since the pin, so its team lead re-reads those and nothing else."""
-import atexit, json, os, shlex, sys, time
+import atexit, json, os, shlex, sys, threading, time
 from pathlib import Path
 import fc_core, fc_config, fc_tasks, fc_init, fc_links, fc_hooks, fc_herdr, fc_pin
 
@@ -10,14 +10,35 @@ import fc_core, fc_config, fc_tasks, fc_init, fc_links, fc_hooks, fc_herdr, fc_p
 def live_dir():
     return fc_config.CONFIG_PATH.parent / "live"
 
+_stages, _stages_lock = {}, threading.Lock()  # the verify stages working in this process, name -> when they started
+
 def hold(kind, project, repo):
     """Record that this process is running `kind` (run, verify, resume) on `project` until it exits, where every project of this
-    machine can see it: `compose update` refuses while one is live. A process that dies without exiting leaves a file whose pid is dead."""
+    machine can see it: `compose update` refuses while one is live, and `compose status` lists it with how long it has run. A process
+    that dies without exiting leaves a file whose pid is dead."""
     f = live_dir() / f"{os.getpid()}.json"
     f.parent.mkdir(parents=True, exist_ok=True)
     fc_core.atomic_write(f, json.dumps({"pid": os.getpid(), "kind": kind, "project": project, "repo": str(Path(repo).resolve()),
-                                        "since": time.strftime("%H:%M")}))
+                                        "since": time.strftime("%H:%M"), "started": time.time()}))
     atexit.register(f.unlink, missing_ok=True)
+    _stages.clear()
+    if hold_stage not in fc_herdr.STAGE_OBSERVERS:
+        fc_herdr.STAGE_OBSERVERS.append(hold_stage)
+
+def hold_stage(name, state):
+    """Keep in this process's hold file the verify stages that are working and since when (`stages`): a stage going `working` is added,
+    one going idle or blocked is dropped. A process that holds nothing records nothing."""
+    f = live_dir() / f"{os.getpid()}.json"
+    with _stages_lock:
+        if state == "working":
+            _stages.setdefault(name, time.time())
+        else:
+            _stages.pop(name, None)
+        try:
+            held = json.loads(f.read_text())
+        except (OSError, ValueError):
+            return
+        fc_core.atomic_write(f, json.dumps({**held, "stages": dict(_stages)}))
 
 def live_work():
     """The runs and verifies alive on this machine, each {pid, kind, project, repo, since}; the files of dead processes are removed."""

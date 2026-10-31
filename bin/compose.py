@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fc_cost, fc_mcp  # noqa: E402
-import fc_core, fc_proc, fc_readguard, fc_libapi, fc_green, fc_gate, fc_config, fc_tasks, fc_linear, fc_linear_cmd, fc_prd, fc_delivery, fc_factorystate, fc_factoryturn, fc_factory, fc_claude, fc_models, fc_route, fc_quick, fc_herdr, fc_worktree, fc_layers, fc_blockers, fc_stack, fc_change, fc_frame0, fc_f0pages, fc_ask, fc_decide, fc_hooks, fc_pin, fc_reports, fc_crew, fc_toolbug, fc_init, fc_clean, fc_figma, fc_briefs, fc_buildercheck, fc_reconcile, fc_format, fc_implement, fc_shrink, fc_jev, fc_accept, fc_fixround, fc_detach, fc_verify, fc_taskreview, fc_ship, fc_prove, fc_run, fc_status, fc_tiers, fc_tierpin, fc_budget, fc_spec, fc_watch, fc_history, fc_yolo, fc_bench, fc_setup, fc_update, fc_readiness  # noqa: E402
+import fc_core, fc_proc, fc_readguard, fc_libapi, fc_green, fc_gate, fc_config, fc_tasks, fc_linear, fc_linear_cmd, fc_prd, fc_delivery, fc_factorystate, fc_factoryturn, fc_factory, fc_claude, fc_models, fc_route, fc_quick, fc_herdr, fc_worktree, fc_layers, fc_blockers, fc_stack, fc_change, fc_frame0, fc_f0pages, fc_ask, fc_decide, fc_hooks, fc_pin, fc_reports, fc_manager, fc_crew, fc_toolbug, fc_init, fc_clean, fc_figma, fc_briefs, fc_buildercheck, fc_reconcile, fc_format, fc_implement, fc_shrink, fc_jev, fc_accept, fc_fixround, fc_detach, fc_verify, fc_taskreview, fc_ship, fc_prove, fc_run, fc_status, fc_tiers, fc_tierpin, fc_budget, fc_spec, fc_watch, fc_history, fc_yolo, fc_bench, fc_setup, fc_update, fc_readiness  # noqa: E402
 
 DETACHED = fc_detach.DETACHED
 
@@ -195,6 +195,7 @@ def main():
             s.add_argument("--at", help=argparse.SUPPRESS)
             s.add_argument("--nth", type=int, default=0, help=argparse.SUPPRESS)
             s.add_argument("--ticket", help=argparse.SUPPRESS)
+            s.add_argument("--takeover", action="store_true", help="start, watch: take the factory from the engineering manager session that holds it (it is told to stop)")
         if name == "cost":
             s.add_argument("--json", action="store_true", help="print the rows and their total as JSON")
         if name == "tier":

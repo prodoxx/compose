@@ -2,7 +2,7 @@
 import copy, fcntl, json, os, signal, subprocess, sys, time, traceback
 from pathlib import Path
 
-import fc_core, fc_config, fc_herdr, fc_change, fc_watch, fc_factorystate, fc_factoryturn, fc_night, fc_prd
+import fc_core, fc_config, fc_herdr, fc_change, fc_watch, fc_factorystate, fc_factoryturn, fc_night, fc_prd, fc_manager
 
 POLL = 2.0  # seconds between looks at the event log in one watch
 
@@ -96,13 +96,6 @@ def _saved(repo, story, record):
     with fc_factorystate.edit(repo) as disk:
         disk["dispatched"][story] = record
 
-def _pane(repo):
-    """Record the engineering manager's current herdr pane: the loop starts team leads from it, not from the pane that started the loop."""
-    pane = os.environ.get("HERDR_PANE_ID")
-    if pane and fc_factorystate.load_state(repo)["manager_pane"] != pane:
-        with fc_factorystate.edit(repo) as state:
-            state["manager_pane"] = pane
-
 def run_loop(repo, turns=None):
     """One turn after another until SIGTERM or a stop (after the turn it is in) or `turns` are done. Only the loop writes pid and started."""
     lock = open(lock_path(repo), "w")
@@ -190,9 +183,9 @@ def verb_start(a, repo):
     state = fc_factorystate.load_state(repo)
     if running(repo):
         sys.exit(f'factory: already running (pid {state["pid"]}); compose factory status shows it')
+    fc_manager.factory_claim(repo, getattr(a, "takeover", False))
     with fc_factorystate.edit(repo) as state:
         state["stopped"], state["pid"] = None, None  # the old pid would read as a lost loop until the new one takes the lock
-        state["manager_pane"] = os.environ.get("HERDR_PANE_ID") or state["manager_pane"]
     pid = spawn_loop(repo)
     for _ in range(START_WAIT * 10):  # the loop takes its lock a moment after it starts, longer on a loaded machine
         if running(repo):
@@ -247,7 +240,7 @@ def _seen_path(repo):
 
 def verb_watch(a, repo):
     path = _seen_path(repo)
-    _pane(repo)
+    fc_manager.factory_claim(repo, getattr(a, "takeover", False))  # the loop starts team leads from this pane; one manager session holds it
     try:
         mem = json.loads(path.read_text())
     except (OSError, ValueError):

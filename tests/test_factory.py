@@ -807,7 +807,7 @@ class Verbs(unittest.TestCase):
             self.assertEqual((st.load_state(repo)["pid"], st.load_state(repo)["stopped"]), (None, None))
             self.hold_lock(); return 4242  # the loop is up and holds its lock
         with mock.patch.object(fc.fc_factory.fc_herdr, "herdr_env", return_value=True), mock.patch.object(fc.fc_factory, "spawn_loop", spawn), \
-             mock.patch.dict(os.environ, {"HERDR_PANE_ID": "p9"}):
+             mock.patch.object(fc.fc_factory.fc_herdr, "herdr_manager_live", return_value=False), mock.patch.dict(os.environ, {"HERDR_PANE_ID": "p9"}):
             out = self.verb("start")
         self.assertEqual(out, "factory: started (pid 4242), day pace 2 tickets at once; compose factory watch wakes you on its events\n")
         s = st.load_state(self.repo)

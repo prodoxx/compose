@@ -125,6 +125,18 @@ A teammate whose starting session has ended is adopted by any engineering manage
 One engineering manager session drives a project (`results/manager.json`, the herdr pane that first ran `crew start`, `crew stop`, or a continuous `watch`).
 The same from another session while that pane still holds a live agent refuses, naming the pane; `watch --now` and `status --digest` stay read-only and `--takeover` moves the claim and the owner's teammates to the new session.
 An owner whose pane is gone is replaced silently, and outside herdr nothing is claimed.
+A session is one engineering manager, so `--takeover` from a live session moves everything that session ran in the repository: every other project it held and the factory's seat (`manager_pane` in `factory.json`) come with it.
+Splitting them would leave two half managers, each answering part of the same product owner's questions.
+Projects of other repositories are not visible from here and stay where they are.
+The old session is told at once: compose prompts its pane (`herdr agent prompt`) naming the new pane and what moved, and says to stop every `compose watch` and `compose factory watch` for it, start nothing there, and ask the product owner nothing more about it.
+A pane at a question dialog refuses a prompt, so the move is also written in `results/manager.json` (`from`): the old session's parked `watch`, or its next `watch --now`, ends with `event owner=taken project=<slug> pane=<new pane>`, which wakes it even under `--from`.
+The old session cannot claim the project back by accident: it is refused like any second session until it runs the same command with `--takeover`.
+`compose factory watch` and `factory start` follow the same rule: a second live session is refused unless it says `--takeover`, which prompts the old one.
+The manager's pane is labelled `manager: <slug>, ...` as soon as it claims a project (a `crew start`, a continuous `watch`, `init`), and a takeover moves the project names from the old pane's label to the new one.
+`compose status` leads with `engineering manager  herdr pane <id> (<state>, workspace <id>, '<title>', labelled '<label>') runs <projects>` per manager session, marks `<- this session` on the caller's own, and tells a session that runs nothing where the manager is and how to take over.
+Under each project it prints `manager  herdr pane <id> (this session|live|gone)`, or `none yet`.
+Every run, resume and verify alive on a project is listed as `in flight  verify since 10:02  12m / ~31m  now: e2e login (3m), review (5m)  fix round 2`: its time so far against the last comparable one that finished (`results/verify.json` for a verify, the history's last `run-end` for a run), the verify stages working now, and the fix round.
+It reads the hold file each such process keeps in `~/.compose/live/`, which records when it started and which stages are working, so it needs no state of its own.
 The watch spends few wake-ups: a task starting is not an event, a teammate's plain `working` report travels with the next wake (or alone after 5 minutes), a burst of non-urgent events is one wake after a 10 s settle, and the watch never times out.
 For the product owner it adds `event tell='<line>'` on a state change only: verify failed and why, fix loop started, run ended or crashed, verify passed, done.
 A teammate idle for a minute whose last report is `working` and whose pane ends on an API or network error raises `event stall=network` once, with the nudge to send when the network is back.

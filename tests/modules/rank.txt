@@ -56,6 +56,8 @@ fc_decide
 fc_hooks
 fc_pin
 fc_reports
+fc_factorystate
+fc_manager
 fc_crewpick
 fc_crew
 fc_shed
@@ -110,7 +112,6 @@ fc_sleep
 fc_stall
 fc_watch
 fc_yolo
-fc_factorystate
 fc_bench
 fc_factoryturn
 fc_nightstate

@@ -1,6 +1,6 @@
 import argparse, fcntl, json, os, re, sys, time
 from pathlib import Path
-import fc_core, fc_proc, fc_tasks, fc_herdr, fc_change, fc_reports, fc_crew, fc_hooks, fc_load, fc_status, fc_briefs, fc_sleep, fc_stall, fc_shed, fc_checks
+import fc_core, fc_proc, fc_tasks, fc_herdr, fc_change, fc_reports, fc_crew, fc_hooks, fc_load, fc_status, fc_briefs, fc_sleep, fc_stall, fc_shed, fc_checks, fc_manager
 
 
 YOLO_HINT = "  {m}=on (answer with the recommendation; log it: compose {m} decided ...)"
@@ -356,7 +356,7 @@ def is_info(e):
     m = re.match(r"event crew=\S+ state=working message=(.*)$", e)
     return bool(m) and "test ready" not in m.group(1).lower()
 
-URGENT = re.compile(r"event (?:stall=|halt=|sleep=(?:resumed|run-lost)|agent=\S+ status=blocked|crew=\S+ (?:state=(?:needs-user|blocked|contradiction|tool-bug|fallback)|report=refused) )|CRASHED")
+URGENT = re.compile(r"event (?:stall=|halt=|owner=taken |sleep=(?:resumed|run-lost)|agent=\S+ status=blocked|crew=\S+ (?:state=(?:needs-user|blocked|contradiction|tool-bug|fallback)|report=refused) )|CRASHED")
 
 ATTENTION = re.compile(r"event (?:crew=\S+ state=done |tell=|ready=|sleep=woke|load=|shed=|power=ac)|sign-in", re.I)
 
@@ -387,7 +387,7 @@ def watch_filter(events, slug, sources, direct=(), others=()):
     if others := [n for n in others if n not in sources]:
         events = [e for e in events if not any(f"crew={n} " in e or f"agent={n} " in e for n in others)]
     if sources:  # a tool-bug from any teammate wakes the engineering manager too: it owns fixing the tool; a stall is its to supervise
-        return [e for e in events if " state=tool-bug " in e or " state=fallback " in e or e.startswith(("event stall=", "event ready=", "event tell=", "event sleep=", "event power="))
+        return [e for e in events if " state=tool-bug " in e or " state=fallback " in e or e.startswith(("event stall=", "event owner=", "event ready=", "event tell=", "event sleep=", "event power="))
                 or any(f"crew={n} " in e or f"agent={n} " in e for n in (*sources, *direct))]
     me = fc_herdr.agent_name(slug, "orchestrator")
     return [e for e in events if f"crew={me} " not in e and not e.startswith(f"event stall=idle agent={me} ")]  # idle: it waits on this watch
@@ -447,16 +447,13 @@ def cmd_watch(a, rewake=False):
         if cur["run"]:
             lines.append(f"event run=live pid={(fc_tasks.run_marker(proj) or {}).get('pid')}  (a run is in progress: supervise it with watch, "
                          f"read results/run.log; do not start a second)")
-        rec = {} if os.environ.get("COMPOSE_ROLE") else fc_herdr.herdr_manager_record(proj)
-        if rec.get("session") and rec["session"] != fc_core.session_id() and fc_herdr.herdr_manager_live(rec["session"]):
-            lines.append(f"event owner=other pane={rec['session']} since={rec.get('since')!r}  (another engineering manager session drives this project: look "
-                         f"here, do not start teammates or a watch; --takeover on `crew start` or `watch` moves it to this session)")
+        lines += fc_manager.owner_lines(proj)
         for line in lines or ["event idle  nothing running"]:
             print(line)
         watch_save(proj, key, base=cur)  # the reconcile is the acknowledgement: the next watch reports only what changes after it
         return
     if not os.environ.get("COMPOSE_ROLE"):
-        fc_herdr.herdr_manager_claim(proj, getattr(a, "takeover", False))  # one engineering manager session per project
+        fc_manager.claim(proj, getattr(a, "takeover", False), getattr(a, "repo", None))  # one engineering manager session per project
     lock = watch_lock(proj, key)  # a second hook leaves it to the parked one; a second watch is refused, never parked behind it
     if not lock:
         if rewake:
@@ -494,7 +491,8 @@ def cmd_watch(a, rewake=False):
             if woke_was != woke:
                 woke = woke_was
                 watch_save(proj, key, woke=woke)
-            stalls = slept + watch_stalls(proj, after, limit, key=key, woke=woke, agent_limit=cfg.get("agent_stall_seconds")) + load_events(proj, key)  # lines handed out once: kept for the settle's second look
+            stalls = slept + watch_stalls(proj, after, limit, key=key, woke=woke, agent_limit=cfg.get("agent_stall_seconds")) + load_events(proj, key) \
+                + fc_manager.owner_lines(proj, watching=True)  # lines handed out once: kept for the settle's second look
             if now - power_tick >= POWER_EVERY:
                 power_tick = now
                 line, at = fc_checks.power_back(power_seen)

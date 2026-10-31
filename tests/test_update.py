@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import io, json, os, shutil, subprocess, sys, tempfile, unittest
+import io, json, os, shutil, subprocess, sys, tempfile, time, unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
@@ -141,6 +141,24 @@ class Freeze(Fixture):
                              capture_output=True, text=True, check=True).stdout
         [held] = json.loads(out); self.assertEqual((held["kind"], held["project"]), ("verify", "shop")); self.assertEqual(held["repo"], os.path.realpath("."))
         self.assertEqual(fc_update.live_work(), [])  # the process exited: its file is gone
+
+    def test_hold_records_when_it_started_and_the_verify_stages_working_now(self):
+        """`compose status` reads elapsed time and the stage names from the hold file; herdr_stage reports each stage change to it."""
+        script = ("import sys, json, pathlib, time; sys.path.insert(0, sys.argv[1]); import fc_update, fc_herdr; "
+                  "fc_update.live_dir = lambda: pathlib.Path(sys.argv[2]); fc_update.hold('verify', 'shop', '.'); "
+                  "fc_herdr.herdr_stage({}, 'checks', 'working'); fc_herdr.herdr_stage({}, 'e2e login', 'working'); fc_herdr.herdr_stage({}, 'checks', 'idle'); "
+                  "print(json.dumps(fc_update.live_work()))")
+        out = subprocess.run([sys.executable, "-c", script, str(Path(fc_update.__file__).parent), str(self.live)],
+                             capture_output=True, text=True, check=True).stdout
+        [held] = json.loads(out)
+        self.assertAlmostEqual(held["started"], time.time(), delta=60)
+        self.assertEqual(list(held["stages"]), ["e2e login"])
+        self.assertAlmostEqual(held["stages"]["e2e login"], time.time(), delta=60)
+
+    def test_a_stage_change_in_a_process_that_holds_nothing_writes_nothing(self):
+        with mock.patch.object(fc_update, "live_dir", return_value=self.live):
+            fc_update.hold_stage("checks", "working")
+        self.assertEqual(list(self.live.glob("*.json")), [])
 
 
 class Overlap(unittest.TestCase):

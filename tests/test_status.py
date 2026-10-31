@@ -194,6 +194,73 @@ class NoWatchFlag(unittest.TestCase):
         self.assertEqual((code, out, status.call_count), (2, "", 0))
         self.assertIn("unrecognized arguments: --watch", err)
 
+class InFlight(unittest.TestCase):
+    """`status` lists every run and verify alive on a project with how long it has gone against the last one that finished, and names its manager."""
+
+    def setUp(self):
+        self.repo = Path(tempfile.mkdtemp())
+        board_git(self, trunk="compose/p")
+        self.proj = self.repo / ".compose" / "p"
+        (self.proj / "results").mkdir(parents=True)
+        (self.proj / "verify.json").write_text(json.dumps({"task_prefix": "compose/p-"}))
+        (self.proj / "results" / "verify.json").write_text(json.dumps({"seconds": 1860, "passed": True}))
+        (self.proj / "results" / "tasks.json").write_text(json.dumps({"feature": {}, "tasks": [{"id": "001", "title": "a"}]}))
+        self.live = []
+        patch = mock.patch.object(fc.fc_update, "live_on", lambda proj, repo, kinds: [w for w in self.live if w["kind"] in kinds]); patch.start(); self.addCleanup(patch.stop)
+
+    def block(self):
+        return [l for l in fc.fc_status.render_status(self.repo, [self.proj]).split("\n") if l.startswith(("  in flight", "  manager"))]
+
+    def test_nothing_alive_and_no_herdr_adds_no_lines(self):
+        self.assertEqual(self.block(), [])
+
+    def test_a_verify_shows_its_elapsed_time_against_the_last_verify_its_stages_and_its_fix_round(self):
+        now = time.time()
+        self.live = [{"pid": 1, "kind": "verify", "project": "p", "since": "10:02", "started": now - 725, "stages": {"review": now - 300, "e2e login": now - 180}}]
+        (self.proj / "results" / "fixing.json").write_text(json.dumps({"pid": os.getpid(), "round": 2}))
+        self.assertEqual(self.block(), ["  in flight  verify since 10:02  12m / ~31m  now: review (5m), e2e login (3m)  fix round 2"])
+
+    def test_a_run_compares_with_the_last_finished_run_and_ignores_an_interrupted_one(self):
+        now = time.time()
+        self.live = [{"pid": 1, "kind": "run", "project": "p", "since": "09:00", "started": now - 45}]
+        ends = [{"kind": "run-end", "seconds": 5400, "outcome": "pass"}, {"kind": "run-end", "seconds": 20, "outcome": "interrupted"}]
+        with mock.patch.object(fc.fc_history, "read", return_value=ends):
+            self.assertEqual(self.block(), ["  in flight  run since 09:00  45s / ~1h30m"])
+
+    def test_a_hold_from_an_older_compose_has_no_start_time_and_still_lists(self):
+        self.live = [{"pid": 1, "kind": "verify", "project": "p", "since": "10:02"}]
+        self.assertEqual(self.block(), ["  in flight  verify since 10:02  last took ~31m"])
+
+    def test_a_first_verify_has_nothing_to_compare_with(self):
+        (self.proj / "results" / "verify.json").unlink()
+        self.live = [{"pid": 1, "kind": "verify", "project": "p", "since": "10:02", "started": time.time() - 90}]
+        self.assertEqual(self.block(), ["  in flight  verify since 10:02  1m"])
+
+    def test_a_fix_round_of_a_dead_verify_is_not_shown(self):
+        self.live = [{"pid": 1, "kind": "verify", "project": "p", "since": "10:02", "started": time.time() - 60}]
+        (self.proj / "results" / "fixing.json").write_text(json.dumps({"pid": 2 ** 22 + 12345, "round": 3}))
+        self.assertNotIn("fix round", self.block()[0])
+
+    def test_the_project_line_names_the_manager_pane_in_herdr(self):
+        (self.proj / "results" / "manager.json").write_text(json.dumps({"session": "w1:p1", "since": "x"}))
+        with mock.patch.object(fc.fc_herdr, "herdr_env", lambda: True), mock.patch.object(fc.fc_herdr, "herdr", lambda *a: {"agents": [{"pane_id": "w1:p1"}]}), \
+                mock.patch.dict(os.environ, {"HERDR_PANE_ID": "w1:p2"}):
+            self.assertEqual(self.block(), ["  manager  herdr pane w1:p1 (live)"])
+
+    def test_status_leads_with_where_the_manager_lives_before_the_load_lines(self):
+        projects = {"p": (self.repo, self.proj)}
+        out = io.StringIO()
+        state = {"held": True, "since": time.time(), "n": 1, "log": [], "avg": 13.0, "new": []}
+        with mock.patch.object(fc.fc_core, "all_projects", return_value=projects), mock.patch.object(fc_load, "update", return_value=state), \
+             mock.patch.object(fc.fc_manager, "seat_lines", return_value=["engineering manager  herdr pane w1:p1 runs p"]) as seat, redirect_stdout(out):
+            fc.fc_status.cmd_status(SimpleNamespace(repo=str(self.repo), project=None, digest=False, history=None, watch=False))
+        seat.assert_called_once_with(self.repo.resolve(), [self.proj])
+        lines = out.getvalue().splitlines()
+        self.assertEqual(lines[0], "engineering manager  herdr pane w1:p1 runs p")
+        self.assertTrue(lines[1].startswith("load:"), lines[:3])
+        self.assertTrue(lines[2].startswith("project p "), lines[:4])
+
+
 class StatusLoadLine(unittest.TestCase):
     def lines(self, held=False, since=None, log=(), avg=13.26):
         state = {"held": held, "since": since, "n": len(log), "log": list(log), "avg": avg, "new": []}

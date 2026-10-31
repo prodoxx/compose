@@ -111,6 +111,7 @@ The CLI also refreshes the `Ready` marks after every roll-up, `sync`, the end of
 
 ### 0r. Pick up where the last session stopped
 Everything is on disk, so a restart is a non-event.
+When the product owner asks what is going on or for an update, run `compose status --repo <wt>` and report its `in flight` lines (a run or verify alive, with its time against the last one and its stage) and who the engineering manager is, before anything else; a team lead waiting on a background verify looks idle in herdr.
 At session start on an existing project, first run `compose status --repo <wt> --project <slug>` and `compose watch ... --now` (prints current state as event lines and marks it seen; each watcher remembers what it last reported, so the next `watch` reports only changes after this and loses nothing from while no watch ran), then reconcile the Linear tree against them (0s).
 Then:
 - `run INTERRUPTED` or a task `interrupted`: the previous run was killed (Ctrl-C, reboot); a closed tab or crashed session no longer ends one.

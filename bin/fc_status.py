@@ -1,6 +1,6 @@
 import json, os, sys, time
 from pathlib import Path
-import fc_cost, fc_core, fc_load, fc_tasks, fc_worktree, fc_layers, fc_blockers, fc_budget, fc_change, fc_linear, fc_ledger, fc_tierpin, fc_tierspend, fc_update, fc_routecost, fc_shed, fc_history, fc_herdr
+import fc_cost, fc_core, fc_load, fc_tasks, fc_worktree, fc_layers, fc_blockers, fc_budget, fc_change, fc_linear, fc_ledger, fc_tierpin, fc_tierspend, fc_update, fc_routecost, fc_shed, fc_history, fc_herdr, fc_manager
 
 
 def project_head(repo, proj):
@@ -204,8 +204,45 @@ def submit_line(proj):
         return "  submit_after_verify on: a passed verify pushes the stack as draft PRs; --update and land still need your go"
     return "  submit_after_verify off: the verified stack waits for your go (verify.json submit_after_verify: true turns it on)"
 
+def short(seconds):
+    """A span as the status lines print it: 45s, 12m, 1h05m."""
+    s = int(seconds)
+    return f"{s}s" if s < 60 else f"{s // 60}m" if s < 3600 else f"{s // 3600}h{s % 3600 // 60:02d}m"
+
+def last_took(repo, proj, kind):
+    """How long the last comparable `kind` (verify, run, resume) of the project took, in seconds; 0 when none finished: verify.json for
+    a verify, else the newest finished run-end line of the history."""
+    if kind == "verify":
+        try:
+            return float(json.loads((proj / "results" / "verify.json").read_text()).get("seconds") or 0)
+        except (OSError, ValueError, AttributeError):
+            return 0
+    done = [e for e in fc_history.read(repo, proj.name, 0) if e["kind"] == "run-end" and e.get("outcome") != "interrupted" and e.get("seconds")]
+    return float(done[-1]["seconds"]) if done else 0
+
+def in_flight(repo, proj):
+    """One line per run, resume or verify alive on the project: since when, elapsed against the last comparable one (`verify 12m / ~31m`),
+    the verify stages working now with their own elapsed time, and the fix round. It reads the hold files (fc_update.hold), results/verify.json,
+    the history and results/fixing.json; a process that holds nothing is not listed."""
+    out = []
+    for w in fc_update.live_on(proj, repo, ("run", "resume", "verify")):
+        kind, started = w["kind"], w.get("started")
+        last = last_took(repo, proj, "verify" if kind == "verify" else "run")
+        text = f"  in flight  {kind} since {w.get('since', '?')}"
+        if started:
+            text += f"  {short(time.time() - started)}" + (f" / ~{short(last)}" if last else "")
+        elif last:
+            text += f"  last took ~{short(last)}"
+        if stages := w.get("stages"):
+            text += "  now: " + ", ".join(f"{n} ({short(time.time() - t)})" for n, t in sorted(stages.items(), key=lambda kv: kv[1]))
+        if kind == "verify" and fc_tasks.fixing(proj):
+            text += f"  fix round {json.loads((proj / 'results' / 'fixing.json').read_text()).get('round', '?')}"
+        out.append(text)
+    return out
+
 def render_status(repo, projects):
     out = []
+    agents = fc_manager.panes()[0] if fc_herdr.herdr_env() else None
     for proj in projects:
         b = board(repo, proj)
         trunk, rows, layers = b["trunk"], b["rows"], b["layers"]
@@ -232,6 +269,9 @@ def render_status(repo, projects):
         summary = ", ".join(f"{n} {k}" for k, n in sorted(counts.items(), key=lambda kv: -kv[1]))
         on = f" (after {fc_core.project_after(proj)})" if fc_core.project_after(proj) else ""
         out.append(f"project {proj.name}   trunk {trunk}{on}   {len(rows)} tasks: {summary}{rtxt}{vtxt}{b['stack']}{htxt}{fc_change.change_line(proj)}")
+        if line := fc_manager.project_line(proj, agents):
+            out.append(line)
+        out.extend(in_flight(repo, proj))
         ready = proj / "results" / "ready.json"
         if ready.exists():
             out.append("  " + fc_linear.ready_line(json.loads(ready.read_text())))
@@ -303,7 +343,7 @@ def cmd_status(a):
     if getattr(a, "history", None) is not None:  # past runs, from the history the worktrees do not hold
         print(fc_history.render(fc_history.read(repo, a.project, a.history)))
         return
-    projects = fc_core.all_projects(repo)
+    projects = everyone = fc_core.all_projects(repo)
     if a.project:
         projects = {a.project: projects[a.project]} if a.project in projects else {}
     if not projects:
@@ -312,7 +352,7 @@ def cmd_status(a):
         for wt, proj in projects.values():
             print(digest(wt, proj))
         return
-    for l in load_lines():
+    for l in [*fc_manager.seat_lines(repo, [proj for _, proj in everyone.values()]), *load_lines()]:  # who the manager is leads: a session that is not it learns where it lives here
         print(l)
     print("\n".join(render_status(wt, [proj]) for wt, proj in projects.values()), end="")
 

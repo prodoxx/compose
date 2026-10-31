@@ -1,6 +1,6 @@
 import ast, json, os, re, shlex, shutil, subprocess, sys, time
 from pathlib import Path
-import fc_mcp, fc_core, fc_crewpick, fc_load, fc_proc, fc_config, fc_tasks, fc_claude, fc_models, fc_herdr, fc_worktree, fc_change, fc_frame0, fc_ask, fc_hooks, fc_providers, fc_harness, fc_budget, fc_tierpin, fc_tiers, fc_checks, fc_notify, fc_started, fc_pin, fc_reports
+import fc_mcp, fc_core, fc_crewpick, fc_load, fc_proc, fc_config, fc_tasks, fc_claude, fc_models, fc_herdr, fc_worktree, fc_change, fc_frame0, fc_ask, fc_hooks, fc_providers, fc_harness, fc_budget, fc_tierpin, fc_tiers, fc_checks, fc_notify, fc_started, fc_pin, fc_reports, fc_manager
 
 
 # ---------- `crew`: teammates, the Claude sessions in the project's space, reporting upward ----------
@@ -168,7 +168,7 @@ def cmd_crew(a):
     if a.action == "start":
         fc_load.wait(fc_core.say, getattr(a, "force", False))
     if a.action in ("start", "stop"):
-        fc_herdr.herdr_manager_claim(proj, getattr(a, "takeover", False))
+        fc_manager.claim(proj, getattr(a, "takeover", False), getattr(a, "repo", None))
     name = fc_herdr.agent_name(slug, re.sub(r"[^a-z0-9_-]+", "-", a.role.lower()).strip("-"))
     rec = crew_dir(proj) / f"{name}.json"
     if a.action == "focus":
