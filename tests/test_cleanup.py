@@ -411,5 +411,73 @@ class RemoteBranches(unittest.TestCase):
         self.assertIn(["git", "push", "-q", "origin", "--delete", "compose/shop-layer-01"], calls)
 
 
+class LiveCrewClean(unittest.TestCase):
+    """With live crew a clean still removes the branches it proves merged, which is reversible housekeeping, and leaves everything the crew stands on."""
+    CREW = ["tm last reported working"]
+
+    def clean(self, proofs, crew=None, checked_out=(), **kw):
+        """Run clean_project over the task branches `proofs` ({branch: proof or None}); returns (git commands, output, settle_clean mock)."""
+        wt = Path(tempfile.mkdtemp()).resolve(); proj = wt / ".compose" / "shop"
+        (proj / "results").mkdir(parents=True); (proj / "verify.json").write_text("{}")
+        calls = []
+        def sh(cmd, cwd, **_):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        held = lambda repo, b: Path("/elsewhere/clone") if b in checked_out else None
+        buf = io.StringIO()
+        with mock.patch.object(fc.fc_core, "sh", sh), mock.patch.object(fc.fc_clean, "live_crew", return_value=self.CREW if crew is None else crew), \
+                mock.patch.object(fc.fc_clean.fc_layers, "layer_prefix", return_value="compose/shop-"), \
+                mock.patch.object(fc.fc_clean.fc_worktree, "own_branches", return_value=list(proofs)), \
+                mock.patch.object(fc.fc_clean.fc_worktree, "task_prefix", return_value="compose/shop-"), \
+                mock.patch.object(fc.fc_clean.fc_worktree, "checked_out", held), mock.patch.object(fc.fc_clean.fc_worktree, "release_slot") as release, \
+                mock.patch.object(fc.fc_clean.fc_worktree, "slots", return_value={"w1": "/slot"}), \
+                mock.patch.object(fc.fc_clean, "remove_project") as remove, mock.patch.object(fc.fc_clean, "first_unmatched", return_value=None), \
+                mock.patch.object(fc.fc_clean, "merge_evidence", lambda repo, b, targets, remote: proofs.get(b)), \
+                mock.patch.object(fc.fc_clean, "settle_clean") as settle, mock.patch("sys.stdout", buf):
+            fc.fc_clean.clean_project(wt, "shop", wt, proj, explicit=True, **kw)
+        self.released, self.removed = release, remove
+        return calls, buf.getvalue(), settle
+
+    DELETED = lambda self, calls: [c[-1] for c in calls if c[:3] == ["git", "branch", "-D"]]
+
+    def test_a_branch_proven_merged_goes_without_force_and_the_rest_stays(self):
+        calls, out, settle = self.clean({"compose/shop-01": "contained in origin/main", "compose/shop-02": None})
+        self.assertEqual(self.DELETED(calls), ["compose/shop-01"])
+        self.assertIn("compose/shop-01: contained in origin/main", out)
+        self.assertIn("compose/shop-02: kept unmerged", out)
+        self.assertIn("live crew", out)
+        self.assertIn("--project shop --force", out)
+        self.assertEqual(settle.call_args.args[9], False)  # remove: the project worktree stays
+
+    def test_what_the_crew_stands_on_is_not_touched(self):
+        calls, _, _ = self.clean({"compose/shop-01": "contained in origin/main"})
+        self.released.assert_not_called()  # slots
+        self.removed.assert_not_called()  # project worktree and branch
+        self.assertFalse([c for c in calls if c[:3] == ["git", "worktree", "remove"]])  # task clones and the stack worktree
+
+    def test_a_merged_branch_checked_out_in_a_clone_is_kept_while_its_crew_works(self):
+        calls, out, _ = self.clean({"compose/shop-01": "contained in origin/main"}, checked_out=("compose/shop-01",))
+        self.assertEqual(self.DELETED(calls), [])
+        self.assertIn("compose/shop-01", out)
+        self.assertIn("checked out in /elsewhere/clone", out)
+
+    def test_nothing_unmerged_is_deleted_under_live_crew_even_on_delete_unmerged(self):
+        calls, out, settle = self.clean({"compose/shop-01": "contained in origin/main"}, delete_unmerged=True)
+        self.assertEqual(self.DELETED(calls), [])
+        self.assertIn("kept, it has live crew", out)
+        settle.assert_not_called()
+
+    def test_force_on_the_named_project_still_cleans_everything_as_before(self):
+        calls, out, _ = self.clean({"compose/shop-01": "contained in origin/main"}, force=True)
+        self.assertEqual(self.DELETED(calls), ["compose/shop-01"])
+        self.released.assert_called()  # the slot goes back to the pool
+
+    def test_without_live_crew_a_clean_is_unchanged(self):
+        calls, out, _ = self.clean({"compose/shop-01": "contained in origin/main"}, crew=[])
+        self.assertEqual(self.DELETED(calls), ["compose/shop-01"])
+        self.assertNotIn("live crew", out)
+        self.released.assert_called()
+
+
 if __name__ == "__main__":
     unittest.main()

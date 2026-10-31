@@ -212,27 +212,34 @@ def clean_project(main_repo, name, wt, proj, delete_unmerged=False, explicit=Fal
     """The post-merge step. Fetch, then remove what the reviewer's merges made redundant: task clones and the CLI's stack
     worktree always; task branches merged into the project branch (locally or on the remote); and, once every layer and the
     project branch itself are merged, the project worktree and branch. Unmerged work is kept and named. Merged layer branches on a remote are only named, and
-    deleted (a push) when `delete_remote` is set."""
+    deleted (a push) when `delete_remote` is set.
+    With live crew (and no `--project <slug> --force`) only the branches proven merged go, which is reversible housekeeping: no
+    slot, task clone, stack worktree, or project worktree is touched, since the crew stands on them, and a proven branch some
+    clone still has checked out stays. Everything unproven stays and is named; `--delete-unmerged` is refused."""
     import shutil
     repo = wt
     crew = live_crew(proj)
-    if crew_holds_clean(crew, force, explicit):
+    crewed = crew_holds_clean(crew, force, explicit)
+    if crewed and delete_unmerged:
         print(f"clean  {name}: kept, it has live crew ({'; '.join(crew)}); --project {name} --force overrides")
         return
+    if crewed:
+        print(f"clean  {name}: live crew ({'; '.join(crew)}): removing only branches proven merged; --project {name} --force removes the rest")
     has_remote = bool(fc_core.sh(["git", "remote"], repo, check=False).stdout.strip())
     if has_remote:
         fc_core.sh(["git", "fetch", "-q", "--prune"], repo, check=False)
     trunk = fc_core.current_branch(repo)
-    for held in fc_worktree.slots(proj).values():  # test-writing teammates' slots and stack slots go back to the pool
-        fc_worktree.release_slot(repo, held)
-    fc_worktree.slots(proj, {r: None for r in fc_worktree.slots(proj)})
-    for w in list((proj / "worktrees").iterdir()) if (proj / "worktrees").exists() else []:  # iterdir: .stackroot is a dotfile
-        if fc_worktree.UNSAVED_CLONE in w.name:
-            print(f"clean  {name}: removing {w}, the clone a failed pause snapshot kept with unsaved edits")
-        fc_core.sh(["git", "worktree", "remove", "--force", str(w)], repo, check=False)
-        if w.exists():
-            shutil.rmtree(w, ignore_errors=True)
-    fc_core.sh(["git", "worktree", "prune"], repo, check=False)
+    if not crewed:
+        for held in fc_worktree.slots(proj).values():  # test-writing teammates' slots and stack slots go back to the pool
+            fc_worktree.release_slot(repo, held)
+        fc_worktree.slots(proj, {r: None for r in fc_worktree.slots(proj)})
+        for w in list((proj / "worktrees").iterdir()) if (proj / "worktrees").exists() else []:  # iterdir: .stackroot is a dotfile
+            if fc_worktree.UNSAVED_CLONE in w.name:
+                print(f"clean  {name}: removing {w}, the clone a failed pause snapshot kept with unsaved edits")
+            fc_core.sh(["git", "worktree", "remove", "--force", str(w)], repo, check=False)
+            if w.exists():
+                shutil.rmtree(w, ignore_errors=True)
+        fc_core.sh(["git", "worktree", "prune"], repo, check=False)
     targets = [trunk, f"origin/{trunk}", "main", "origin/main", "master", "origin/master"]
     review = fc_worktree.review_base(repo, fc_core.project_config(proj))
     targets = list(dict.fromkeys([*([review, f"origin/{review}"] if review else []), *targets]))
@@ -266,6 +273,10 @@ def clean_project(main_repo, name, wt, proj, delete_unmerged=False, explicit=Fal
         why = merge_evidence(repo, b, targets, has_remote)
         holders = [lb for lb, tasks in held.items() if b.removeprefix(fc_worktree.task_prefix(repo, proj)) in tasks]
         why, gone = branch_fate(why, holders, layer_why, delete_unmerged)
+        if gone and crewed and (clone := fc_worktree.checked_out(repo, b)):  # git would refuse, and the crew is working in it
+            kept.append(b)
+            print(f"clean  {b}: {why}, but checked out in {clone}: kept while its crew works")
+            continue
         if gone:
             print(f"clean  {b}: {why if why else 'UNMERGED, deleted on --delete-unmerged; any PR on GitHub is unaffected'}")
             fc_core.sh(["git", "branch", "-D", b], repo, check=False)
@@ -277,14 +288,16 @@ def clean_project(main_repo, name, wt, proj, delete_unmerged=False, explicit=Fal
             print(f"clean  {b}: kept unmerged" + (f", {fu}" if fu else ""))
     merged += [t for t in metas if t not in merged and any(t in ts for ts in held.values())
                and all(lb in layer_why for lb, ts in held.items() if t in ts)]
-    if (proj / "verify.json").exists() and "layer_prefix" in fc_core.project_config(proj) \
+    if (proj / "verify.json").exists() and "layer_prefix" in fc_core.project_config(proj) and not crewed \
             and not fc_core.sh(["git", "branch", "--list", f"{fc_core.project_config(proj)['layer_prefix']}layer-*"], repo, check=False).stdout.strip():
         fc_core.atomic_write(proj / "verify.json", json.dumps({k: v for k, v in fc_core.project_config(proj).items() if k != "layer_prefix"}, indent=2))  # merged and cleaned: a later stack names afresh
-    if (proj / "verify.json").exists() and "task_prefix" in fc_core.project_config(proj) and not fc_worktree.own_branches(repo, proj):
+    if (proj / "verify.json").exists() and "task_prefix" in fc_core.project_config(proj) and not crewed and not fc_worktree.own_branches(repo, proj):
         fc_core.atomic_write(proj / "verify.json", json.dumps({k: v for k, v in fc_core.project_config(proj).items() if k != "task_prefix"}, indent=2))  # merged and cleaned: a later stack names afresh
     line = f"clean  {name}: task branches " + (f"kept unmerged: {', '.join(kept)}" if kept else "all merged and removed")
     pbranch, project_merged, remove = fc_core.project_branch(proj), False, False
-    if wt != main_repo and not kept and trunk == pbranch:
+    if crewed:
+        line += "; slots, task clones, and the project worktree stay while the crew works"
+    if wt != main_repo and not kept and trunk == pbranch and not crewed:
         on = [fc_core.project_config(proj)["review_base"]] if fc_core.project_after(proj) else []  # merged into the project it was built on counts
         ptargets = [*on, "main", "origin/main", "master", "origin/master", fc_core.current_branch(main_repo)]
         why = merge_evidence(main_repo, pbranch, ptargets, has_remote)
