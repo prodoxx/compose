@@ -31,8 +31,21 @@ class Broken(unittest.TestCase):
 
     def test_a_test_that_fails_on_the_missing_behavior_is_not_broken(self):
         for output in ("E   AssertionError: assert 0 == 3\n", "NotImplementedError: not implemented\n", "FAIL: TestSum (0.00s)\n    a_test.go:9: got 0, want 3\n",
-                       "AssertionError: expected 'SyntaxError: bad' in the message\n", ""):
+                       "AssertionError: expected 'SyntaxError: bad' in the message\n", "", " Tests  2 failed | 1 passed (3)\n", "# tests 3\n# fail 1\n",
+                       "collected 4 items\n\ntest_a.py F...\n"):
             self.assertEqual(tr.broken(output), "")
+
+    def test_a_run_that_ran_no_test_is_broken_and_named_by_its_line(self):
+        """A red run that ran zero tests (the wrong path, a filter no case matches, a file that failed to resolve) proves nothing about the behavior."""
+        for output, line in ((" ❯ src/InvestigationPage.test.tsx (0 test)\n\n Test Files  1 failed (1)\n      Tests  no tests\n", "❯ src/InvestigationPage.test.tsx (0 test)"),
+                             ("No test files found, exiting with code 1\n", "No test files found, exiting with code 1"),
+                             ("No tests found, exiting with code 1\nRun with `--passWithNoTests`\n", "No tests found, exiting with code 1"),
+                             ("============ no tests ran in 0.01s ============\n", "============ no tests ran in 0.01s ============"),
+                             ("collected 0 items\n", "collected 0 items"),
+                             ("testing: warning: no tests to run\nPASS\n", "testing: warning: no tests to run"),
+                             ("# tests 0\n# pass 0\n", "# tests 0"),
+                             ("Error: No tests found\n", "Error: No tests found")):
+            self.assertEqual(tr.broken(output), line)
 
 
 class Gate(unittest.TestCase):
@@ -74,6 +87,20 @@ class Gate(unittest.TestCase):
         self.assertFalse(tr.gate(self.proj, meta, WRITER))  # still broken after its one send back: collected, with a warning
         self.assertEqual(len(self.sent), 1)
         self.assertIn("sent back once already", self.says.getvalue())
+
+    def test_a_test_that_runs_no_case_goes_back_to_its_writer(self):
+        self.reports = [{"state": "working", "message": "test ready: abc"}]
+        self.assertTrue(tr.gate(self.proj, self.meta("print('collected 0 items'); raise SystemExit(5)"), WRITER))
+        (_, _, name, text), = self.sent
+        self.assertEqual(name, WRITER)
+        self.assertIn("collected 0 items", text)
+
+    def test_a_run_of_no_case_that_exits_green_goes_back_too(self):
+        """go exits 0 on `no tests to run`: a green that proves nothing is as useless as a red that does."""
+        self.reports = [{"state": "working", "message": "test ready: abc"}]
+        self.assertTrue(tr.gate(self.proj, self.meta("print('testing: warning: no tests to run'); print('PASS')"), WRITER))
+        (_, _, _, text), = self.sent
+        self.assertIn("no tests to run", text)
 
     def test_a_test_that_fails_on_the_behavior_or_passes_is_collected(self):
         self.reports = [{"state": "working", "message": "test ready: abc"}]
