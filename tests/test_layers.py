@@ -166,6 +166,41 @@ class ReviewUnits(unittest.TestCase):
             units = fc.fc_layers.review_units(Path("."), Path("p"), "main", "trunk", ["p-001", "p-002"])
         self.assertEqual({u["name"]: u["commits"] for u in units}, {"001": ["t1", "t2", "c1"], "002": ["t3", "c2"]})
 
+    def test_a_held_task_leaves_out_only_the_test_commits_written_for_it_not_those_of_a_task_that_shares_its_test_file(self):
+        """064 is held and 338 is already green (no branch); both protect CaseFile.test.tsx, and the one test commit `t` was written by `writer`."""
+        def sh(cmd, *a, **k):
+            out = ""
+            if cmd[1] == "show":
+                out = "" if "--diff-filter=D" in cmd else "1\t0\tCaseFile.test.tsx\n" if cmd[-1] == "t" else "1\t0\tother.ts\n"
+            elif cmd[1] == "log" and "--reverse" in cmd:
+                out = "t 150\n"
+            elif cmd[1] == "log":
+                out = "other.ts"
+            elif cmd[1] == "rev-list":
+                out = "c\n"
+            return subprocess.CompletedProcess(cmd, 0, out, "")
+        def placed(protect, writer):
+            tasks = [{"id": t, "protected": ["CaseFile.test.tsx"] if t in protect else ["x.ts"]} for t in ("064", "334", "338")]
+            with mock.patch.object(fc.fc_core, "sh", sh), mock.patch.object(fc.fc_tasks, "load_tasks", return_value=tasks), \
+                 mock.patch.object(fc.fc_worktree, "task_prefix", return_value="p-"), \
+                 mock.patch.object(fc.fc_layers, "test_writers", return_value=[(writer, 100, 200)] if writer else []):
+                units = fc.fc_layers.review_units(Path("."), Path("p"), "main", "trunk", ["p-334"], held=["064"])
+            return {u["name"]: u["commits"] for u in units}
+        self.assertEqual(placed(("064", "338"), "338"), {"334": ["t", "c"]})  # written for 338, which is not held: it rides with the last task
+        self.assertEqual(placed(("064", "338"), "064"), {"334": ["c"]})  # written for the held 064: left out
+        self.assertEqual(placed(("064",), None), {"334": ["c"]})  # no writer and only the held task owns the file: left out
+        self.assertEqual(placed(("064", "338"), None), {"334": ["t", "c"]})  # no writer and an unheld task owns it too: placed
+
+
+class LinearizeThrough(unittest.TestCase):
+    def test_a_branch_held_back_below_a_submitted_one_is_not_in_the_chain_and_its_commits_are_not_carried(self):
+        def sh(cmd, *a, **k):  # every branch already sits on the one below it, so nothing is rebased
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        with mock.patch.object(fc.fc_layers, "chain_order", return_value=["p-001", "p-002"]), mock.patch.object(fc.fc_worktree, "task_prefix", return_value="p-"), \
+             mock.patch.object(fc.fc_worktree, "replaced_tips", return_value=[]), mock.patch.object(fc.fc_core, "sh", sh):
+            self.assertEqual(fc.fc_layers._linearize(Path("."), Path("p"), "trunk", Path("."), through=["p-002"]), ["p-002"])  # 001 is held back
+            self.assertEqual(fc.fc_layers._linearize(Path("."), Path("p"), "trunk", Path(".")), ["p-001", "p-002"])
+
 
 class AlreadyOnBase(unittest.TestCase):
     """A layer squash merged leaves its commits on the project branch under other hashes: only the ones whose change the base lacks are new."""
@@ -307,11 +342,21 @@ class FakedRegister(unittest.TestCase):
         self.assertEqual(why, "compose/p-003 conflicts when rebased onto compose/p-002 in 002.src; the layers below it are kept. Resolve by hand: "
                               "git checkout compose/p-003 && git rebase --onto compose/p-002 abc (the old base from the reflog), then re-run")
 
-    def test_a_failed_task_holds_it_and_the_ones_after_it_back_and_the_layers_below_go_on(self):
+    def tasks(self, **after):
+        (self.proj / "results" / "tasks.json").write_text(json.dumps({"feature": {}, "tasks": [{"id": t, "protected": [], "after": after.get(f"t{t}", "")} for t in ("001", "002", "003")]}))
+
+    def test_a_failed_task_holds_it_and_the_tasks_after_it_back_and_the_layers_below_go_on(self):
+        self.tasks(t003="002")
         self.result("001", "passed"); self.result("002", "failed"); self.result("003", "passed")
         self.register(submit=True)
         self.assertIn("stack  hold  002 is failed; 002, 003 not submitted", self.said)
         self.assertEqual(self.through, [["compose/p-001"]])
+
+    def test_a_task_that_does_not_depend_on_the_held_one_is_submitted_with_the_layers_below(self):
+        self.result("001", "passed"); self.result("002", "failed"); self.result("003", "passed")
+        self.register(submit=True)
+        self.assertIn("stack  hold  002 is failed; 002 not submitted", self.said)
+        self.assertEqual(self.through, [["compose/p-001", "compose/p-003"]])
 
     def test_a_pending_first_task_stops_with_nothing_pushed(self):
         self.assertEqual(self.register(submit=True), [])
@@ -321,12 +366,19 @@ class FakedRegister(unittest.TestCase):
 
     def test_held_tasks_start_at_the_first_task_not_passed_or_done_on_linear_whatever_its_id(self):
         held = lambda order, statuses, finished=(): fc.fc_stack.held_tasks(order, {**{t: "passed" for t in order}, **statuses}, set(finished))
-        self.assertEqual(held(["001", "002", "003"], {"002": "failed"}), ["002", "003"])
+        self.assertEqual(held(["001", "002", "003"], {"002": "failed"}), ["002"])
         self.assertEqual(held(["001", "002", "003"], {"002": "failed"}, ["002"]), [])  # done on Linear, whatever its result
-        self.assertEqual(held(["001", "002", "003"], {"001": "pending"}), ["001", "002", "003"])
+        self.assertEqual(held(["001", "002", "003"], {"001": "pending"}), ["001"])
         self.assertEqual(held(["001", "002"], {"001": "already_green", "002": "hand_done"}), [])
         order = fc.fc_worktree.layer_order([{"id": "001", "after": "003"}, {"id": "002"}, {"id": "003"}])  # 001 sits right above 003, below 002
         self.assertEqual((order, held(order, {"002": "failed"})), (["003", "001", "002"], ["002"]))
+
+    def test_a_task_is_held_when_it_is_not_passed_or_depends_on_a_held_task_and_a_later_task_that_does_not_is_not(self):
+        held = lambda statuses, after, finished=(): fc.fc_stack.held_tasks(["064", "065", "334", "335"], {**{t: "passed" for t in ("064", "065", "334", "335")}, **statuses}, set(finished), after)
+        self.assertEqual(held({"064": "pending", "065": "pending"}, {}), ["064", "065"])  # 334 and 335 do not wait on them
+        self.assertEqual(held({"064": "pending"}, {"334": {"064"}}), ["064", "334"])
+        self.assertEqual(held({"064": "pending"}, {"334": {"064"}, "335": {"334"}}), ["064", "334", "335"])  # through a held task
+        self.assertEqual(held({"064": "pending"}, {"334": {"064"}}, ["064"]), [])  # 064 is done on Linear, so it holds nothing
 
 
 if __name__ == "__main__":
