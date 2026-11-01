@@ -394,6 +394,19 @@ class Log(unittest.TestCase):
         self.assertFalse(fc.fc_compactlog.was_typed("w1:p2", "/compact keep it", "2999-01-01T00:00:00Z"))
         self.assertFalse(fc.fc_compactlog.was_typed("w1:p3", "/compact keep it", "2000-01-01T00:00:00Z"))
 
+    def test_a_record_holding_unicode_line_separators_stays_one_record(self):
+        text = "line one line two line three\u0085end é"
+        fc.fc_compactlog.typed("w1:p2", text)
+        self.assertTrue(fc.fc_compactlog.was_typed("w1:p2", text, "2000-01-01T00:00:00Z"))
+        self.assertEqual(len(fc.fc_compactlog.read()), 1)
+
+    def test_a_long_record_is_written_whole(self):
+        reason = "because " * 5000
+        fc.fc_compactlog.append("verdict", pane="w1:p2", reason=reason)
+        fc.fc_compactlog.append("turn", pane="w1:p2", tokens=1)
+        self.assertEqual([r["kind"] for r in fc.fc_compactlog.read()], ["verdict", "turn"])
+        self.assertEqual(fc.fc_compactlog.read()[0]["reason"], reason)
+
     def test_one_marker_per_pane_that_clears(self):
         fc.fc_compactlog.set_inflight("w1:p2", "handoff", 42, "judged")
         self.assertEqual(fc.fc_compactlog.inflight("w1:p2")["step"], "handoff")

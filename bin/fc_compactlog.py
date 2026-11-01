@@ -1,4 +1,4 @@
-import calendar, hashlib, json, re, time
+import calendar, hashlib, json, os, re, time
 import fc_config, fc_core
 
 # The on-disk side of judged compaction: an append-only measurement log, the prompts compose typed into a pane, one in-flight marker per
@@ -23,8 +23,12 @@ def append(kind, **fields):
     """Add one record to the log: its kind, the UTC time and the fields, the line scrubbed of known secrets. Returns the record."""
     rec = {"kind": kind, "at": time.strftime(TIME_FORMAT, time.gmtime()), **fields}
     state_dir().mkdir(parents=True, exist_ok=True)
-    with open(log_path(), "a") as f:
-        f.write(fc_core.scrub(json.dumps(rec, ensure_ascii=False)) + "\n")
+    line = (fc_core.scrub(json.dumps(rec, ensure_ascii=False)) + "\n").encode("utf-8")
+    fd = os.open(log_path(), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    try:
+        os.write(fd, line)  # one write on an O_APPEND descriptor: the compactor and the Stop hook append at once, and a long line must not interleave
+    finally:
+        os.close(fd)
     return rec
 
 def epoch(at):
@@ -37,11 +41,13 @@ def epoch(at):
 def read(since=None):
     """The log's records in order, or those at or after `since` (epoch seconds). A line that is not a record is skipped."""
     try:
-        lines = log_path().read_text().splitlines()
+        text = log_path().read_text(encoding="utf-8", errors="replace")
     except OSError:
         return []
     out = []
-    for line in lines:
+    for line in text.split("\n"):  # not splitlines(): U+2028, U+0085 and friends sit unescaped inside records
+        if not line:
+            continue
         try:
             rec = json.loads(line)
         except json.JSONDecodeError:
