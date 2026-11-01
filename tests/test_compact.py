@@ -407,6 +407,18 @@ class Log(unittest.TestCase):
         self.assertTrue(fc.fc_compactlog.was_typed("w1:p2", text, "2000-01-01T00:00:00Z"))
         self.assertEqual(len(fc.fc_compactlog.read()), 1)
 
+    def test_a_short_write_is_carried_on_until_the_line_is_whole(self):
+        real, pieces = os.write, []
+        def short(fd, data):  # the first write takes half the line, as a short write may
+            n = real(fd, bytes(data[:len(data) // 2] if not pieces else data))
+            pieces.append(n)
+            return n
+        with mock.patch.object(os, "write", side_effect=short):
+            fc.fc_compactlog.append("verdict", pane="w1:p2", reason="because " * 50)
+        fc.fc_compactlog.append("turn", pane="w1:p2", tokens=1)
+        self.assertEqual(len(pieces), 2)
+        self.assertEqual([r["kind"] for r in fc.fc_compactlog.read()], ["verdict", "turn"])
+
     def test_a_long_record_is_written_whole(self):
         reason = "because " * 5000
         fc.fc_compactlog.append("verdict", pane="w1:p2", reason=reason)
@@ -605,6 +617,7 @@ class Weekly(unittest.TestCase):
         (self.root / "proj").mkdir(parents=True)
         self.path = self.root / "proj" / "sess-abcdef12.jsonl"
         ROWS.clear()
+        self.addCleanup(ROWS.clear)  # the rows are module-level: none outlive this test
         usage = lambda n: {"input_tokens": n - 20, "cache_read_input_tokens": 20, "output_tokens": 1}
         rec("assistant", at="2026-11-01T09:00:00.000Z", message={"id": "m1", "usage": usage(100), "content": []})
         rec("system", at="2026-11-01T10:00:00.000Z", subtype="compact_boundary", compactMetadata={"trigger": "auto", "preTokens": 160000, "postTokens": 20000})
@@ -637,6 +650,24 @@ class Weekly(unittest.TestCase):
         timeout = [{**self.log[0], "outcome": "timeout"}]
         self.assertEqual(fc.fc_compactlog.week(self.root, 0, timeout)["compactions"], {"native": 2, "manual": 1})
 
+    def test_two_records_in_the_same_second_are_claimed_in_file_order(self):
+        twin = lambda trigger: {**self.log[0], "trigger": trigger}
+        self.assertEqual(fc.fc_compactlog.week(self.root, 0, [twin("ceiling"), twin("compose")])["compactions"], {"native": 2, "ceiling": 1})
+        self.assertEqual(fc.fc_compactlog.week(self.root, 0, [twin("compose"), twin("ceiling")])["compactions"], {"native": 2, "compose": 1})
+
+    def stops(self):
+        """The log of a week with runs that ended before compacting, one of them before the window and one that never started."""
+        ended = lambda kind, outcome, at="2026-11-02T10:00:00Z": {"kind": kind, "at": at, "pane": "w1:p2", "outcome": outcome}
+        return self.log + [ended("step", "gave-up"), ended("step", "gave-up"), ended("step", "not-settled"), ended("step", "refused"),
+                           ended("compaction", "disarmed-owner-typing"), ended("compaction", "timeout"), ended("step", "unknown-role"),
+                           ended("step", "not-quiet", at="2026-10-01T10:00:00Z"), {"kind": "step", "at": "2026-11-02T10:00:00Z", "step": "handoff"}]
+
+    def test_the_week_counts_runs_that_ended_before_compacting(self):
+        since = fc.fc_compactlog.epoch("2026-11-01T00:00:00Z")
+        self.assertEqual(fc.fc_compactlog.week(self.root, since, self.stops())["stopped"],
+                         {"gave-up": 2, "not-settled": 1, "refused": 1, "disarmed-owner-typing": 1, "timeout": 1})
+        self.assertEqual(fc.fc_compactlog.week(self.root, since, self.log)["stopped"], {})
+
     def test_the_window_drops_older_boundaries_and_days(self):
         since = fc.fc_compactlog.epoch("2026-11-02T00:00:00Z")
         w = fc.fc_compactlog.week(self.root, since, self.log)
@@ -661,6 +692,21 @@ class Weekly(unittest.TestCase):
         self.assertIn("  compose: 1, median before 90000", out)
         self.assertIn("  2026-11-01 sess-abc: 200 input tokens", out)
         self.assertIn("  where were we: 1/3 first prompts after a compaction", out)
+        self.assertIn("  ended before compacting: none", out)
+
+    def test_the_command_counts_runs_that_ended_before_compacting(self):
+        out = []
+        with mock.patch.object(fc.fc_compactlog, "transcripts", return_value=[self.path]), mock.patch.object(fc.fc_compactlog, "read", return_value=self.stops()), \
+                mock.patch("builtins.print", out.append):
+            fc.fc_compactlog.cmd_compactions(SimpleNamespace(repo=".", project=None, days=7, since="2026-11-01"))
+        self.assertEqual(out[-1], "  ended before compacting: 2 gave-up, 1 not-settled, 1 refused, 1 disarmed-owner-typing, 1 timeout")
+
+    def test_a_since_that_is_not_a_date_is_one_line_and_exit_2(self):
+        out = []
+        with mock.patch.object(fc.fc_compactlog, "read", return_value=self.log), mock.patch("builtins.print", lambda *a, **k: out.append(a[0])):
+            with self.assertRaises(SystemExit) as c:
+                fc.fc_compactlog.cmd_compactions(SimpleNamespace(repo=".", project=None, days=7, since="11/02/2026"))
+        self.assertEqual((c.exception.code, out), (2, ["compose compactions: --since takes a date as YYYY-MM-DD, not '11/02/2026'"]))
 
     def test_since_picks_the_window_by_date(self):
         out = []

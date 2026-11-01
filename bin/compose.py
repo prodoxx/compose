@@ -143,7 +143,7 @@ def main():
                             ("rewake", fc_rewake.cmd_rewake, "Claude Code Stop hook: judge each team lead or engineering manager turn for compaction and park the watches after it; the first event wakes the session"),
                             ("compactor", fc_compactor.cmd_compactor, "Internal: the detached process the Stop hook starts to compact a manager or lead session at an idle moment"),
                             ("reenter", fc_watch.cmd_reenter, "Claude Code SessionStart hook: after a compaction, point the teammate back at its brief, the board, and Linear"),
-                            ("compactions", fc_compactlog.cmd_compactions, "the week's compactions across every Claude Code session on this Mac by trigger, context before each, input per session per day, and the where-were-we share: --days <n> (default 7) or --since <YYYY-MM-DD>"),
+                            ("compactions", fc_compactlog.cmd_compactions, "the week's compactions across every Claude Code session on this Mac by trigger, context before each, input per session per day, the where-were-we share, and the runs that ended before compacting: --days <n> (default 7) or --since <YYYY-MM-DD>"),
                             ("skillcheck", fc_hooks.cmd_skillcheck, "Claude Code UserPromptSubmit and PostToolUse(Skill) hook: tell a compose session the skill changed since it read it"),
                             ("shrink", fc_shrink.cmd_shrink, "make a small JPEG copy of each image so an LLM reads it for fewer tokens; prints its pixels and bytes before and after"),
                             ("workspace", fc_config.cmd_workspace, f"show workspaces, or switch: `workspace personal` (config: {fc_config.CONFIG_PATH})")):

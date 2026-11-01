@@ -1,4 +1,4 @@
-import calendar, hashlib, json, os, re, statistics, time
+import calendar, hashlib, json, os, re, statistics, sys, time
 from pathlib import Path
 import fc_config, fc_core, fc_transcript
 
@@ -26,8 +26,10 @@ def append(kind, **fields):
     state_dir().mkdir(parents=True, exist_ok=True)
     line = (fc_core.scrub(json.dumps(rec, ensure_ascii=False)) + "\n").encode("utf-8")
     fd = os.open(log_path(), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
-    try:
-        os.write(fd, line)  # one write on an O_APPEND descriptor: the compactor and the Stop hook append at once, and a long line must not interleave
+    try:  # one write on an O_APPEND descriptor: the compactor and the Stop hook append at once, and a long line must not interleave
+        left = memoryview(line)
+        while left:  # a short write is carried on, never left as half a line
+            left = left[os.write(fd, left):]
     finally:
         os.close(fd)
     return rec
@@ -117,6 +119,8 @@ def save_pane_state(pane, state):
 WHERE_WERE_WE = ("focus", "where were we", "how are we", "status", "what next", "something is wrong")
 MATCH_WINDOW = 600  # seconds between a transcript boundary and the log record written just after it
 TRIGGER_ORDER = ("compose", "ceiling", "native", "manual")
+# how a compactor run ends short of a compaction, in the order `compose compactions` prints them
+STOPPED = ("gave-up", "not-settled", "not-quiet", "refused", "disarmed-owner-typing", "aborted-owner-typing", "timeout")
 
 def where_were_we(text):
     """Whether a prompt reads like asking where things stand: a phrase from the list in its first 200 characters, any case."""
@@ -143,7 +147,8 @@ def claim(done, path, when):
         rec, stamp = item["rec"], item["epoch"]
         if item["used"] or abs(stamp - when) > MATCH_WINDOW or rec.get("transcript") not in (None, str(path)):
             continue
-        rank = (rec.get("transcript") is None, abs(stamp - when))  # a record that names this transcript beats one that does not
+        # one that names this transcript beats one that does not, then the nearest, then the first in the file
+        rank = (rec.get("transcript") is None, abs(stamp - when), item["pos"])
         if best is None or rank < best[0]:
             best = (rank, item)
     if best is None:
@@ -156,9 +161,14 @@ def numeric(value):
 
 def week(root, since, log):
     """The window's compactions by trigger (a log record decides `compose` or `ceiling`; else the boundary's own `manual`, else `native`),
-    the median context before each trigger's, input tokens per (session, date), and (hits, total) of first prompts after a boundary that ask where things stand."""
-    done = [{"rec": r, "epoch": e, "used": False} for r in log
+    the median context before each trigger's, input tokens per (session, date), (hits, total) of first prompts after a boundary that ask where
+    things stand, and the window's runs that ended before compacting, by outcome."""
+    done = [{"rec": r, "epoch": e, "used": False, "pos": n} for n, r in enumerate(log)
             if r.get("kind") == "compaction" and r.get("outcome") == "done" and (e := epoch(r.get("at"))) is not None]
+    stopped = {}
+    for r in log:
+        if r.get("kind") in ("step", "compaction") and r.get("outcome") in STOPPED and (epoch(r.get("at")) or 0) >= since:
+            stopped[r["outcome"]] = stopped.get(r["outcome"], 0) + 1
     counts, pre, hits, total, input_by_day = {}, {}, 0, 0, {}
     first_day = time.strftime("%Y-%m-%d", time.gmtime(since))
     for path in transcripts(root):
@@ -180,12 +190,17 @@ def week(root, since, log):
             if date >= first_day:
                 input_by_day[(path.stem, date)] = tokens
     return {"compactions": counts, "median_pre": {t: int(statistics.median(v)) for t, v in pre.items()},
-            "input_per_session_day": input_by_day, "where_were_we": (hits, total)}
+            "input_per_session_day": input_by_day, "where_were_we": (hits, total), "stopped": stopped}
 
 def cmd_compactions(a):
-    """Print the window's compactions by trigger, input per session per day and the where-were-we share."""
+    """Print the window's compactions by trigger, input per session per day, the where-were-we share, and the runs that ended before compacting."""
     if a.since:
-        since, label = calendar.timegm(time.strptime(a.since, "%Y-%m-%d")), f"since {a.since}"
+        try:
+            since = calendar.timegm(time.strptime(a.since, "%Y-%m-%d"))
+        except ValueError:
+            print(f"compose compactions: --since takes a date as YYYY-MM-DD, not {a.since!r}", file=sys.stderr)
+            sys.exit(2)
+        label = f"since {a.since}"
     else:
         since, label = time.time() - a.days * 86400, f"in the last {a.days} days"
     w = week(Path.home() / ".claude" / "projects", since, read(since - MATCH_WINDOW))
@@ -197,3 +212,5 @@ def cmd_compactions(a):
         print(f"  {date} {session[:8]}: {tokens} input tokens")
     hits, total = w["where_were_we"]
     print(f"  where were we: {hits}/{total} first prompts after a compaction")
+    ended = ", ".join(f"{w['stopped'][o]} {o}" for o in STOPPED if o in w["stopped"])
+    print(f"  ended before compacting: {ended or 'none'}")
