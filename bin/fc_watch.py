@@ -1,6 +1,6 @@
 import argparse, fcntl, json, os, re, sys, time
 from pathlib import Path
-import fc_core, fc_proc, fc_tasks, fc_herdr, fc_change, fc_reports, fc_crew, fc_hooks, fc_load, fc_status, fc_briefs, fc_sleep, fc_stall, fc_shed, fc_checks, fc_manager
+import fc_core, fc_proc, fc_tasks, fc_herdr, fc_change, fc_reports, fc_crew, fc_hooks, fc_load, fc_status, fc_briefs, fc_sleep, fc_stall, fc_shed, fc_checks, fc_manager, fc_turnjudge
 
 
 YOLO_HINT = "  {m}=on (answer with the recommendation; log it: compose {m} decided ...)"
@@ -536,21 +536,31 @@ def cmd_watch(a, rewake=False):
                 sys.exit(2)
 
 def cmd_rewake(a):
-    """Claude Code Stop hook (the plugin's hooks.json, asyncRewake): when a team lead's turn ends, park a watch whose event
-    wakes the idle session. Its herdr tab carries the role, project, and worktree. Every other session returns at once,
-    a headless one (`claude -p`, which Claude Code marks CLAUDE_CODE_ENTRYPOINT=sdk-*) too. A wake names skill files changed since the last one."""
+    """Claude Code Stop hook (the plugin's hooks.json, asyncRewake): judge whether the settled turn of a team lead or an engineering
+    manager is a good moment to compact (see fc_turnjudge), then, for a team lead, park a watch whose event wakes the idle session.
+    Its herdr tab carries the role, project, and worktree. Every other session returns at once, a headless one (`claude -p`, which
+    Claude Code marks CLAUDE_CODE_ENTRYPOINT=sdk-*) too. A wake names skill files changed since the last one."""
     if os.environ.get("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk"):
         return
     try:
         ev = json.load(sys.stdin)
     except Exception:
         ev = {}
+    if not isinstance(ev, dict):
+        ev = {}
     fc_hooks.restore_pane_env(ev.get("cwd"))  # a team lead restored after a computer restart has lost the env its tab was created with
-    project = os.environ.get("COMPOSE_PROJECT")
-    if os.environ.get("COMPOSE_ROLE") != "orchestrator" or not project:
+    found = fc_turnjudge.session_role(ev)
+    if found is None:
         return
+    role, handoff, repo = found
+    try:
+        fc_turnjudge.judge_turn(role, handoff, repo, ev)
+    except Exception:
+        pass  # the hook never fails the session because of the judge
+    if role != "lead":
+        return  # the manager's watch is parked by a later change
     session = re.sub(r"[^\w-]", "", ev.get("session_id") or "")
-    cmd_watch(argparse.Namespace(repo=os.environ.get("COMPOSE_REPO") or ".", project=project, now=False, from_=None,
+    cmd_watch(argparse.Namespace(repo=repo, project=os.environ["COMPOSE_PROJECT"], now=False, from_=None,
                                  timeout=0, stall=None, interval=WATCH_INTERVAL, settle=WATCH_SETTLE, session=session), rewake=True)
 
 def crew_in_pane(proj, pane):

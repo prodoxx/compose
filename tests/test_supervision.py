@@ -378,20 +378,33 @@ class Rewake(unittest.TestCase):
     def setUp(self):
         self.proj = Path(tempfile.mkdtemp()) / "hw"
         (self.proj / "results").mkdir(parents=True)
-        self.env = {"COMPOSE_ROLE": "orchestrator", "COMPOSE_PROJECT": "hw", "COMPOSE_REPO": "/r", "CLAUDE_CODE_ENTRYPOINT": "cli"}
+        self.env = {"COMPOSE_ROLE": "orchestrator", "COMPOSE_PROJECT": "hw", "COMPOSE_REPO": "/r", "CLAUDE_CODE_ENTRYPOINT": "cli", "HERDR_PANE_ID": "s1-pane"}
+        self.state = Path(tempfile.mkdtemp()) / "config.json"  # the compaction log and markers live beside the config: keep them in a temp dir
+        for patch in (mock.patch.object(fc.fc_config, "CONFIG_PATH", self.state), mock.patch.object(fc.fc_config, "COMPACT", dict(fc.fc_config.COMPACT_DEFAULTS))):
+            patch.start()
+            self.addCleanup(patch.stop)
 
-    def rewake(self, snaps, env=None, session="s1"):
-        """The hook reads its JSON from stdin: feed it here, since the real stdin may be a pipe nobody writes to (then the hook waits forever)."""
+    def transcript(self, tokens):
+        """A transcript whose last main-thread assistant turn reports `tokens` of context, as the path the hook's JSON carries."""
+        path = self.state.parent / "session.jsonl"
+        path.write_text(json.dumps({"type": "assistant", "message": {"id": "m1", "usage": {"input_tokens": tokens, "output_tokens": 1}, "content": []}}) + "\n")
+        return str(path)
+
+    def rewake(self, snaps, env=None, session="s1", hook=None):
+        """The hook reads its JSON from stdin: feed it here, since the real stdin may be a pipe nobody writes to (then the hook waits forever).
+        Returns the exit code, stderr and the mocked compactor start; the project lookup is kept as self.project_dir."""
         err = io.StringIO()
-        with mock.patch.dict(os.environ, env or self.env), mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj) as pd, \
+        with mock.patch.dict(os.environ, env or self.env), mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj) as self.project_dir, \
                 mock.patch.object(fc.fc_watch, "watch_snapshot", side_effect=snaps), mock.patch.object(fc.fc_watch, "WATCH_INTERVAL", 0.01), mock.patch.object(fc.fc_watch, "WATCH_SETTLE", 0), \
-                mock.patch.object(sys, "stdin", io.StringIO(json.dumps({"session_id": session}))), contextlib.redirect_stderr(err):
+                mock.patch.object(fc.fc_compactor, "start") as start, mock.patch.object(fc.fc_core, "checkout", return_value=None), \
+                mock.patch.object(fc.fc_core, "all_projects", return_value={}), \
+                mock.patch.object(sys, "stdin", io.StringIO(json.dumps({"session_id": session, **(hook or {})}))), contextlib.redirect_stderr(err):
             try:
                 fc.fc_watch.cmd_rewake(SimpleNamespace())
                 code = 0
             except SystemExit as e:
                 code = e.code
-        return code, err.getvalue(), pd
+        return code, err.getvalue(), start
 
     def test_an_event_wakes_the_session(self):
         code, err, _ = self.rewake([wsnap("running"), wsnap("running"), wsnap("passed")])
@@ -399,9 +412,9 @@ class Rewake(unittest.TestCase):
         self.assertIn("event task=001 state=passed", err)
 
     def test_sessions_that_are_not_the_team_lead_return_at_once(self):
-        code, err, pd = self.rewake([], env={"COMPOSE_ROLE": "crew", "COMPOSE_PROJECT": "hw"})
+        code, err, _ = self.rewake([], env={"COMPOSE_ROLE": "crew", "COMPOSE_PROJECT": "hw"})
         self.assertEqual((code, err), (0, ""))
-        pd.assert_not_called()
+        self.project_dir.assert_not_called()
 
     def test_a_wake_carries_the_skill_change_notice(self):
         skill = Path(tempfile.mkdtemp()).resolve()
@@ -412,6 +425,86 @@ class Rewake(unittest.TestCase):
             code, err, _ = self.rewake([wsnap("running"), wsnap("passed")], session="lead")
         self.assertEqual(code, 2)
         self.assertIn(f"compose's skill changed since you read it: {skill / 'SKILL.md'}", err)
+
+    def test_a_lead_turn_is_judged_before_its_watch_is_parked(self):
+        with mock.patch.object(fc.fc_compact, "consider", return_value={"decision": "qualifies"}) as c:
+            code, err, start = self.rewake([wsnap("running"), wsnap("passed")], hook={"transcript_path": self.transcript(90000), "cwd": "/r"})
+        self.assertEqual(code, 2)
+        self.assertEqual(c.call_args.args[:2], ("s1-pane", "lead"))
+        self.assertEqual(start.call_args.args[3], "judged")
+        self.assertEqual([r["kind"] for r in fc.fc_compactlog.read()], ["turn"])
+        self.assertEqual(fc.fc_compactlog.read()[0]["tokens"], 90000)
+        self.assertIn("event task=001 state=passed", err)
+
+    def test_the_lead_compactor_gets_the_leads_handoff_and_repo(self):
+        with mock.patch.object(fc.fc_compact, "consider", return_value={"decision": "qualifies"}):
+            _, _, start = self.rewake([wsnap("running"), wsnap("passed")], hook={"transcript_path": self.transcript(90000), "cwd": "/r"})
+        pane, role, transcript, mode, handoff, repo = start.call_args.args
+        self.assertEqual((pane, role, mode, repo), ("s1-pane", "lead", "judged", "/r"))
+        self.assertEqual(handoff, self.proj / "scratch" / "hw-orchestrator" / "handoff.md")
+        self.assertEqual(str(transcript), self.transcript(90000))
+
+    def test_the_ceiling_starts_the_compactor_in_ceiling_mode(self):
+        with mock.patch.object(fc.fc_compact, "consider", return_value={"decision": "ceiling"}):
+            _, _, start = self.rewake([wsnap("running"), wsnap("passed")], hook={"transcript_path": self.transcript(150000), "cwd": "/r"})
+        self.assertEqual(start.call_args.args[3], "ceiling")
+
+    def test_a_verdict_that_does_not_qualify_starts_nothing(self):
+        for decision in ("off", "below-minimum", "cooldown", "error", "below-floor"):
+            with mock.patch.object(fc.fc_compact, "consider", return_value={"decision": decision}):
+                code, _, start = self.rewake([wsnap("running"), wsnap("passed")], hook={"transcript_path": self.transcript(90000), "cwd": "/r"})
+            self.assertEqual((code, start.call_count), (2, 0), decision)
+
+    def test_an_in_flight_compaction_skips_the_judge_but_still_parks(self):
+        fc.fc_compactlog.set_inflight("s1-pane", "handoff", 1, "judged")
+        with mock.patch.object(fc.fc_compact, "consider") as c:
+            code, _, start = self.rewake([wsnap("running"), wsnap("passed")], hook={"transcript_path": self.transcript(90000), "cwd": "/r"})
+        self.assertEqual((code, c.call_count, start.call_count), (2, 0, 0))
+        self.assertEqual([r["kind"] for r in fc.fc_compactlog.read()], ["turn", "verdict"])
+        self.assertEqual(fc.fc_compactlog.read()[-1]["decision"], "in-flight")
+
+    def test_a_manager_session_is_judged_from_its_held_projects(self):
+        env = {"HERDR_PANE_ID": "w1:p9", "CLAUDE_CODE_ENTRYPOINT": "cli"}
+        repo = self.proj.parent.parent
+        with mock.patch.object(fc.fc_manager, "is_manager", return_value=True), mock.patch.object(fc.fc_manager, "manager_projects", return_value=[self.proj]), \
+                mock.patch.object(fc.fc_manager, "holds_factory", return_value=False), mock.patch.object(fc.fc_compact, "consider", return_value={"decision": "qualifies"}) as c:
+            code, _, start = self.rewake([wsnap("running"), wsnap("passed")], env=env, hook={"transcript_path": self.transcript(90000), "cwd": str(repo)})
+        self.assertEqual(c.call_args.args[:2], ("w1:p9", "manager"))
+        self.assertIn(code, (0, 2))  # parking for the manager arrives with the next task
+        pane, role, _, mode, handoff, started_repo = start.call_args.args
+        self.assertEqual((pane, role, mode), ("w1:p9", "manager", "judged"))
+        self.assertEqual(handoff, fc.fc_manager.manager_handoff(repo.resolve(), "w1:p9"))
+        self.assertEqual(started_repo, str(repo.resolve()))
+
+    def test_a_judge_crash_never_fails_the_hook(self):
+        with mock.patch.object(fc.fc_compact, "consider", side_effect=RuntimeError("boom")):
+            code, _, _ = self.rewake([wsnap("running"), wsnap("passed")], hook={"transcript_path": self.transcript(90000), "cwd": "/r"})
+        self.assertEqual(code, 2)
+
+    def test_a_session_that_holds_nothing_keeps_native_behaviour(self):
+        env = {"HERDR_PANE_ID": "w1:p9", "CLAUDE_CODE_ENTRYPOINT": "cli"}
+        with mock.patch.object(fc.fc_manager, "is_manager", return_value=False), mock.patch.object(fc.fc_compact, "consider") as c:
+            code, _, _ = self.rewake([], env=env, hook={"transcript_path": self.transcript(90000), "cwd": "/r"})
+        self.assertEqual((code, c.call_count), (0, 0))
+
+    def test_a_manager_check_that_raises_means_not_a_manager(self):
+        env = {"HERDR_PANE_ID": "w1:p9", "CLAUDE_CODE_ENTRYPOINT": "cli"}
+        with mock.patch.object(fc.fc_manager, "is_manager", side_effect=ValueError("malformed crew record")), mock.patch.object(fc.fc_compact, "consider") as c:
+            code, _, _ = self.rewake([], env=env, hook={"transcript_path": self.transcript(90000), "cwd": "/r"})
+        self.assertEqual((code, c.call_count), (0, 0))
+
+    def test_a_turn_without_a_readable_transcript_is_not_judged(self):
+        with mock.patch.object(fc.fc_compact, "consider") as c:
+            for hook in ({"cwd": "/r"}, {"transcript_path": str(self.state.parent / "missing.jsonl"), "cwd": "/r"}):
+                code, _, start = self.rewake([wsnap("running"), wsnap("passed")], hook=hook)
+                self.assertEqual((code, start.call_count), (2, 0))
+        self.assertEqual((c.call_count, fc.fc_compactlog.read()), (0, []))
+
+    def test_a_lead_outside_herdr_is_not_judged(self):
+        env = {k: v for k, v in self.env.items() if k != "HERDR_PANE_ID"}
+        with mock.patch.object(fc.fc_compact, "consider") as c:
+            code, _, _ = self.rewake([wsnap("running"), wsnap("passed")], env=env, hook={"transcript_path": self.transcript(90000), "cwd": "/r"})
+        self.assertEqual((code, c.call_count), (2, 0))
 
     def test_a_second_hook_leaves_the_parked_one_alone(self):
         held = fc.fc_watch.watch_lock(self.proj, "orchestrator")
