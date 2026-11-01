@@ -656,23 +656,43 @@ class HerdrPromptSession(unittest.TestCase):
 class PromptRecord(unittest.TestCase):
     """Every `agent prompt` herdr() sends is logged as a typed prompt, so the compactor can tell it from the product owner's."""
 
-    def run_prompt(self, returncode):
+    def run_prompt(self, returncode, call=None):
+        """(what `call` returned, the log's records) with a fake herdr client that exits `returncode` and a scratch config home."""
         d = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, d, True)
+        call = call or (lambda: fc.fc_herdr.herdr("agent", "prompt", "w1:p2", "hello"))
         done = subprocess.CompletedProcess([], returncode, stdout='{"result": {}}', stderr="")
         with mock.patch.object(fc.fc_config, "CONFIG_PATH", d / "config.json"), \
              mock.patch.dict(os.environ, {"HERDR_ENV": "1", "HERDR_SOCKET_PATH": "/tmp/herdr.sock"}), \
              mock.patch.object(fc.fc_herdr.subprocess, "run", return_value=done):
-            fc.fc_herdr.herdr("agent", "prompt", "w1:p2", "hello")
-            return fc.fc_compactlog.read()
+            result = call()
+            return result, fc.fc_compactlog.read()
+
+    def wait_prompt(self):
+        return fc.fc_herdr.herdr_error("agent", "prompt", "w1:p2", "hello", "--wait")
 
     def test_every_agent_prompt_is_recorded(self):
-        records = self.run_prompt(0)
+        _, records = self.run_prompt(0)
         self.assertEqual([(r["kind"], r["pane"]) for r in records], [("typed", "w1:p2")])
         self.assertEqual(records[0]["text"], "hello")
 
     def test_a_failed_prompt_records_nothing(self):
-        self.assertEqual(self.run_prompt(1), [])
+        self.assertEqual(self.run_prompt(1)[1], [])
+
+    def test_a_prompt_sent_through_herdr_error_is_recorded_too(self):
+        result, records = self.run_prompt(0, self.wait_prompt)
+        self.assertEqual(result, ({}, None))
+        self.assertEqual([(r["kind"], r["pane"], r["text"]) for r in records], [("typed", "w1:p2", "hello")])
+
+    def test_a_failed_herdr_error_prompt_records_nothing(self):
+        result, records = self.run_prompt(1, self.wait_prompt)
+        self.assertEqual(result, (None, "error"))
+        self.assertEqual(records, [])
+
+    def test_a_log_write_failure_does_not_break_either_call(self):
+        with mock.patch.object(fc.fc_compactlog, "typed", mock.Mock(side_effect=OSError("disk"))):
+            self.assertEqual(self.run_prompt(0, self.wait_prompt)[0], ({}, None))
+            self.assertEqual(self.run_prompt(0)[0], {})
 
 if __name__ == "__main__":
     unittest.main()

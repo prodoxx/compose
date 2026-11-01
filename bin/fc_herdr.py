@@ -55,10 +55,18 @@ def herdr(*args, check=False, timeout=120):
         if check:
             raise RuntimeError(f"herdr {' '.join(map(str, args[:2]))}: {(out.get('error') or {}).get('code') or p.stderr.strip()[-200:]}")
         return None
+    _record_prompt(args)
+    return out.get("result", out)
+
+def _record_prompt(args):
+    """Log a delivered `agent prompt` as typed by compose: the transcript will hold it, and the compactor must not take it for the
+    product owner's. The log is measurement only, so a failed write never turns a delivered prompt into an exception."""
     if tuple(map(str, args[:2])) == ("agent", "prompt") and len(args) > 3:
         import fc_compactlog  # imported here, not at the top: no import cycle, and this module's place in the load order stays
-        fc_compactlog.typed(str(args[2]), str(args[3]))  # the transcript will hold this prompt; the compactor must not take it for the product owner's
-    return out.get("result", out)
+        try:
+            fc_compactlog.typed(str(args[2]), str(args[3]))
+        except OSError:
+            pass
 
 def herdr_error(*args, timeout=120):
     """Like herdr() but returns the error code string on failure ("timeout", "agent_blocked", ...) instead of None.
@@ -70,6 +78,7 @@ def herdr_error(*args, timeout=120):
         out = {}
     if p.returncode or "error" in out:
         return None, ((out.get("error") or {}).get("code") or p.stderr.strip()[-200:] or "error")
+    _record_prompt(args)
     return out.get("result", out), None
 
 def herdr_text(*args, timeout=30):
