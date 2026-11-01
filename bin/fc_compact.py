@@ -182,6 +182,18 @@ def consider(pane, role, transcript, now=None):
     except (Exception, SystemExit):
         bad_config = True  # the gates still run on whatever COMPACT holds; the verdict comes where the key is fetched
 
+    tokens, state = None, {}
+
+    def fail(kind, asked):
+        if asked:
+            state.update(last_asked_at=now, last_asked_tokens=tokens)
+        state["failures"], state["retry_after"] = backoff(state.get("failures", 0), now)
+        try:
+            fc_compactlog.save_pane_state(pane, state)
+        except Exception:
+            pass
+        return done("error", kind)
+
     if fc_config.compact_off():
         return done("off")
     try:
@@ -202,17 +214,13 @@ def consider(pane, role, transcript, now=None):
         if reason := cooldown_reason(state, tokens, exchanges, now):
             return done("cooldown", reason)
     except Exception:
+        if bad_config:  # apply_config sets COMPACT before it rejects a value, so a gate can trip on it
+            try:
+                state = fc_compactlog.pane_state(pane)
+            except Exception:
+                state = {}
+            return fail("configuration", False)
         return done("error", "response")
-
-    def fail(kind, asked):
-        if asked:
-            state.update(last_asked_at=now, last_asked_tokens=tokens)
-        state["failures"], state["retry_after"] = backoff(state.get("failures", 0), now)
-        try:
-            fc_compactlog.save_pane_state(pane, state)
-        except Exception:
-            pass
-        return done("error", kind)
 
     if bad_config:
         return fail("configuration", False)

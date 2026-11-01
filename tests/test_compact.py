@@ -424,10 +424,6 @@ class Log(unittest.TestCase):
         self.assertEqual(fc.fc_compactlog.pane_state("w1:p2"), {"failures": 2})
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 def write():
     path = Path(tempfile.mkdtemp()) / "s.jsonl"
     path.write_text("".join(json.dumps(r) + "\n" for r in ROWS))
@@ -539,6 +535,13 @@ class Consider(unittest.TestCase):
             v, j = self.consider(90000, now=2000.0)
         self.assertEqual((v["decision"], v["reason"], j.call_count), ("error", "configuration", 0))
 
+    def test_a_broken_compact_section_is_a_configuration_error_not_a_crash(self):
+        broken = mock.Mock(side_effect=SystemExit(2))
+        with mock.patch.object(fc.fc_config, "apply_config", broken), mock.patch.object(fc.fc_config, "COMPACT", {**fc.fc_config.COMPACT_DEFAULTS, "budget": 0}):
+            v, j = self.consider(90000)
+        self.assertEqual((v["decision"], v["reason"], j.call_count), ("error", "configuration", 0))
+        self.assertEqual(fc.fc_compactlog.pane_state("w1:p2")["failures"], 1)
+
     def test_the_config_is_applied_before_any_gate(self):
         applied = mock.Mock()
         with mock.patch.object(fc.fc_config, "apply_config", applied):
@@ -556,3 +559,7 @@ class Consider(unittest.TestCase):
         self.assertEqual(v["decision"], "qualifies")
         self.assertIn("deploy with key", seen[0])
         self.assertNotIn(secret, seen[0])
+
+
+if __name__ == "__main__":
+    unittest.main()
