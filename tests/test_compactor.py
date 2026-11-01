@@ -43,14 +43,23 @@ class Gate(unittest.TestCase):
         self.assertEqual(fc.fc_compactor.input_line(["❯ the earlier prompt", "  reply", "❯", "  status"]), "")
         self.assertEqual(fc.fc_compactor.input_line(["❯", "  reply", "> typing", "  status"]), "typing")
 
+    def test_pane_status_reads_the_agent_record_herdr_answers_with(self):
+        record = {"agent": {"agent_status": "done", "pane_id": "w1:p2", "name": "lead"}, "type": "agent_info"}
+        with mock.patch.object(fc.fc_herdr, "herdr", lambda *a, **k: record):
+            self.assertEqual(fc.fc_compactor.pane_status("w1:p2"), "done")
+        with mock.patch.object(fc.fc_herdr, "herdr", lambda *a, **k: {"agent_status": "done"}):
+            self.assertIsNone(fc.fc_compactor.pane_status("w1:p2"))  # the status is never at the top level
+        with mock.patch.object(fc.fc_herdr, "herdr", lambda *a, **k: None):
+            self.assertIsNone(fc.fc_compactor.pane_status("w1:p2"))
+
     def test_text_waiting_in_the_input_line_is_not_quiet(self):
-        with mock.patch.object(fc.fc_herdr, "herdr", lambda *a, **k: {"agent_status": "idle"}), \
+        with mock.patch.object(fc.fc_herdr, "herdr", lambda *a, **k: {"agent": {"agent_status": "idle"}}), \
                 mock.patch.object(fc.fc_herdr, "herdr_text", lambda *a, **k: "\n".join(TYPING_BUFFER)):
             self.assertFalse(fc.fc_compactor.pane_quiet("w1:p2"))
-        with mock.patch.object(fc.fc_herdr, "herdr", lambda *a, **k: {"agent_status": "idle"}), \
+        with mock.patch.object(fc.fc_herdr, "herdr", lambda *a, **k: {"agent": {"agent_status": "idle"}}), \
                 mock.patch.object(fc.fc_herdr, "herdr_text", lambda *a, **k: "\n".join(IDLE_BUFFER)):
             self.assertTrue(fc.fc_compactor.pane_quiet("w1:p2"))
-        with mock.patch.object(fc.fc_herdr, "herdr", lambda *a, **k: {"agent_status": "working"}), \
+        with mock.patch.object(fc.fc_herdr, "herdr", lambda *a, **k: {"agent": {"agent_status": "working"}}), \
                 mock.patch.object(fc.fc_herdr, "herdr_text", lambda *a, **k: "\n".join(IDLE_BUFFER)):
             self.assertFalse(fc.fc_compactor.pane_quiet("w1:p2"))
         with mock.patch.object(fc.fc_herdr, "herdr", lambda *a, **k: None), mock.patch.object(fc.fc_herdr, "herdr_text", lambda *a, **k: ""):
@@ -93,7 +102,7 @@ class Typist(unittest.TestCase):
     def herdr(self, *args, **k):
         if args[:2] != ("agent", "get"):
             return None
-        return {"agent_status": self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]}
+        return {"agent": {"agent_status": self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]}, "type": "agent_info"}
 
     def append_row(self, row):
         with open(self.transcript, "a") as f:

@@ -36,8 +36,10 @@ def input_line(lines):
     return None
 
 def pane_status(pane):
+    """The agent's herdr status, read from the `agent` record `herdr agent get` answers with; None when there is none."""
     got = fc_herdr.herdr("agent", "get", pane)
-    status = got.get("agent_status") if isinstance(got, dict) else None
+    agent = got.get("agent") if isinstance(got, dict) else None
+    status = agent.get("agent_status") if isinstance(agent, dict) else None
     return status if isinstance(status, str) else None
 
 def pane_quiet(pane):
