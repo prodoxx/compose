@@ -21,7 +21,7 @@ def records(path):
     except OSError:
         return []
     out = []
-    for line in text.splitlines():
+    for line in text.split("\n"):  # not splitlines(): U+2028, U+0085 and friends sit unescaped inside records Node wrote
         try:
             row = json.loads(line)
         except ValueError:
@@ -84,11 +84,11 @@ def _has_text(content):
 
 
 def is_owner_prompt(row):
-    """True for what the product owner typed: not a hook or meta record, not the compaction summary, not a tool result or notification."""
-    if row.get("type") != "user" or row.get("isMeta") or row.get("isCompactSummary"):
+    """True for what the product owner typed: not a subagent, hook or meta record, not the compaction summary, not a tool result or notification."""
+    if row.get("type") != "user" or row.get("isSidechain") or row.get("isMeta") or row.get("isCompactSummary"):
         return False
     content = _message(row).get("content")
-    if not _has_text(content):
+    if not _has_text(content) or not _text(content):
         return False
     origin = row.get("origin")
     if isinstance(origin, dict):
@@ -176,13 +176,18 @@ def messages(rows):
 
 
 def daily_input(rows):
-    """ISO date to the input tokens summed over every main-thread assistant record stamped that day."""
-    out = {}
+    """ISO date to the input tokens summed over the main-thread API responses stamped that day. A response split across several
+    records (one message.id) counts once, at its first record that reports usage; a record without an id cannot be matched, so it counts."""
+    out, seen = {}, set()
     for row in rows:
         if not _main_assistant(row):
             continue
-        total, at = _usage_total(row), row.get("timestamp")
+        total, at, mid = _usage_total(row), row.get("timestamp"), _message(row).get("id")
         if total is None or not isinstance(at, str) or len(at) < 10:
             continue
+        if mid is not None:
+            if mid in seen:
+                continue
+            seen.add(mid)
         out[at[:10]] = out.get(at[:10], 0) + total
     return out

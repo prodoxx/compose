@@ -182,6 +182,28 @@ class Transcript(unittest.TestCase):
         rec("assistant", at="2026-11-02T11:00:00Z", isSidechain=True, message={"id": "s", "content": [], "usage": {"input_tokens": 500}})
         self.assertEqual(fc.fc_transcript.daily_input(fc.fc_transcript.records(self.write())), {"2026-11-01": 100, "2026-11-02": 5})
 
+    def test_daily_input_counts_a_split_response_once(self):
+        usage = {"input_tokens": 10, "cache_read_input_tokens": 90}
+        rec("assistant", message={"id": "m1", "content": [{"type": "text", "text": "a"}], "usage": usage})
+        rec("assistant", message={"id": "m1", "content": [{"type": "tool_use", "id": "t", "name": "Bash", "input": {}}], "usage": usage})
+        rec("assistant", message={"id": "m2", "content": []})
+        rec("assistant", message={"id": "m2", "content": [], "usage": {"input_tokens": 7}})
+        rec("assistant", message={"content": [], "usage": {"input_tokens": 3}})
+        rec("assistant", message={"content": [], "usage": {"input_tokens": 3}})
+        self.assertEqual(fc.fc_transcript.daily_input(fc.fc_transcript.records(self.write())), {"2026-11-01": 113})
+
+    def test_a_subagent_prompt_is_not_an_owner_prompt(self):
+        rec("user", isSidechain=True, message={"role": "user", "content": "inner prompt"})
+        rec("user", message={"role": "user", "content": ""}, origin={"kind": "human"})
+        self.assertEqual(fc.fc_transcript.owner_prompts(fc.fc_transcript.records(self.write())), [])
+
+    def test_a_unicode_line_separator_inside_a_record_does_not_split_it(self):
+        rec("user", message={"role": "user", "content": "before after\u0085end"}, origin={"kind": "human"})
+        rec("user", message={"role": "user", "content": "next"}, origin={"kind": "human"})
+        path = Path(tempfile.mkdtemp()) / "s.jsonl"
+        path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in ROWS), encoding="utf-8")
+        self.assertEqual([p["text"] for p in fc.fc_transcript.owner_prompts(fc.fc_transcript.records(path))], ["before after\u0085end", "next"])
+
     def test_transcript_path_slugs_the_folder(self):
         self.assertEqual(fc.fc_transcript.transcript_path("/Users/r/apps/x.y", "abc").name, "abc.jsonl")
         self.assertEqual(fc.fc_transcript.transcript_path("/Users/r/apps/x.y", "abc").parent.name, "-Users-r-apps-x-y")
