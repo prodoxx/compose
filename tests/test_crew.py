@@ -1138,6 +1138,12 @@ class RestrictedStart(unittest.TestCase):
         self.assertLess(args.index("--disallowedTools"), args.index("--allowedTools"))
         self.assertEqual(args[-3:-2], ["--allowedTools"])  # it swallows what follows, so it stays last
 
+    def test_the_team_lead_gets_no_window_and_other_roles_150k(self):
+        env = lambda role: json.loads(fc.fc_claude.crew_settings(role, "/x"))["env"]
+        self.assertNotIn("CLAUDE_CODE_AUTO_COMPACT_WINDOW", env("orchestrator"))
+        self.assertEqual(env("orchestrator")["ENABLE_TOOL_SEARCH"], "true")
+        self.assertEqual(env("planner")["CLAUDE_CODE_AUTO_COMPACT_WINDOW"], "150000")
+
     def test_a_session_approves_no_mcpjson_server_whatever_the_repo_wires(self):
         settings = lambda args: json.loads(args[args.index("--settings") + 1])
         for mcpjson in ({"graft": {"command": "graft", "args": ["mcp"]}}, {"trail": {"command": "trail", "args": ["mcp"]}}, None):
@@ -1203,8 +1209,8 @@ class RestrictedStart(unittest.TestCase):
         self.assertEqual(set(tail[1:5]), {"mcp__claude_ai_Linear__*", "mcp__claude_ai_Notion__*", "mcp__trail__*", "mcp__frame0__*"})
         self.assertEqual(tail[5:], ["--disable-slash-commands", "--permission-mode", "auto", "--allowedTools", "Bash(npx -y lavish-axi:*)", "Bash(compose frame0:*)"])
 
-    def test_every_claude_teammate_compacts_at_150k_through_its_settings_env(self):
-        for role in ("orchestrator", "planner", "architect", "explore", "groundwork", "designer", "toolsmith", "design-003", "design-review"):
+    def test_every_claude_teammate_but_the_lead_compacts_at_150k_through_its_settings_env(self):
+        for role in ("planner", "architect", "explore", "groundwork", "designer", "toolsmith", "design-003", "design-review"):
             with self.subTest(role=role):
                 args = self.start(role)
                 env = json.loads(args[args.index("--settings") + 1])["env"]

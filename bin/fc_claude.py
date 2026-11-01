@@ -19,7 +19,8 @@ def headless_env():
     return {k: v for k, v in fc_core.clean_env().items()
             if (not k.startswith("COMPOSE_") or k == "COMPOSE_CONFIG") and not k.startswith("ANTHROPIC_")}
 
-# Every Claude teammate compacts at 150k: each turn re-sends the whole session, and `reenter` points a compacted one back at its brief.
+# Every teammate but the team lead compacts at 150k: each turn re-sends the whole session, and `reenter` points a compacted one back at its brief.
+# The lead gets no window: compose judges it (the Stop hook in fc_rewake decides when it compacts), so the model's default holds.
 # It goes in the `--settings` env because CLAUDE_CODE_AUTO_COMPACT_WINDOW outranks the --autocompact flag, so a user's own value would win.
 AUTOCOMPACT_WINDOW = "150000"
 NO_ATTRIBUTION = json.dumps({"attribution": {"commit": "", "pr": ""}})  # `--settings` outranks the user settings: no Co-Authored-By trailer or "Generated with" line on any commit a Claude session makes
@@ -31,7 +32,8 @@ def crew_settings(role, cwd):
     except (OSError, ValueError):
         pass
     keep = fc_mcp.keeps_skills(role)
-    return json.dumps({"attribution": {"commit": "", "pr": ""}, "env": {"ENABLE_TOOL_SEARCH": "true", "CLAUDE_CODE_AUTO_COMPACT_WINDOW": AUTOCOMPACT_WINDOW},
+    env = {"ENABLE_TOOL_SEARCH": "true", **({} if role == "orchestrator" else {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": AUTOCOMPACT_WINDOW})}
+    return json.dumps({"attribution": {"commit": "", "pr": ""}, "env": env,
                        "enabledPlugins": {k: False for k in enabled if not k.startswith("compose@") and not (keep and k.startswith("figma@"))}})
 
 REPO_INSTRUCTIONS = ("CLAUDE.md", ".claude/CLAUDE.md", "AGENTS.md")

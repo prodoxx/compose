@@ -613,11 +613,45 @@ class Reenter(unittest.TestCase):
         out, _ = self.reenter(self.env)
         self.assertIn(str(self.proj / "results" / "crew" / f"{fc.fc_herdr.agent_name('hw', 'tests-021')}.brief.md"), out)
         self.assertIn("hw-tests-021.brief.md", out)
-        self.assertIn("0r", out)
+        self.assertIn("from its brief and handoff", out)
         self.assertIn("compose status --repo /r --project hw", out)
         self.assertIn("compose watch --repo /r --project hw --now", out)
         self.assertIn("Decisions so far", out)
         self.assertIn("Plan", out)
+
+    def test_the_manager_is_pointed_at_its_handoff_and_its_projects(self):
+        env = {"HERDR_PANE_ID": "w1:p9", "CLAUDE_CODE_ENTRYPOINT": "cli"}
+        with mock.patch.object(fc.fc_manager, "is_manager", return_value=True), mock.patch.object(fc.fc_manager, "manager_projects", return_value=[self.proj]):
+            out, _ = self.reenter(env)
+        self.assertIn("engineering manager for hw", out)
+        self.assertIn("manager-w1-p9-handoff.md", out)
+        self.assertIn("You have no handoff yet at", out)
+        self.assertIn(f"compose watch --repo {self.proj.parent.parent} --project hw --now", out)
+        self.assertIn("Never start a compose watch", out)
+
+    def test_a_plain_session_prints_nothing(self):
+        for env in ({"CLAUDE_CODE_ENTRYPOINT": "cli"}, {"HERDR_PANE_ID": "w1:p9", "CLAUDE_CODE_ENTRYPOINT": "cli"}):
+            with self.subTest(env=env), mock.patch.object(fc.fc_manager, "is_manager", return_value=False):
+                out, _ = self.reenter(env)
+            self.assertEqual(out, "")
+
+    def test_a_session_outside_a_repo_prints_nothing_and_never_traces(self):
+        with mock.patch.object(fc.fc_manager, "is_manager", side_effect=OSError("no repo")):
+            out, _ = self.reenter({"HERDR_PANE_ID": "w1:p9", "CLAUDE_CODE_ENTRYPOINT": "cli"})
+        self.assertEqual(out, "")
+
+    def test_a_headless_session_in_a_manager_pane_prints_nothing(self):
+        with mock.patch.object(fc.fc_manager, "is_manager", return_value=True):
+            out, _ = self.reenter({"HERDR_PANE_ID": "w1:p9", "CLAUDE_CODE_ENTRYPOINT": "sdk-cli"})
+        self.assertEqual(out, "")
+
+    def test_a_manager_with_a_handoff_is_told_to_read_it(self):
+        env = {"HERDR_PANE_ID": "w1:p9", "CLAUDE_CODE_ENTRYPOINT": "cli"}
+        handoff = self.proj / "h.md"; handoff.write_text("x")
+        with mock.patch.object(fc.fc_manager, "is_manager", return_value=True), mock.patch.object(fc.fc_manager, "manager_projects", return_value=[self.proj]), \
+                mock.patch.object(fc.fc_manager, "manager_handoff", return_value=handoff):
+            out, _ = self.reenter(env)
+        self.assertIn(f"Read your handoff {handoff} first", out)
 
     def test_the_team_lead_gets_the_same_reentry(self):
         out, _ = self.reenter({**self.env, "COMPOSE_ROLE": "orchestrator"})
@@ -627,7 +661,7 @@ class Reenter(unittest.TestCase):
         lead, _ = self.reenter({**self.env, "COMPOSE_ROLE": "orchestrator"})
         self.assertIn(str(self.proj / "scratch" / "hw-orchestrator" / "handoff.md"), lead)
         mate, _ = self.reenter(self.env)
-        self.assertNotIn("handoff", mate)
+        self.assertNotIn("handoff.md", mate)
 
     def test_a_crew_teammate_is_pointed_at_its_own_brief_not_its_roles(self):
         """Every unguarded teammate's tab carries COMPOSE_ROLE=crew: the brief is named for the teammate, `<slug>-<role>.brief.md`."""
