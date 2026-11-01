@@ -63,14 +63,15 @@ def read(since=None):
 def digest(text):
     return hashlib.sha256(text.encode()).hexdigest()[:16]
 
-def typed(pane, text):
-    """Record a prompt compose typed into a pane, so the transcript's copy of it is not taken for the product owner's."""
-    append("typed", pane=pane, text=text[:200], sha=digest(text))
+def typed(pane, text, agent=None):
+    """Record a prompt compose typed into a pane, so the transcript's copy of it is not taken for the product owner's. `agent` is the
+    herdr agent name the prompt was sent to, when it went by name."""
+    append("typed", pane=pane, **({"agent": agent} if agent else {}), text=text[:200], sha=digest(text))
 
 def was_typed(pane, text, since):
     """Whether compose typed this text into this pane at or after `since` (an ISO UTC time)."""
     sha = digest(text)
-    return any(r.get("kind") == "typed" and r.get("pane") == pane and r.get("sha") == sha and str(r.get("at", "")) >= since for r in read())
+    return any(r.get("kind") == "typed" and r.get("pane") == pane and r.get("sha") == sha for r in read(since=epoch(since)))
 
 
 # ---------- in-flight markers: one compaction per pane ----------

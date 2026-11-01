@@ -395,6 +395,12 @@ class Log(unittest.TestCase):
         self.assertFalse(fc.fc_compactlog.was_typed("w1:p2", "/compact keep it", "2999-01-01T00:00:00Z"))
         self.assertFalse(fc.fc_compactlog.was_typed("w1:p3", "/compact keep it", "2000-01-01T00:00:00Z"))
 
+    def test_a_typed_check_reads_only_the_records_since_its_time(self):
+        fc.fc_compactlog.typed("w1:p2", "/compact keep it")
+        with mock.patch.object(fc.fc_compactlog, "read", wraps=fc.fc_compactlog.read) as read:
+            self.assertTrue(fc.fc_compactlog.was_typed("w1:p2", "/compact keep it", "2000-01-01T00:00:00Z"))
+        self.assertEqual(read.call_args.kwargs, {"since": fc.fc_compactlog.epoch("2000-01-01T00:00:00Z")})
+
     def test_a_record_holding_unicode_line_separators_stays_one_record(self):
         text = "line one line two line three\u0085end é"
         fc.fc_compactlog.typed("w1:p2", text)

@@ -689,6 +689,37 @@ class PromptRecord(unittest.TestCase):
         self.assertEqual(result, (None, "error"))
         self.assertEqual(records, [])
 
+    def prompt_to(self, target, agent_get=""):
+        """(the herdr subcommands run, the log's records) after a prompt sent to `target`, with `herdr agent get` answering
+        `agent_get` (a failed call when empty)."""
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d, True)
+        calls = []
+        def run(argv, **kw):
+            calls.append(argv[1:3])
+            out = agent_get if argv[1:3] == ["agent", "get"] else '{"result": {}}'
+            return subprocess.CompletedProcess(argv, 0 if out else 1, stdout=out, stderr="")
+        with mock.patch.object(fc.fc_config, "CONFIG_PATH", d / "config.json"), \
+             mock.patch.dict(os.environ, {"HERDR_ENV": "1", "HERDR_SOCKET_PATH": "/tmp/herdr.sock"}), \
+             mock.patch.object(fc.fc_herdr.subprocess, "run", side_effect=run):
+            fc.fc_herdr.herdr("agent", "prompt", target, "hello")
+            return calls, fc.fc_compactlog.read()
+
+    def test_a_prompt_sent_by_agent_name_is_logged_under_its_pane(self):
+        got = json.dumps({"result": {"agent": {"agent_status": "idle", "pane_id": "w3:p7", "name": "lead-x"}}})
+        calls, records = self.prompt_to("lead-x", got)
+        self.assertEqual(calls, [["agent", "prompt"], ["agent", "get"]])
+        self.assertEqual([(r["pane"], r.get("agent"), r["text"]) for r in records], [("w3:p7", "lead-x", "hello")])
+
+    def test_a_prompt_to_an_agent_herdr_cannot_place_is_logged_under_its_name(self):
+        _, records = self.prompt_to("lead-x")
+        self.assertEqual([(r["pane"], r.get("agent")) for r in records], [("lead-x", "lead-x")])
+
+    def test_a_prompt_sent_to_a_pane_id_asks_herdr_nothing_more(self):
+        calls, records = self.prompt_to("w1:p2")
+        self.assertEqual(calls, [["agent", "prompt"]])
+        self.assertEqual([(r["pane"], r.get("agent")) for r in records], [("w1:p2", None)])
+
     def test_a_log_write_failure_does_not_break_either_call(self):
         with mock.patch.object(fc.fc_compactlog, "typed", mock.Mock(side_effect=OSError("disk"))):
             self.assertEqual(self.run_prompt(0, self.wait_prompt)[0], ({}, None))

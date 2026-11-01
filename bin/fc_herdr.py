@@ -58,13 +58,17 @@ def herdr(*args, check=False, timeout=120):
     _record_prompt(args)
     return out.get("result", out)
 
+PANE_ID = re.compile(r"w\d+:p[0-9A-Za-z]+")
 def _record_prompt(args):
     """Log a delivered `agent prompt` as typed by compose: the transcript will hold it, and the compactor must not take it for the
-    product owner's. The log is measurement only, so a failed write never turns a delivered prompt into an exception."""
+    product owner's. It is logged under the pane id the compactor checks, so a prompt sent to an agent name asks herdr for that agent's
+    pane (under the name when herdr cannot say). The log is measurement only: a failed write never turns a delivered prompt into an exception."""
     if tuple(map(str, args[:2])) == ("agent", "prompt") and len(args) > 3:
         import fc_compactlog  # imported here, not at the top: no import cycle, and this module's place in the load order stays
+        target = str(args[2])
+        pane = target if PANE_ID.fullmatch(target) else ((herdr("agent", "get", target, timeout=10) or {}).get("agent") or {}).get("pane_id")
         try:
-            fc_compactlog.typed(str(args[2]), str(args[3]))
+            fc_compactlog.typed(pane or target, str(args[3]), agent=None if pane == target else target)
         except OSError:
             pass
 
