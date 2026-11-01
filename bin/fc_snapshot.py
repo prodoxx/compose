@@ -368,7 +368,7 @@ def redact_owned_settings(text):
         walked, hit = _redact_owned_secret_fields(json.loads(text, parse_float=_js_number, parse_constant=_reject_constant))
         if hit:
             return json.dumps(walked, separators=(",", ":"), ensure_ascii=False), True
-    except ValueError:
+    except (ValueError, RecursionError):  # the TypeScript's bare catch swallows any throw, including a stack overflow on deep nesting
         pass  # clipped or non-JSON tool output still goes through the field patterns below
     clean = _KEY_JSON.sub(lambda m: m.group(1) + ':"[REDACTED]"', text)
     clean = _KEY_ASSIGNED.sub(lambda m: m.group(1) + "=[REDACTED]", clean)
@@ -519,6 +519,6 @@ def snapshot(messages, secrets=()):
     return {
         "state": state,
         "conversationTokens": estimate_conversation_tokens(messages),
-        "checkpointText": json.dumps([last_user, last_assistant]),
+        "checkpointText": json.dumps([last_user, last_assistant], separators=(",", ":"), ensure_ascii=False),  # JSON.stringify's form, byte for byte
         "autoCoverage": omitted_users == 0 and not recent_truncated and not redacted and not transcript_limit_reached,
     }

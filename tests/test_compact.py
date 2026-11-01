@@ -224,7 +224,7 @@ class SnapshotPort(unittest.TestCase):
         self.assertEqual(s["state"]["userConstraints"], [{"role": "user", "text": "Always keep tests green."}])
         self.assertEqual(s["state"]["savedArtifacts"], ["/tmp/a.md", "/tmp/b.txt"])
         self.assertTrue(s["state"]["previousSummary"].startswith(fc.fc_snapshot.SUMMARY_PREFIX))
-        self.assertEqual(s["checkpointText"], json.dumps(["Always keep tests green.", "Wrote the file."]))
+        self.assertEqual(s["checkpointText"], '["Always keep tests green.","Wrote the file."]')
 
     def test_tool_results_are_middle_clipped_to_the_budget(self):
         tools = fc.fc_snapshot.snapshot(self.msgs())["state"]["recent"][0]["tools"]
@@ -356,7 +356,25 @@ class SnapshotPort(unittest.TestCase):
     def test_the_compaction_note_is_the_mods(self):
         self.assertEqual(fc.fc_snapshot.snapshot([])["state"]["compaction"]["description"],
                          "Lossy structured summary of older context (request, files, errors, pending tasks, current work, next step) plus a few recent messages. Exact tool output and long file contents are compressed away. Other compaction hooks may differ.")
-        self.assertEqual(fc.fc_snapshot.snapshot([])["checkpointText"], json.dumps(["", ""]))
+        self.assertEqual(fc.fc_snapshot.snapshot([])["checkpointText"], '["",""]')
+
+    def test_checkpoint_text_is_javascripts_compact_json(self):
+        s = fc.fc_snapshot.snapshot([{"role": "user", "text": "café \U0001F600", "toolUses": []}, {"role": "assistant", "text": "ok", "toolUses": []}])
+        self.assertEqual(s["checkpointText"], '["café \U0001F600","ok"]')
+
+    def test_deeply_nested_text_that_mentions_the_key_does_not_raise(self):
+        text = "[" * 5000 + '"typesafeApiKey"' + "]" * 5000
+        self.assertEqual(fc.fc_snapshot.redact_owned_settings(text), (text, False))
+        fc.fc_snapshot.snapshot([{"role": "user", "text": text, "toolUses": []}])
+
+    def test_known_secrets_are_scrubbed_across_the_snapshot(self):
+        s = fc.fc_snapshot.snapshot([{"role": "user", "text": "the password is hunter2", "toolUses": []},
+                                     {"role": "assistant", "text": "noted hunter2", "toolUses": [{"tool": "Bash", "input": {"command": "echo hunter2 > /tmp/hunter2.txt"}, "text": "out hunter2", "isError": False}]}], secrets=("hunter2",))
+        self.assertNotIn("hunter2", json.dumps(s))
+        self.assertIn("[REDACTED]", s["state"]["userConstraints"][0]["text"])
+        self.assertEqual(s["state"]["savedArtifacts"], ["/tmp/[REDACTED].txt"])
+        self.assertTrue(s["state"]["coverage"]["redacted"])
+        self.assertFalse(s["autoCoverage"])
 
 
 if __name__ == "__main__":
