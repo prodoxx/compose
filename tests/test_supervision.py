@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import contextlib, importlib.machinery, importlib.util, io, json, os, re, signal, subprocess, sys, tempfile, threading, time, unittest
+import contextlib, importlib.machinery, importlib.util, io, json, os, re, signal, subprocess, sys, tempfile, threading, time, unittest, warnings
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -479,7 +479,8 @@ class Rewake(unittest.TestCase):
 
     def park_as_manager(self, queues, factory=None, hold_factory=False):
         """The Stop hook of an engineering manager holding the projects named in `queues` (their snapshot sequences; the last one repeats),
-        with the real fork. stderr is a real file, since a forked watch writes where the parent can read it. Returns the exit code and stderr."""
+        with the real fork. stderr is a real file, since a forked watch writes where the parent can read it. Returns the exit code, stderr and how many jobs were parked
+        (a forked job cannot fail a test: its asserts are made on what the parent sees)."""
         repo = self.state.parent.resolve()
         projs = {n: repo / ".compose" / n for n in queues}
         for p in projs.values():
@@ -496,35 +497,34 @@ class Rewake(unittest.TestCase):
                 mock.patch.object(fc.fc_core, "project_dir", side_effect=lambda a: projs[a.project]), \
                 mock.patch.object(fc.fc_watch, "watch_snapshot", snapshot), mock.patch.object(fc.fc_watch, "WATCH_INTERVAL", 0.01), mock.patch.object(fc.fc_watch, "WATCH_SETTLE", 0), \
                 mock.patch.object(fc.fc_proc, "keep_awake"), mock.patch.object(fc.fc_compactor, "start"), \
-                mock.patch.object(fc.fc_factory, "verb_watch", factory or mock.Mock(side_effect=AssertionError("the factory is not held"))), \
+                mock.patch.object(fc.fc_factory, "verb_watch", factory or mock.Mock()), mock.patch.object(fc.fc_rewake, "park", wraps=fc.fc_rewake.park) as park, \
                 mock.patch.object(sys, "stdin", io.StringIO(json.dumps({"session_id": "s1", "cwd": str(repo)}))), open(out, "w") as err, \
                 mock.patch.object(sys, "stderr", err):
             try:
                 fc.fc_rewake.cmd_rewake(SimpleNamespace()); code = 0
             except SystemExit as e:
                 code = e.code
-        return code, out.read_text()
+        return code, out.read_text(), len(park.call_args.args[0]) if park.called else 0
 
     def test_a_manager_parks_one_watch_per_held_project_and_the_first_event_wakes_it(self):
         t = time.monotonic()
-        code, err = self.park_as_manager({"alpha": [wsnap("running")], "beta": [wsnap("running"), wsnap("running"), wsnap("passed")]})
-        self.assertEqual(code, 2)
+        code, err, jobs = self.park_as_manager({"alpha": [wsnap("running")], "beta": [wsnap("running"), wsnap("running"), wsnap("passed")]})
+        self.assertEqual((code, jobs), (2, 2))  # the factory is not held: no third job
         self.assertEqual(err.count("compose watch woke you."), 1)
         self.assertIn("event task=001 state=passed", err)
         self.assertLess(time.monotonic() - t, 10)  # alpha's quiet watch was ended, not waited for
 
     def test_a_manager_that_holds_the_factory_parks_its_watch_beside_the_projects(self):
         def factory(a, repo, rewake=False):
-            self.assertEqual((a.timeout, rewake), (None, True))
             print("factory woke", file=sys.stderr)
             raise SystemExit(2)
-        code, err = self.park_as_manager({"alpha": [wsnap("running")]}, factory=factory, hold_factory=True)
-        self.assertEqual((code, err), (2, "factory woke\n"))
+        code, err, jobs = self.park_as_manager({"alpha": [wsnap("running")]}, factory=factory, hold_factory=True)
+        self.assertEqual((code, err, jobs), (2, "factory woke\n", 2))  # the project's watch and the factory's
 
     def test_a_manager_with_only_the_factory_parks_it_in_process(self):
         factory = mock.Mock(side_effect=SystemExit(2))
-        code, _ = self.park_as_manager({}, factory=factory, hold_factory=True)
-        self.assertEqual(code, 2)
+        code, _, jobs = self.park_as_manager({}, factory=factory, hold_factory=True)
+        self.assertEqual((code, jobs), (2, 1))
         a, repo = factory.call_args.args
         self.assertEqual((a.timeout, repo, factory.call_args.kwargs), (None, self.state.parent.resolve(), {"rewake": True}))
 
@@ -1550,7 +1550,7 @@ class RestoredTeammate(unittest.TestCase):
         (self.proj / "verify.json").write_text("{}")
         def rewake(pane, snaps):
             err = io.StringIO()
-            with mock.patch.dict(os.environ, {"HERDR_PANE_ID": pane, "CLAUDE_CODE_ENTRYPOINT": "cli"}, clear=True), \
+            with mock.patch.dict(os.environ, {"HERDR_PANE_ID": pane, "CLAUDE_CODE_ENTRYPOINT": "cli", "COMPOSE_NO_AWAKE": "1"}, clear=True), \
                     mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), \
                     mock.patch.object(fc.fc_watch, "watch_snapshot", side_effect=snaps), mock.patch.object(fc.fc_watch, "WATCH_INTERVAL", 0.01), mock.patch.object(fc.fc_watch, "WATCH_SETTLE", 0), \
                     mock.patch.object(sys, "stdin", io.StringIO(json.dumps({"session_id": "s1", "cwd": str(repo)}))), contextlib.redirect_stderr(err):
@@ -1568,6 +1568,11 @@ class RestoredTeammate(unittest.TestCase):
 
 class Park(unittest.TestCase):
     """The manager's Stop hook parks several watches under one parent: the first event wakes the session once."""
+    def setUp(self):
+        patch = mock.patch.object(fc.fc_watch, "WATCH_INTERVAL", 0.01)  # the park loop looks at its children this often
+        patch.start()
+        self.addCleanup(patch.stop)
+
     def park(self, jobs):
         r, w = os.pipe()
         sink = os.fdopen(os.dup(w), "w")
@@ -1578,6 +1583,11 @@ class Park(unittest.TestCase):
                 code = e.code
         sink.close(); os.close(w)
         with os.fdopen(r) as f: return code, f.read()
+
+    def fork(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)  # the suite has threads of other tests alive; the child only runs the test's own code
+            return os.fork()
 
     def test_one_job_runs_in_process(self):
         def job(): print("woke", file=sys.stderr); raise SystemExit(2)
@@ -1603,6 +1613,86 @@ class Park(unittest.TestCase):
 
     def test_no_jobs_return_at_once(self):
         self.assertEqual(self.park([]), (0, ""))
+
+    def test_the_one_job_path_swallows_what_a_forked_job_would(self):
+        def claimed(): raise SystemExit("another engineering manager session holds this project")
+        def broken(): raise RuntimeError("boom")
+        self.assertEqual((self.park([claimed]), self.park([broken])), ((0, ""), (0, "")))
+
+    def test_a_child_the_hook_started_for_another_purpose_is_not_a_wake(self):
+        """The compactor the judge starts is a child of the hook too: its exit 2 must not end the watches."""
+        stray = self.fork()
+        if stray == 0:
+            os._exit(2)
+        time.sleep(0.2)  # it has exited and waits to be reaped by whoever waits first
+        def later(): time.sleep(0.3)
+        try:
+            self.assertEqual(self.park([later, later]), (0, ""))
+        finally:
+            with contextlib.suppress(ChildProcessError):
+                os.waitpid(stray, 0)
+
+    def hook(self, jobs_dir):
+        """A forked stand-in for the hook process: it parks two endless jobs, each of which records its pid in `jobs_dir`. Returns its pid."""
+        def endless():
+            (jobs_dir / str(os.getpid())).write_text("")
+            time.sleep(60)
+        hook = self.fork()
+        if hook == 0:
+            try:
+                fc.fc_rewake.park([endless, endless])
+            finally:
+                os._exit(0)
+        self.addCleanup(lambda: [self.gone(pid, kill=True) for pid in [hook, *self.recorded(jobs_dir)]])
+        return hook
+
+    def recorded(self, jobs_dir):
+        return [int(f.name) for f in jobs_dir.iterdir()]
+
+    def wait_for(self, condition, what):
+        end = time.monotonic() + 5
+        while not condition():
+            self.assertLess(time.monotonic(), end, what)
+            time.sleep(0.01)
+
+    def gone(self, pid, kill=False):
+        """Whether process `pid` no longer exists (reaped); with `kill`, end it first."""
+        try:
+            if kill:
+                os.kill(pid, signal.SIGKILL)
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            return False
+        return False
+
+    def test_the_children_end_when_the_hook_that_parked_them_is_gone(self):
+        """A session that ends without signalling its hook leaves the park process behind with its children: the park ends them itself."""
+        jobs_dir = Path(tempfile.mkdtemp())
+        outer = self.fork()
+        if outer == 0:  # the session the hook ran under
+            try:
+                self.hook(jobs_dir)
+                while len(self.recorded(jobs_dir)) < 2:
+                    time.sleep(0.01)
+            finally:
+                os._exit(0)
+        os.waitpid(outer, 0)
+        pids = self.recorded(jobs_dir)
+        self.assertEqual(len(pids), 2)
+        self.wait_for(lambda: all(self.gone(pid) for pid in pids), "the parked jobs outlived the process that ran their hook")
+
+    def test_a_signal_to_the_hook_reaches_the_children_before_it_dies(self):
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            with self.subTest(sig=sig.name):
+                jobs_dir = Path(tempfile.mkdtemp())
+                hook = self.hook(jobs_dir)
+                self.wait_for(lambda: len(self.recorded(jobs_dir)) == 2, "the jobs did not start")
+                os.kill(hook, sig)
+                _, status = os.waitpid(hook, 0)
+                self.assertTrue(os.WIFSIGNALED(status) and os.WTERMSIG(status) == sig, status)  # it still dies as it would have
+                self.assertTrue(all(self.gone(pid) for pid in self.recorded(jobs_dir)))
 
 
 class SharedGuidance(unittest.TestCase):

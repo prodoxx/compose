@@ -163,12 +163,12 @@ A teammate herdr shows as working for 30 minutes with no report and no commit ra
 The 4-minute quiet alarm for the team lead is unchanged, and time asleep does not count toward either.
 
 The team lead never starts `watch` itself.
-Its tab carries `COMPOSE_ROLE`, `COMPOSE_PROJECT`, and `COMPOSE_REPO`, and the plugin's Stop hook (`compose rewake`) parks a watch whenever one of its turns ends (an engineering manager gets the same, one per project it holds).
+Its tab carries `COMPOSE_ROLE`, `COMPOSE_PROJECT`, and `COMPOSE_REPO`, and the plugin's Stop hook (`compose rewake`) parks a watch whenever one of its turns ends (an engineering manager gets the same: one per project it holds, and one for the factory when it holds that seat, all under the hook so the first event wakes it once).
 The watch's event wakes the idle session (Claude Code's `asyncRewake`), and the next turn end parks the next watch.
 A Codex session has no background wake, so it runs `compose watch ... --timeout 240` in the foreground.
 A lock keeps one watch per watcher.
 A second hook exits at once, and a second `watch` of the same session is refused, naming the first one's pid.
-The hook does nothing in any other session, and its watch ends with the session that parked it.
+The hook does nothing in any other session, and its watch ends with the session that parked it (an engineering manager's hook passes a stop signal on to its watches and ends them itself when its session is gone).
 Every Claude Code teammate compacts at 150k tokens, since every turn re-sends the whole session and a long one pays for its size on each of them.
 The window is `CLAUDE_CODE_AUTO_COMPACT_WINDOW` in the session's `--settings` env, because that variable outranks the `--autocompact` flag and would let a value in your own settings win.
 After a context compaction, the plugin's SessionStart hook (`compose reenter`) points any teammate back at its own brief, `results/crew/<agent>.brief.md`.

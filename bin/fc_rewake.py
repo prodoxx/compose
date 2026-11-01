@@ -1,4 +1,4 @@
-import argparse, json, os, re, signal, sys, warnings
+import argparse, json, os, re, signal, sys, time, warnings
 from pathlib import Path
 import fc_core, fc_herdr, fc_manager, fc_crew, fc_compact, fc_compactor, fc_transcript, fc_compactlog, fc_hooks, fc_watch, fc_factory
 
@@ -58,7 +58,10 @@ def manager_targets(repo, pane, session):
 
 def _run(job):
     """A forked child: run the job and leave without touching what the parent set up. 2 is an event that wakes the session; every other end
-    (the lock held by another watch, a failure) is 0, so it never ends its siblings."""
+    (the lock held by another watch, a failure) is 0, so it never ends its siblings. It dies bare on SIGTERM and SIGHUP, never through the
+    parent's cleanup handler."""
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, signal.SIG_DFL)
     code = 0
     try:
         job()
@@ -75,39 +78,66 @@ def _run(job):
 
 def park(jobs):
     """Run the watches `jobs` under this process: the first to exit 2 (an event) ends the others and wakes the session through SystemExit(2);
-    when every one ends without an event this returns. One job runs in-process; several run in a forked child each, before any of them
-    keeps the Mac awake (each does that itself)."""
+    when every one ends without an event this returns. One job runs in-process, its non-wake ends swallowed as a forked one's are; several run
+    in a forked child each, before any of them keeps the Mac awake (each does that itself). The children end with this process: a SIGTERM or
+    SIGHUP to it is forwarded to them (they are reaped before it goes on to die as it would have), and when its own parent is gone it ends
+    them and returns, since each child's own check only sees this process, which stays."""
     if len(jobs) == 1:
-        jobs[0]()
+        try:
+            jobs[0]()
+        except SystemExit as e:
+            if e.code == 2:
+                raise
+        except Exception:
+            pass
         return
     for out in (sys.stderr, sys.stdout):
         out.flush()  # a child would flush its copy of what the parent buffered, and print it twice
-    live = set()
-    for job in jobs:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)  # "fork() in a multi-threaded process" would land in the wake text on stderr
-            pid = os.fork()
-        if pid == 0:
-            _run(job)
-        live.add(pid)
-    while live:
-        try:
-            pid, status = os.wait()
-        except ChildProcessError:
-            return
-        live.discard(pid)
-        if os.waitstatus_to_exitcode(status) == 2:
-            for rest in live:
-                try:
-                    os.kill(rest, signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
-            for rest in live:
-                try:
-                    os.waitpid(rest, 0)
-                except ChildProcessError:
-                    pass
-            raise SystemExit(2)
+    parent, live = os.getppid(), set()
+    def end_children():
+        for pid in live:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        for pid in live:
+            try:
+                os.waitpid(pid, 0)
+            except ChildProcessError:
+                pass
+        live.clear()
+    previous = {sig: signal.getsignal(sig) or signal.SIG_DFL for sig in (signal.SIGTERM, signal.SIGHUP)}
+    def forwarded(sig, _frame):
+        end_children()
+        signal.signal(sig, previous[sig])
+        os.kill(os.getpid(), sig)  # the disposition this process had: compose's cleanup handler, or dying
+    for sig in previous:
+        signal.signal(sig, forwarded)
+    try:
+        for job in jobs:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", DeprecationWarning)  # "fork() in a multi-threaded process" would land in the wake text on stderr
+                pid = os.fork()
+            if pid == 0:
+                _run(job)
+            live.add(pid)
+        while live:
+            try:
+                pid, status = os.waitpid(-1, os.WNOHANG)
+            except ChildProcessError:
+                return
+            if pid == 0:
+                if os.getppid() != parent:
+                    return end_children()  # the session that ran this hook is gone
+                time.sleep(fc_watch.WATCH_INTERVAL)
+            elif pid in live:  # not the compactor the judge started, a child of this process too
+                live.discard(pid)
+                if os.waitstatus_to_exitcode(status) == 2:
+                    end_children()
+                    raise SystemExit(2)
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
 
 def cmd_rewake(a):
     """Claude Code Stop hook (the plugin's hooks.json, asyncRewake): judge whether the settled turn of a team lead or an engineering
