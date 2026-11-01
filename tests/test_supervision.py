@@ -630,10 +630,24 @@ class Reenter(unittest.TestCase):
         self.assertIn("Never start a compose watch", out)
 
     def test_a_plain_session_prints_nothing(self):
-        for env in ({"CLAUDE_CODE_ENTRYPOINT": "cli"}, {"HERDR_PANE_ID": "w1:p9", "CLAUDE_CODE_ENTRYPOINT": "cli"}):
-            with self.subTest(env=env), mock.patch.object(fc.fc_manager, "is_manager", return_value=False):
-                out, _ = self.reenter(env)
-            self.assertEqual(out, "")
+        out, _ = self.reenter({"CLAUDE_CODE_ENTRYPOINT": "cli"})  # no pane: the real is_manager answers False at once
+        self.assertEqual(out, "")
+        with mock.patch.object(fc.fc_manager, "is_manager", return_value=False):
+            out, _ = self.reenter({"HERDR_PANE_ID": "w1:p9", "CLAUDE_CODE_ENTRYPOINT": "cli"})
+        self.assertEqual(out, "")
+
+    def test_a_manager_holding_only_the_factory_is_told_so_and_gets_no_project_line(self):
+        with mock.patch.object(fc.fc_manager, "is_manager", return_value=True), mock.patch.object(fc.fc_manager, "manager_projects", return_value=[]):
+            out, _ = self.reenter({"HERDR_PANE_ID": "w1:p9", "CLAUDE_CODE_ENTRYPOINT": "cli"})
+        self.assertIn("engineering manager for the factory in", out)
+        self.assertNotIn("compose watch --repo", out)
+        self.assertIn("Never start a compose watch", out)
+
+    def test_a_handoff_that_cannot_be_checked_prints_nothing_and_never_traces(self):
+        with mock.patch.object(fc.fc_manager, "is_manager", return_value=True), mock.patch.object(fc.fc_manager, "manager_projects", return_value=[self.proj]), \
+                mock.patch.object(Path, "exists", side_effect=PermissionError("EACCES")):
+            out, _ = self.reenter({"HERDR_PANE_ID": "w1:p9", "CLAUDE_CODE_ENTRYPOINT": "cli"})
+        self.assertEqual(out, "")
 
     def test_a_session_outside_a_repo_prints_nothing_and_never_traces(self):
         with mock.patch.object(fc.fc_manager, "is_manager", side_effect=OSError("no repo")):

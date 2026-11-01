@@ -556,12 +556,13 @@ def manager_reentry():
         if not fc_manager.is_manager(main, pane):
             return []
         projects, handoff = fc_manager.manager_projects(main, pane), fc_manager.manager_handoff(main, pane)
+        read = (f"Read your handoff {handoff} first: teammates live, open questions, decisions, focus." if handoff.exists()
+                else f"You have no handoff yet at {handoff}; write one when compose asks.")
     except Exception:
         return []
-    read = (f"Read your handoff {handoff} first: teammates live, open questions, decisions, focus." if handoff.exists()
-            else f"You have no handoff yet at {handoff}; write one when compose asks.")
-    return [f"Your context was just compacted; you are the engineering manager for {', '.join(p.name for p in projects)} in {main}.", read,
-            *(f"Run `compose status --repo {p.parent.parent} --project {p.name}` and `compose watch --repo {p.parent.parent} --project {p.name} --now`." for p in projects),
+    names = ", ".join(p.name for p in projects) or "the factory"
+    return [f"Your context was just compacted; you are the engineering manager for {names} in {main}.", read,
+            *(f"Run `compose status --repo {p.parent.parent} --project {p.name}` and `compose watch --repo {p.parent.parent} --project {p.name} --now`" for p in projects),
             "Never start a compose watch or compose factory watch yourself: the Stop hook parks one after each of your turns and its event wakes you.",
             "Re-read the product owner's open questions in the handoff before acting; say where you are in one line only when they ask."]
 
