@@ -300,5 +300,40 @@ class SeatLines(Seat):
             self.assertEqual(fc.fc_manager.project_line(self.proj("docs"), None), "")
 
 
+class Recognition(Seat):
+    def test_a_pane_that_holds_a_project_is_the_manager(self):
+        self.claim(OLD, "chat-ui")
+        self.assertEqual([p.name for p in fc.fc_manager.manager_projects(self.repo, OLD)], ["chat-ui"])
+        self.assertTrue(fc.fc_manager.is_manager(self.repo, OLD))
+        self.assertFalse(fc.fc_manager.is_manager(self.repo, NEW))
+        self.assertFalse(fc.fc_manager.is_manager(self.repo, None))
+
+    def test_a_pane_that_started_a_live_planner_is_the_manager_of_that_project(self):
+        crew = self.proj("billing") / "results" / "crew"; crew.mkdir(parents=True)
+        (crew / "billing-planner.json").write_text(json.dumps({"name": "billing-planner", "role": "planner", "started_by": NEW, "reports_to": "manager"}))
+        with mock.patch.object(fc.fc_herdr, "live_agents", return_value=[{"name": "billing-planner", "pane_id": "w1:p5"}]):
+            self.assertEqual([p.name for p in fc.fc_manager.manager_projects(self.repo, NEW)], ["billing"])
+        with mock.patch.object(fc.fc_herdr, "live_agents", return_value=[]):
+            self.assertEqual(fc.fc_manager.manager_projects(self.repo, NEW), [])
+
+    def test_a_project_both_held_and_started_in_counts_once_and_a_bad_record_is_skipped(self):
+        self.claim(NEW, "billing")
+        crew = self.proj("billing") / "results" / "crew"; crew.mkdir(parents=True)
+        (crew / "billing-planner.json").write_text(json.dumps({"name": "billing-planner", "role": "planner", "started_by": NEW}))
+        (crew / "broken.json").write_text("{not json")
+        (crew / "list.json").write_text("[]")
+        with mock.patch.object(fc.fc_herdr, "live_agents", return_value=[{"name": "billing-planner", "pane_id": "w1:p5"}]):
+            self.assertEqual([p.name for p in fc.fc_manager.manager_projects(self.repo, NEW)], ["billing"])
+
+    def test_the_factory_seat_alone_makes_a_manager(self):
+        with fc.fc_factorystate.edit(self.repo) as st: st["manager_pane"] = NEW
+        self.assertTrue(fc.fc_manager.holds_factory(self.repo, NEW))
+        self.assertTrue(fc.fc_manager.is_manager(self.repo, NEW))
+
+    def test_the_handoff_sits_beside_the_repo_link_named_by_the_pane(self):
+        self.assertEqual(fc.fc_manager.manager_handoff(self.repo, "w1Z:p2").name, "manager-w1Z-p2-handoff.md")
+        self.assertEqual(fc.fc_manager.manager_handoff(self.repo, "w1Z:p2").parent, fc.fc_core.repo_link(self.repo).parent)
+
+
 if __name__ == "__main__":
     unittest.main()
