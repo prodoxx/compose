@@ -3,7 +3,7 @@ import importlib.machinery, importlib.util, io, json, os, shutil, tempfile, unit
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
-import sys, time
+import subprocess, sys, time
 os.environ["HERDR_ENV"] = ""
 
 _spec = importlib.util.spec_from_loader("fc", importlib.machinery.SourceFileLoader("fc", str(Path(__file__).resolve().parents[1] / "bin" / "compose.py")))
@@ -651,6 +651,28 @@ class HerdrPromptSession(unittest.TestCase):
     def test_a_failure_without_json_returns_stderr_or_error(self):
         self.assertEqual(self.call("sys.stderr.write('boom: pane gone\\n'); sys.exit(2)", "agent", "prompt", "a", "hi"), (None, "boom: pane gone"))
         self.assertEqual(self.call("sys.exit(3)", "agent", "prompt", "a", "hi"), (None, "error"))
+
+
+class PromptRecord(unittest.TestCase):
+    """Every `agent prompt` herdr() sends is logged as a typed prompt, so the compactor can tell it from the product owner's."""
+
+    def run_prompt(self, returncode):
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d, True)
+        done = subprocess.CompletedProcess([], returncode, stdout='{"result": {}}', stderr="")
+        with mock.patch.object(fc.fc_config, "CONFIG_PATH", d / "config.json"), \
+             mock.patch.dict(os.environ, {"HERDR_ENV": "1", "HERDR_SOCKET_PATH": "/tmp/herdr.sock"}), \
+             mock.patch.object(fc.fc_herdr.subprocess, "run", return_value=done):
+            fc.fc_herdr.herdr("agent", "prompt", "w1:p2", "hello")
+            return fc.fc_compactlog.read()
+
+    def test_every_agent_prompt_is_recorded(self):
+        records = self.run_prompt(0)
+        self.assertEqual([(r["kind"], r["pane"]) for r in records], [("typed", "w1:p2")])
+        self.assertEqual(records[0]["text"], "hello")
+
+    def test_a_failed_prompt_records_nothing(self):
+        self.assertEqual(self.run_prompt(1), [])
 
 if __name__ == "__main__":
     unittest.main()

@@ -55,6 +55,9 @@ def herdr(*args, check=False, timeout=120):
         if check:
             raise RuntimeError(f"herdr {' '.join(map(str, args[:2]))}: {(out.get('error') or {}).get('code') or p.stderr.strip()[-200:]}")
         return None
+    if tuple(map(str, args[:2])) == ("agent", "prompt") and len(args) > 3:
+        import fc_compactlog  # imported here, not at the top: no import cycle, and this module's place in the load order stays
+        fc_compactlog.typed(str(args[2]), str(args[3]))  # the transcript will hold this prompt; the compactor must not take it for the product owner's
     return out.get("result", out)
 
 def herdr_error(*args, timeout=120):

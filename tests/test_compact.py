@@ -76,7 +76,7 @@ class Policy(unittest.TestCase):
         self.assertIsNone(fc.fc_compact.cooldown_reason({}, 90000, 5, 1000.0))
 
 
-import json, tempfile
+import json, shutil, tempfile, time
 
 ROWS = []
 
@@ -375,6 +375,40 @@ class SnapshotPort(unittest.TestCase):
         self.assertEqual(s["state"]["savedArtifacts"], ["/tmp/[REDACTED].txt"])
         self.assertTrue(s["state"]["coverage"]["redacted"])
         self.assertFalse(s["autoCoverage"])
+
+
+class Log(unittest.TestCase):
+    def setUp(self):
+        d = Path(tempfile.mkdtemp()); self.addCleanup(shutil.rmtree, d)
+        p = mock.patch.object(fc.fc_config, "CONFIG_PATH", d / "config.json"); p.start(); self.addCleanup(p.stop)
+
+    def test_append_and_read_round_trip_in_order(self):
+        fc.fc_compactlog.append("turn", pane="w1:p2", tokens=1000)
+        fc.fc_compactlog.append("verdict", pane="w1:p2", decision="qualifies")
+        self.assertEqual([r["kind"] for r in fc.fc_compactlog.read()], ["turn", "verdict"])
+        self.assertEqual(fc.fc_compactlog.read(since=time.time() + 60), [])
+
+    def test_typed_prompts_are_found_by_hash_after_a_time(self):
+        fc.fc_compactlog.typed("w1:p2", "/compact keep it")
+        self.assertTrue(fc.fc_compactlog.was_typed("w1:p2", "/compact keep it", "2000-01-01T00:00:00Z"))
+        self.assertFalse(fc.fc_compactlog.was_typed("w1:p2", "/compact keep it", "2999-01-01T00:00:00Z"))
+        self.assertFalse(fc.fc_compactlog.was_typed("w1:p3", "/compact keep it", "2000-01-01T00:00:00Z"))
+
+    def test_one_marker_per_pane_that_clears(self):
+        fc.fc_compactlog.set_inflight("w1:p2", "handoff", 42, "judged")
+        self.assertEqual(fc.fc_compactlog.inflight("w1:p2")["step"], "handoff")
+        fc.fc_compactlog.clear_inflight("w1:p2")
+        self.assertIsNone(fc.fc_compactlog.inflight("w1:p2"))
+
+    def test_an_expired_marker_counts_as_gone(self):
+        fc.fc_compactlog.set_inflight("w1:p2", "compact", 42, "ceiling")
+        with mock.patch.object(time, "time", return_value=time.time() + fc.fc_compactlog.INFLIGHT_TTL + 1):
+            self.assertIsNone(fc.fc_compactlog.inflight("w1:p2"))
+
+    def test_pane_state_round_trips_and_defaults_empty(self):
+        self.assertEqual(fc.fc_compactlog.pane_state("w1:p2"), {})
+        fc.fc_compactlog.save_pane_state("w1:p2", {"failures": 2})
+        self.assertEqual(fc.fc_compactlog.pane_state("w1:p2"), {"failures": 2})
 
 
 if __name__ == "__main__":
