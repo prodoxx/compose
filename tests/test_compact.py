@@ -426,3 +426,107 @@ class Log(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def write():
+    path = Path(tempfile.mkdtemp()) / "s.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in ROWS))
+    return path
+
+
+class Consider(unittest.TestCase):
+    def setUp(self):
+        d = Path(tempfile.mkdtemp()); self.addCleanup(shutil.rmtree, d)
+        for target, name, val in ((fc.fc_config, "CONFIG_PATH", d / "config.json"), (fc.fc_config, "COMPACT", dict(fc.fc_config.COMPACT_DEFAULTS)),
+                                  (fc.fc_config, "apply_config", lambda **k: None), (fc.fc_config, "typesafe_key", lambda env, what: "k")):
+            p = mock.patch.object(target, name, val); p.start(); self.addCleanup(p.stop)
+        self.reply = {"model": "jev-latest", "usage": {"input_tokens": 1, "output_tokens": 1}, "answers": {
+            "done": {"type": "choice", "choice": "finished", "probabilities": {"finished": 0.9, "not_finished": 0.05, "unclear": 0.05}, "confidence": 0.9},
+            "shape": {"type": "choice", "choice": "coordinating", "probabilities": {"hands_on": 0.1, "coordinating": 0.8, "unclear": 0.1}, "confidence": 0.8}}}
+        ROWS.clear()
+        rec("user", message={"role": "user", "content": "go"}, origin={"kind": "human"})
+
+    def turn(self, tokens):
+        rec("assistant", message={"id": "a", "content": [{"type": "text", "text": "done"}], "usage": {"input_tokens": tokens}})
+        return write()
+
+    def consider(self, tokens, role="manager", ask=None, now=1000.0):
+        with mock.patch.object(fc.fc_models, "jev_ask", ask or mock.Mock(return_value=self.reply)) as j:
+            return fc.fc_compact.consider("w1:p2", role, self.turn(tokens), now=now), j
+
+    def test_below_the_minimum_nothing_is_asked(self):
+        v, j = self.consider(39999)
+        self.assertEqual((v["decision"], j.call_count), ("below-minimum", 0))
+
+    def test_a_qualifying_verdict_for_the_manager_ignores_hands_on(self):
+        v, j = self.consider(90000)
+        self.assertEqual(v["decision"], "qualifies")
+        self.assertEqual((v["score"], v["floor"], v["usage"]), (0.9, 0.65, 0.6))
+        self.assertEqual(j.call_args.kwargs["timeout"], 2)
+        self.assertEqual(fc.fc_compactlog.read()[-1]["decision"], "qualifies")
+
+    def test_the_lead_profile_weighs_hands_on(self):
+        v, _ = self.consider(90000, role="lead")
+        self.assertEqual((v["decision"], v["score"]), ("below-floor", 0.495))
+
+    def test_the_ceiling_wins_over_everything_but_the_env_switch(self):
+        v, j = self.consider(150000)
+        self.assertEqual((v["decision"], j.call_count), ("ceiling", 0))
+        with mock.patch.dict(os.environ, {"COMPOSE_NO_COMPACT": "1"}):
+            v, _ = self.consider(150000)
+        self.assertEqual(v["decision"], "off")
+
+    def test_an_error_backs_off_and_a_second_turn_waits(self):
+        v, _ = self.consider(90000, ask=mock.Mock(side_effect=RuntimeError("typesafe: HTTP 500 boom")))
+        self.assertEqual((v["decision"], v["reason"]), ("error", "server"))
+        self.assertEqual(fc.fc_compactlog.pane_state("w1:p2")["failures"], 1)
+        v, j = self.consider(96000, now=1003.0)
+        self.assertEqual((v["decision"], v["reason"], j.call_count), ("cooldown", "TypeSafe backoff", 0))
+
+    def test_an_oversized_request_is_never_sent(self):
+        ROWS.clear()
+        rec("user", message={"role": "user", "content": "x" * 40000}, origin={"kind": "human"})
+        with mock.patch.object(fc.fc_compact, "MAX_REQUEST_BYTES", 2000):
+            v, j = self.consider(90000)
+        self.assertEqual((v["decision"], v["reason"], j.call_count), ("error", "input", 0))
+
+    def test_a_second_ask_within_two_minutes_waits(self):
+        self.consider(90000)
+        v, j = self.consider(96000, now=1060.0)
+        self.assertEqual((v["decision"], v["reason"], j.call_count), ("cooldown", "Asked recently", 0))
+
+    def test_failures_are_classified_and_a_success_clears_the_backoff(self):
+        v, _ = self.consider(90000, ask=mock.Mock(side_effect=fc.fc_models.PaymentRequired("typesafe", "no credit")))
+        self.assertEqual(v["reason"], "billing")
+        v, _ = self.consider(120000, now=2000.0, ask=mock.Mock(return_value={"nope": 1}))
+        self.assertEqual((v["decision"], v["reason"]), ("error", "response"))
+        self.assertEqual(fc.fc_compactlog.pane_state("w1:p2")["failures"], 2)
+        v, _ = self.consider(130000, now=3000.0)
+        state = fc.fc_compactlog.pane_state("w1:p2")
+        self.assertEqual((v["decision"], state["failures"], "retry_after" in state), ("qualifies", 0, False))
+
+    def test_a_missing_key_or_a_bad_config_is_a_configuration_error(self):
+        def broken(**k): raise SystemExit("bad config")
+        with mock.patch.object(fc.fc_config, "apply_config", broken):
+            v, j = self.consider(90000)
+        self.assertEqual((v["decision"], v["reason"], j.call_count), ("error", "configuration", 0))
+        def nokey(env, what): raise RuntimeError("needs a key")
+        with mock.patch.object(fc.fc_config, "typesafe_key", nokey):
+            v, j = self.consider(90000, now=5000.0)
+        self.assertEqual((v["decision"], v["reason"], j.call_count), ("error", "configuration", 0))
+
+    def test_the_judge_sees_only_the_context_since_the_last_compaction(self):
+        ROWS.clear()
+        rec("user", message={"role": "user", "content": "old topic about zebras"}, origin={"kind": "human"})
+        rec("system", subtype="compact_boundary", compactMetadata={"trigger": "manual", "preTokens": 100000, "postTokens": 5000})
+        rec("user", message={"role": "user", "content": "new topic"}, origin={"kind": "human"})
+        seen = []
+        v, _ = self.consider(90000, ask=lambda env, cfg, state, *a, **k: seen.append(json.dumps(state)) or self.reply)
+        self.assertEqual(v["decision"], "qualifies")
+        self.assertIn("new topic", seen[0])
+        self.assertNotIn("zebras", seen[0])
+
+    def test_the_judged_switch_off_asks_nothing(self):
+        fc.fc_config.COMPACT["judged"] = False
+        v, j = self.consider(90000)
+        self.assertEqual((v["decision"], j.call_count), ("off", 0))

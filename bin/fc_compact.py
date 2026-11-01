@@ -1,5 +1,5 @@
-import math, re
-import fc_config
+import json, math, os, re, time
+import fc_config, fc_compactlog, fc_models, fc_snapshot, fc_transcript
 
 # The compact-adviser judge policy (packages/claude-mod/lib/judge.ts and state.ts), ported as pure functions: the two
 # questions sent to the judge, the score and floor curve that decide whether a checkpoint qualifies, how a context
@@ -143,3 +143,100 @@ def cooldown_reason(state, tokens, exchanges, now):
     if asked_tokens is not None and tokens - asked_tokens < 5000:
         return "Context barely grew"
     return None
+
+
+MAX_REQUEST_BYTES = 32000  # what the judge is sent at most; Jev reads no more
+JUDGE_TIMEOUT = 2  # seconds: a Stop hook must not make the pane wait on a slow judge
+
+
+def _error_kind(exc):
+    return "billing" if isinstance(exc, fc_models.PaymentRequired) else error_kind(exc)
+
+def _live_messages(rows):
+    """The conversation since the last compaction: what the model still holds in context."""
+    marks = fc_transcript.compactions(rows)
+    return fc_transcript.messages(rows[marks[-1]["index"] + 1:] if marks else rows)
+
+def _request_bytes(state):
+    body = {"model": os.environ.get("TYPESAFE_MODEL", "jev-latest"), "state": state, "questions": QUESTIONS}
+    return len(json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+
+def consider(pane, role, transcript, now=None):
+    """Whether this pane's settled turn is a good moment to compact, asking the judge at most once. Appends the verdict to
+    the log and returns it. Never raises: any failure is a verdict with decision "error" and the kind as its reason."""
+    now = time.time() if now is None else now
+    verdict = {"pane": pane, "role": role, "tokens": None, "p_finished": None, "p_hands_on": None, "score": None,
+               "floor": None, "usage": None, "decision": "", "reason": ""}
+
+    def done(decision, reason="", **fields):
+        verdict.update(decision=decision, reason=reason, **fields)
+        try:
+            fc_compactlog.append("verdict", **verdict)
+        except Exception:
+            pass  # the log is for measuring; it must not break a Stop hook
+        return verdict
+
+    if fc_config.compact_off():
+        return done("off")
+    try:
+        rows = fc_transcript.records(transcript)
+        tokens = fc_transcript.context_tokens(rows)
+        exchanges = fc_transcript.exchanges_since_compaction(rows)
+        cfg = fc_config.COMPACT
+        verdict["tokens"] = tokens
+        if tokens is not None:
+            verdict["usage"] = round(tokens / cfg["budget"], 3)
+        if tokens is not None and tokens >= cfg["ceiling"]:
+            return done("ceiling")
+        if not cfg["judged"]:
+            return done("off")
+        if tokens is None or tokens < cfg["minimum"]:
+            return done("below-minimum")
+        state = fc_compactlog.pane_state(pane)
+        if reason := cooldown_reason(state, tokens, exchanges, now):
+            return done("cooldown", reason)
+    except Exception:
+        return done("error", "response")
+
+    def fail(kind, asked):
+        if asked:
+            state.update(last_asked_at=now, last_asked_tokens=tokens)
+        state["failures"], state["retry_after"] = backoff(state.get("failures", 0), now)
+        try:
+            fc_compactlog.save_pane_state(pane, state)
+        except Exception:
+            pass
+        return done("error", kind)
+
+    try:
+        fc_config.apply_config(move=False)
+        fc_config.typesafe_key(os.environ, "compact judge")
+    except (Exception, SystemExit):
+        return fail("configuration", False)
+    cfg = fc_config.COMPACT  # apply_config re-reads it
+    if role not in PROFILES:
+        return fail("configuration", False)
+    try:
+        snap = fc_snapshot.snapshot(_live_messages(rows))
+        if _request_bytes(snap["state"]) > MAX_REQUEST_BYTES:
+            return fail("input", False)
+    except Exception:
+        return fail("input", False)
+    try:
+        reply = fc_models.jev_ask(os.environ, {}, snap["state"], QUESTIONS, "compact judge", timeout=JUDGE_TIMEOUT)
+        judgment = parse_judgment(reply)
+    except Exception as exc:
+        return fail(_error_kind(exc), True)
+    profile = PROFILES[role]
+    p_finished = judgment["done"]["probabilities"]["finished"]
+    p_hands_on = judgment["shape"]["probabilities"]["hands_on"]
+    usage = tokens / cfg["budget"]
+    value, floor = score(p_finished, p_hands_on, profile["coordinationWeight"]), floor_for(usage, profile["floors"])
+    state.update(last_asked_at=now, last_asked_tokens=tokens, failures=0)
+    state.pop("retry_after", None)
+    try:
+        fc_compactlog.save_pane_state(pane, state)
+    except Exception:
+        pass
+    return done("qualifies" if value >= floor else "below-floor", p_finished=p_finished, p_hands_on=p_hands_on,
+                score=round(value, 3), floor=round(floor, 3), usage=round(usage, 3))
