@@ -11,6 +11,27 @@ _spec.loader.exec_module(fc)
 import fc_config
 
 
+class CompactConfig(unittest.TestCase):
+    def setUp(self):
+        saved = dict(vars(fc_config)); self.addCleanup(lambda: vars(fc_config).update(saved))
+
+    def apply(self, compact):
+        with mock.patch.object(fc_config, "read_config", return_value={"compact": compact}): fc_config.apply_config(move=False)
+
+    def test_compact_keys_are_checked(self):
+        for compact, msg in (({"minimum": 0}, "compact.minimum must be a whole number of 1 or more, not 0"),
+                             ({"idle_seconds": -1}, "compact.idle_seconds must be a whole number of 0 or more, not -1"),
+                             ({"judged": "no"}, "compact.judged must be true or false, not 'no'")):
+            with self.assertRaises(SystemExit) as c: self.apply(compact)
+            self.assertEqual(c.exception.code, f"{fc_config.CONFIG_PATH}: {msg}")
+        self.apply({"ceiling": 180000})
+        self.assertEqual(fc_config.COMPACT, {**fc_config.COMPACT_DEFAULTS, "ceiling": 180000})
+
+    def test_the_env_var_turns_everything_off(self):
+        with mock.patch.dict(os.environ, {"COMPOSE_NO_COMPACT": "1"}): self.assertEqual(fc_config.compact_off(), "COMPOSE_NO_COMPACT is set")
+        with mock.patch.dict(os.environ, {"COMPOSE_NO_COMPACT": ""}): self.assertIsNone(fc_config.compact_off())
+
+
 class FactoryConfig(unittest.TestCase):
     def setUp(self):
         saved = dict(vars(fc_config)); self.addCleanup(lambda: vars(fc_config).update(saved))  # apply_config sets module globals

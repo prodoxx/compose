@@ -128,6 +128,7 @@ class Doctor(unittest.TestCase):
 
 
     GH_WARNING = "WARNING: gh is not logged in: compose bug reports are saved, not filed on GitHub (run: gh auth login)"
+    COMPACTION = "compaction: judged on, ceiling 150000"
     READY = "every step compose needs is ready"
 
     def doctor(self, fails=()):
@@ -146,19 +147,25 @@ class Doctor(unittest.TestCase):
 
     def test_doctor_warns_when_gh_is_logged_out(self):
         status, lines, calls = self.doctor(fails=["auth status"])
-        self.assertEqual((status, lines), (0, [self.GH_WARNING, self.READY]))  # gh's own text stays out
+        self.assertEqual((status, lines), (0, [self.GH_WARNING, self.COMPACTION, self.READY]))  # gh's own text stays out
         self.assertIn("auth status", calls)
+
+    def test_doctor_reports_the_compaction_state(self):
+        with mock.patch.dict(os.environ, {"COMPOSE_NO_COMPACT": ""}):
+            self.assertIn("compaction: judged on, ceiling 150000", self.doctor()[1])
+        with mock.patch.dict(os.environ, {"COMPOSE_NO_COMPACT": "1"}):
+            self.assertIn("compaction: off for this session (COMPOSE_NO_COMPACT is set)", self.doctor()[1])
 
     def test_doctor_is_quiet_when_gh_is_logged_in(self):
         status, lines, calls = self.doctor()
-        self.assertEqual((status, lines), (0, [self.READY]))
+        self.assertEqual((status, lines), (0, [self.COMPACTION, self.READY]))
         self.assertIn("auth status", calls)
 
     def test_doctor_shows_the_gh_warning_and_herdr_row_and_still_passes(self):
         self.herdr_config('[ui.toast]\ndelivery = "system"\n')
         status, lines, _ = self.doctor(fails=["auth status"])
         self.assertEqual(status, 0)
-        self.assertEqual(sorted(l.split(":")[0] for l in lines[:-1]), ["MISSING", "WARNING"])
+        self.assertEqual(sorted(l.split(":")[0] for l in lines[:-2]), ["MISSING", "WARNING"])  # then the compaction line and READY
         self.assertIn(self.GH_WARNING, lines)
         self.assertEqual(lines[-1], self.READY)
 
@@ -212,7 +219,7 @@ class DoctorNotes(unittest.TestCase):
         env.write_text("TYPESAFE_API_KEY=ts-test\n")
         keys = [("openrouter_api_key", cfg), ("workspaces.w.linear_api_key", cfg), ("TYPESAFE_API_KEY", env)]
         with mock.patch.object(fc.fc_config, "CONFIG_PATH", cfg), mock.patch.object(fc.fc_config, "ENV_FILE", env):
-            self.assertEqual(self.doctor(self.ROWS[:2]), (0, [Doctor.READY]))
+            self.assertEqual(self.doctor(self.ROWS[:2]), (0, [Doctor.COMPACTION, Doctor.READY]))
             code, lines = self.doctor(self.ROWS[:2], keys)
             self.assertEqual((self.old.call_args, lines[-1]), (mock.call(cfg, env), Doctor.READY))
             warn = [l for l in lines if l.startswith("WARNING:")]
@@ -293,14 +300,14 @@ class DoctorWarnings(unittest.TestCase):
                          [ClashLines.line("openrouter_api_key", "~/config.json"), ClashLines.line("TYPESAFE_API_KEY", "~/.env")])
 
     def test_herdr_config_row_quiet_absent_and_sound_only(self):
-        self.assertEqual(self.doctor(self.OK), (0, [Doctor.GH_WARNING, self.READY]))  # quiet: no herdr line at all
+        self.assertEqual(self.doctor(self.OK), (0, [Doctor.GH_WARNING, Doctor.COMPACTION, self.READY]))  # quiet: no herdr line at all
         for text, loud in ((None, "ui.sound.enabled=true"), ('[ui.toast]\ndelivery = "off"\n[ui.sound]\nenabled = true\n', "ui.sound.enabled=true"),
                            ('[ui.toast]\ndelivery = "system"\n[ui.sound]\nenabled = false\n', "ui.toast.delivery=system")):
             with self.subTest(text=text):
                 (self.home / ".config" / "herdr" / "config.toml").unlink(missing_ok=True)
                 text and self.herdr_config(text)
                 code, lines = self.doctor(self.OK)  # optional: exit 0, and the summary still says ready
-                self.assertEqual((code, lines[-1], sorted(lines[:-1])), (0, self.READY, sorted([Doctor.GH_WARNING, self.HERDR.format(loud)])))
+                self.assertEqual((code, lines[-2:], sorted(lines[:-2])), (0, [Doctor.COMPACTION, self.READY], sorted([Doctor.GH_WARNING, self.HERDR.format(loud)])))
 
     def test_init_stop_line_names_the_tool_rows_that_stop_it(self):
         skill = ("herdr skill", ".claude/skills/none/SKILL.md", "herdr --skill", "required", False, "run")
@@ -645,13 +652,13 @@ class Preflight(unittest.TestCase):
                 "2 problems to fix before work starts"]))
             self.dirty = []
             with self.serve(openrouter=Answer({}), linear=Answer({})):
-                self.assertEqual(self.doctor(args), (0, ["WARNING: load average 51 on 8 cores", "every step compose needs is ready"]))
+                self.assertEqual(self.doctor(args), (0, ["WARNING: load average 51 on 8 cores", Doctor.COMPACTION, "every step compose needs is ready"]))
         with mock.patch.object(fc.fc_core, "all_projects", return_value={}), self.serve(openrouter=Answer({}), linear=Answer({})):
             code, lines = self.doctor(args)
             self.assertEqual(code, 1)
             self.assertTrue(lines[0].startswith(f"PROBLEM: no project 'p' in {self.repo}"), lines)
         with self.serve(openrouter=Answer({}), linear=Answer({})):  # no project named: no tree to check
-            self.assertEqual(self.doctor(None), (0, ["every step compose needs is ready"]))
+            self.assertEqual(self.doctor(None), (0, [Doctor.COMPACTION, "every step compose needs is ready"]))
 
 
 if __name__ == "__main__":

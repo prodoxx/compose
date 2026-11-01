@@ -243,6 +243,10 @@ def cmd_doctor(a):
     if problems:
         print(f"{len(problems)} problem{'s' if len(problems) > 1 else ''} to fix before work starts")
         sys.exit(1)
+    if off := fc_config.compact_off():
+        print(f"compaction: off for this session ({off})")
+    else:
+        print(f"compaction: judged {'on' if fc_config.COMPACT['judged'] else 'off'}, ceiling {fc_config.COMPACT['ceiling']}")
     print("every step compose needs is ready")
 
 def created_from(repo, branch):
