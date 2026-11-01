@@ -76,5 +76,116 @@ class Policy(unittest.TestCase):
         self.assertIsNone(fc.fc_compact.cooldown_reason({}, 90000, 5, 1000.0))
 
 
+import json, tempfile
+
+ROWS = []
+
+
+def rec(kind, **k):
+    base = {"type": kind, "timestamp": k.pop("at", "2026-11-01T10:00:00.000Z"), "uuid": str(len(ROWS))}
+    base.update(k); ROWS.append(base); return base
+
+
+class Transcript(unittest.TestCase):
+    def setUp(self):
+        ROWS.clear()
+
+    def write(self):
+        path = Path(tempfile.mkdtemp()) / "s.jsonl"
+        path.write_text("".join(json.dumps(r) + "\n" for r in ROWS))
+        return path
+
+    def test_context_tokens_is_the_last_main_assistant_usage(self):
+        rec("assistant", message={"id": "m1", "usage": {"input_tokens": 100, "cache_creation_input_tokens": 20, "cache_read_input_tokens": 30, "output_tokens": 5}, "content": []})
+        rec("assistant", isSidechain=True, message={"id": "s1", "usage": {"input_tokens": 9000, "output_tokens": 1}, "content": []})
+        self.assertEqual(fc.fc_transcript.context_tokens(fc.fc_transcript.records(self.write())), 150)
+
+    def test_a_transcript_without_usage_has_no_token_count(self):
+        rec("user", message={"role": "user", "content": "hi"}, origin={"kind": "human"})
+        self.assertIsNone(fc.fc_transcript.context_tokens(fc.fc_transcript.records(self.write())))
+        self.assertEqual(fc.fc_transcript.records(Path("/nonexistent.jsonl")), [])
+
+    def test_records_skip_lines_that_do_not_parse(self):
+        path = Path(tempfile.mkdtemp()) / "s.jsonl"
+        path.write_text('{"type": "user"}\nnot json\n\n[1, 2]\n{"type": "assistant"}\n')
+        self.assertEqual([r["type"] for r in fc.fc_transcript.records(path)], ["user", "assistant"])
+
+    def test_compactions_carry_the_boundary_metadata(self):
+        rec("user", message={"role": "user", "content": "hi"}, origin={"kind": "human"})
+        rec("system", subtype="compact_boundary", compactMetadata={"trigger": "auto", "preTokens": 167000, "postTokens": 30000, "durationMs": 61000})
+        c, = fc.fc_transcript.compactions(fc.fc_transcript.records(self.write()))
+        self.assertEqual((c["trigger"], c["pre"], c["post"], c["duration_ms"], c["index"]), ("auto", 167000, 30000, 61000, 1))
+        self.assertEqual(c["at"], "2026-11-01T10:00:00.000Z")
+
+    def test_owner_prompts_exclude_hooks_summaries_and_notifications(self):
+        rec("user", at="2026-11-01T10:00:01Z", message={"role": "user", "content": "focus, what next?"}, origin={"kind": "human"})
+        rec("user", at="2026-11-01T10:00:02Z", message={"role": "user", "content": [{"type": "text", "text": "hook"}]}, isMeta=True)
+        rec("user", at="2026-11-01T10:00:03Z", message={"role": "user", "content": "This session is being continued from a previous conversation"}, isCompactSummary=True, turnOrigin="human")
+        rec("user", at="2026-11-01T10:00:04Z", message={"role": "user", "content": "<task-notification>x</task-notification>"})
+        rec("user", at="2026-11-01T10:00:05Z", message={"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]})
+        rec("user", at="2026-11-01T10:00:06Z", message={"role": "user", "content": "<command-message>compose</command-message>"}, origin={"kind": "human"})
+        rows = fc.fc_transcript.records(self.write())
+        self.assertEqual([p["text"] for p in fc.fc_transcript.owner_prompts(rows)], ["focus, what next?", "<command-message>compose</command-message>"])
+        self.assertEqual([p["text"] for p in fc.fc_transcript.owner_prompts(rows, after="2026-11-01T10:00:01Z")], ["<command-message>compose</command-message>"])
+
+    def test_a_prompt_without_origin_counts_unless_it_is_machine_text(self):
+        rec("user", message={"role": "user", "content": [{"type": "text", "text": "plain words"}]})
+        rec("user", message={"role": "user", "content": "<local-command-stdout>x</local-command-stdout>"})
+        rec("user", message={"role": "user", "content": "<system-reminder>x</system-reminder>"})
+        rec("user", message={"role": "user", "content": "task done"}, origin={"kind": "task-notification"})
+        rows = fc.fc_transcript.records(self.write())
+        self.assertEqual([p["text"] for p in fc.fc_transcript.owner_prompts(rows)], ["plain words"])
+
+    def test_exchanges_count_from_the_last_compaction(self):
+        for i in range(3):
+            rec("user", message={"role": "user", "content": f"q{i}"}, origin={"kind": "human"}); rec("assistant", message={"id": f"a{i}", "content": [], "usage": {"input_tokens": 1}})
+        rec("system", subtype="compact_boundary", compactMetadata={"trigger": "manual", "preTokens": 1, "postTokens": 1, "durationMs": 1})
+        rec("user", message={"role": "user", "content": "q"}, origin={"kind": "human"}); rec("assistant", message={"id": "b", "content": [], "usage": {"input_tokens": 1}})
+        rec("user", message={"role": "user", "content": "unanswered"}, origin={"kind": "human"})
+        self.assertEqual(fc.fc_transcript.exchanges_since_compaction(fc.fc_transcript.records(self.write())), 1)
+
+    def test_exchanges_ignore_tool_results_and_meta_records(self):
+        rec("user", message={"role": "user", "content": "q"}, origin={"kind": "human"})
+        rec("assistant", message={"id": "a", "content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {}}]})
+        rec("user", message={"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]})
+        rec("assistant", message={"id": "b", "content": []})
+        rec("user", message={"role": "user", "content": "hook"}, isMeta=True)
+        rec("assistant", isSidechain=True, message={"id": "c", "content": []})
+        self.assertEqual(fc.fc_transcript.exchanges_since_compaction(fc.fc_transcript.records(self.write())), 1)
+
+    def test_messages_merge_blocks_and_attach_tool_results(self):
+        rec("user", message={"role": "user", "content": "edit it"}, origin={"kind": "human"})
+        rec("assistant", message={"id": "m1", "content": [{"type": "text", "text": "Editing."}], "usage": {"input_tokens": 1}})
+        rec("assistant", message={"id": "m1", "content": [{"type": "tool_use", "id": "t1", "name": "Edit", "input": {"file_path": "/a.py"}}], "usage": {"input_tokens": 1}})
+        rec("user", message={"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "done", "is_error": False}]})
+        msgs = fc.fc_transcript.messages(fc.fc_transcript.records(self.write()))
+        self.assertEqual([m["role"] for m in msgs], ["user", "assistant"])
+        self.assertEqual(msgs[1]["text"], "Editing.")
+        self.assertEqual(msgs[1]["toolUses"], [{"tool": "Edit", "input": {"file_path": "/a.py"}, "text": "done", "isError": False}])
+
+    def test_messages_handle_block_results_errors_missing_results_and_sidechains(self):
+        rec("user", message={"role": "user", "content": "go"}, origin={"kind": "human"})
+        rec("assistant", message={"id": "m1", "content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "x"}}, {"type": "tool_use", "id": "t2", "name": "Read", "input": {}}]})
+        rec("assistant", isSidechain=True, message={"id": "s1", "content": [{"type": "text", "text": "inner"}]})
+        rec("user", isSidechain=True, message={"role": "user", "content": "inner prompt"})
+        rec("user", message={"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": [{"type": "text", "text": "boom"}, {"type": "text", "text": "!"}], "is_error": True}]})
+        msgs = fc.fc_transcript.messages(fc.fc_transcript.records(self.write()))
+        self.assertEqual([m["role"] for m in msgs], ["user", "assistant"])
+        self.assertEqual(msgs[0], {"role": "user", "text": "go", "toolUses": []})
+        self.assertEqual(msgs[1]["toolUses"], [
+            {"tool": "Bash", "input": {"command": "x"}, "text": "boom\n!", "isError": True},
+            {"tool": "Read", "input": {}, "text": None, "isError": False}])
+
+    def test_daily_input_sums_per_day(self):
+        rec("assistant", at="2026-11-01T10:00:00Z", message={"id": "m1", "content": [], "usage": {"input_tokens": 10, "cache_read_input_tokens": 90}})
+        rec("assistant", at="2026-11-02T10:00:00Z", message={"id": "m2", "content": [], "usage": {"input_tokens": 5}})
+        rec("assistant", at="2026-11-02T11:00:00Z", isSidechain=True, message={"id": "s", "content": [], "usage": {"input_tokens": 500}})
+        self.assertEqual(fc.fc_transcript.daily_input(fc.fc_transcript.records(self.write())), {"2026-11-01": 100, "2026-11-02": 5})
+
+    def test_transcript_path_slugs_the_folder(self):
+        self.assertEqual(fc.fc_transcript.transcript_path("/Users/r/apps/x.y", "abc").name, "abc.jsonl")
+        self.assertEqual(fc.fc_transcript.transcript_path("/Users/r/apps/x.y", "abc").parent.name, "-Users-r-apps-x-y")
+
+
 if __name__ == "__main__":
     unittest.main()
