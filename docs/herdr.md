@@ -183,4 +183,5 @@ After a compaction, `compose reenter` points the team lead at its handoff as wel
 `compose crew restart --force` restarts one that has work in flight, from the handoff and the project's state; mid-turn it always refuses.
 A `run` or `verify` it started keeps going meanwhile.
 Those work in their own session, so a closed tab or a crashed session never ends them.
-Only outside herdr do the engineering manager and the team lead run `watch` in the background themselves; inside herdr the hook parks the manager's watches too.
+Only outside herdr do the engineering manager and the team lead run `watch` themselves; inside herdr the hook parks the manager's watches too.
+Outside herdr, or in a harness without a Stop hook, the engineering manager runs `compose watch --repo <wt> --project <slug> --from orchestrator --timeout 240` as a Bash background command, never in a Monitor (it expires silently, and a turn that ends on it never wakes), acts on the lines it prints, and runs it again.
