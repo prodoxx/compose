@@ -62,6 +62,7 @@ fc_pin
 fc_reports
 fc_factorystate
 fc_manager
+fc_compactor
 fc_crewpick
 fc_crew
 fc_shed

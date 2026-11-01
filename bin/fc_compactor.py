@@ -1,0 +1,166 @@
+import os, subprocess, sys, time
+from pathlib import Path
+import fc_compactlog, fc_config, fc_herdr, fc_manager, fc_transcript
+
+# The detached process the Stop hook starts to compact an engineering manager or team lead session at an idle moment: it waits for the
+# pane to be quiet, has the session write its handoff, then types `/compact` with a fixed focus. Every step lands in the compaction log
+# and every exit path clears the pane's in-flight marker. It types only into a pane that is idle with an empty input line.
+
+PROMPT_MARKS = ("❯", ">")
+POLL = 2.0
+GATE_LIMIT = 1800.0  # how long it waits for a quiet pane before giving up
+CEILING_HOLD = 5.0  # a ceiling compaction cannot wait for the idle window: the session is about to run out of room
+SETTLE_LIMIT = 300.0
+START_WAIT = 10.0  # how long the pane gets to start working on the handoff prompt before it counts as already done
+REQUIET_LIMIT = 60.0
+COMPACT_LIMIT = 300.0
+
+_HANDOFF = "compose: before a compaction, bring your handoff at {path} up to date now: sections %s, under 3,000 words, then reply with one line and nothing else."
+HANDOFF_PROMPTS = {
+    "manager": _HANDOFF % "`## Teammates live`, `## Open questions`, `## Decisions`, `## Focus`",
+    "lead": _HANDOFF % "`## Open threads`, `## Holds`, `## Pending go's`, `## Teammates live`, `## Next`",
+}
+HANDOFF_PROMPT = HANDOFF_PROMPTS["manager"]
+FOCUS = ("/compact The handoff at {path} is authoritative: keep the product owner's standing instructions and decisions, what each teammate "
+         "waits on, and the watch rules exact; drop tool output and file contents.")
+
+
+# ---------- reading the pane ----------
+def input_line(lines):
+    """The text after the last line that starts with a prompt mark, stripped; None when no line does. Earlier prompt lines are echoed prompts."""
+    for line in reversed(lines):
+        for mark in PROMPT_MARKS:
+            if line.startswith(mark):
+                return line[len(mark):].strip()
+    return None
+
+def pane_status(pane):
+    got = fc_herdr.herdr("agent", "get", pane)
+    status = got.get("agent_status") if isinstance(got, dict) else None
+    return status if isinstance(status, str) else None
+
+def pane_quiet(pane):
+    """Whether the agent is idle or done and nothing waits in its input line."""
+    if pane_status(pane) not in ("idle", "done"):
+        return False
+    return input_line(fc_herdr.herdr_text("agent", "read", pane, "--source", "detection", "--lines", "12").split("\n")) == ""
+
+def wait_settled(pane, timeout=SETTLE_LIMIT, poll=POLL):
+    """Wait for the pane to take a prompt and finish it: up to START_WAIT seconds for `working` or `blocked`, then until `idle` or `done`.
+    False on timeout or when it ends up `blocked`."""
+    end = time.monotonic() + timeout
+    start_by = time.monotonic() + START_WAIT
+    started = False
+    while time.monotonic() < end:
+        status = pane_status(pane)
+        if status == "blocked":
+            return False
+        if status == "working":
+            started = True
+        elif status in ("idle", "done") and (started or time.monotonic() >= start_by):
+            return True
+        time.sleep(poll)
+    return False
+
+
+# ---------- the owner's own prompts ----------
+def utc_second_before_now():
+    """The UTC second before this one as `%Y-%m-%dT%H:%M:%SZ`: a transcript time with milliseconds in the same second sorts before that second's
+    own whole-second text, so an owner prompt that arrives a second early aborts a compaction, which is the safe side."""
+    return time.strftime(fc_compactlog.TIME_FORMAT, time.gmtime(time.time() - 1))
+
+def owner_typed_since(transcript, pane, since_iso):
+    """Whether the transcript holds a prompt stamped after `since_iso` that compose did not type into this pane."""
+    return any(not fc_compactlog.was_typed(pane, p["text"], since_iso) for p in fc_transcript.owner_prompts(fc_transcript.records(transcript), after=since_iso))
+
+def wait_quiet(pane, transcript, mode):
+    """Wait until the pane has been quiet for the idle window with no owner prompt in it. False after GATE_LIMIT seconds."""
+    hold = fc_config.COMPACT["idle_seconds"] if mode == "judged" else CEILING_HOLD
+    give_up = time.monotonic() + GATE_LIMIT
+    began = since = None
+    while time.monotonic() < give_up:
+        if pane_quiet(pane):
+            now = time.monotonic()
+            if began is None:
+                began, since = now, utc_second_before_now()
+            if owner_typed_since(transcript, pane, since):
+                began = None  # the owner is at the keyboard: the window starts over
+            elif now - began >= hold:
+                return True
+        else:
+            began = None
+        time.sleep(POLL)
+    return False
+
+
+# ---------- the run ----------
+def step(pane, role, name, outcome=None, **fields):
+    fc_compactlog.append("step", pane=pane, role=role, step=name, **({"outcome": outcome} if outcome else {}), **fields)
+
+def finish(pane, role, name, outcome, **fields):
+    """End the run on a step that did not lead to a compaction: log it and release the pane."""
+    step(pane, role, name, outcome, **fields)
+    fc_compactlog.clear_inflight(pane)
+
+def compact(a):
+    pane, role, transcript, mode, handoff = a.pane, a.role, Path(a.transcript), a.mode, a.handoff
+    pid = os.getpid()
+    if role not in HANDOFF_PROMPTS:
+        return finish(pane, role, "idle", "unknown-role")
+    fc_compactlog.set_inflight(pane, "idle", pid, mode)
+    if not wait_quiet(pane, transcript, mode):
+        return finish(pane, role, "idle", "gave-up")
+    sent_after = utc_second_before_now()
+    step(pane, role, "handoff", mode=mode)
+    if not fc_manager.tell(pane, HANDOFF_PROMPTS[role].format(path=handoff)):
+        return finish(pane, role, "handoff", "refused")
+    fc_compactlog.set_inflight(pane, "handoff", pid, mode)
+    if not wait_settled(pane):
+        return finish(pane, role, "handoff", "not-settled")
+    if owner_typed_since(transcript, pane, sent_after):
+        fc_compactlog.append("compaction", pane=pane, role=role, trigger=mode, outcome="aborted-owner-typing")
+        return fc_compactlog.clear_inflight(pane)
+    give_up = time.monotonic() + REQUIET_LIMIT
+    while not pane_quiet(pane):
+        if time.monotonic() >= give_up:
+            return finish(pane, role, "compact", "not-quiet")
+        time.sleep(POLL)
+    before = len(fc_transcript.compactions(fc_transcript.records(transcript)))
+    step(pane, role, "compact", mode=mode)
+    if not fc_manager.tell(pane, FOCUS.format(path=handoff)):
+        return finish(pane, role, "compact", "refused")
+    fc_compactlog.set_inflight(pane, "compact", pid, mode)
+    give_up = time.monotonic() + COMPACT_LIMIT
+    new = None
+    while new is None:
+        found = fc_transcript.compactions(fc_transcript.records(transcript))
+        if len(found) > before:
+            new = found[before]
+        elif time.monotonic() >= give_up:
+            break
+        else:
+            time.sleep(POLL)
+    done = new is not None
+    new = new or {}
+    fc_compactlog.append("compaction", pane=pane, role=role, trigger="compose" if mode == "judged" else "ceiling", pre=new.get("pre"),
+                         post=new.get("post"), duration_ms=new.get("duration_ms"), outcome="done" if done else "timeout")
+    if done:
+        state = {k: v for k, v in fc_compactlog.pane_state(pane).items() if k != "retry_after"}
+        fc_compactlog.save_pane_state(pane, {**state, "baseline": new.get("post"), "failures": 0})
+    fc_compactlog.clear_inflight(pane)
+
+def cmd_compactor(a):
+    """The detached process body. It never raises: whatever goes wrong is a log record, and the pane is released."""
+    try:
+        compact(a)
+    except Exception as e:
+        try:
+            finish(a.pane, a.role, "error", "error", error=type(e).__name__)
+        except Exception:
+            pass
+
+def start(pane, role, transcript, mode, handoff, repo):
+    """Start the compactor detached from this process and its terminal; its pid."""
+    return subprocess.Popen([sys.executable, str(Path(__file__).resolve().with_name("compose.py")), "compactor", "--repo", repo, "--pane", pane,
+                             "--role", role, "--transcript", str(transcript), "--mode", mode, "--handoff", str(handoff)],
+                            start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).pid
