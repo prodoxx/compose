@@ -126,6 +126,7 @@ class Typist(unittest.TestCase):
         last = fc.fc_compactlog.read()[-1]
         self.assertEqual((last["kind"], last["trigger"], last["outcome"], last["post"]), ("compaction", "compose", "done", 30000))
         self.assertEqual((last["pre"], last["duration_ms"]), (90000, 9000))
+        self.assertEqual(last["transcript"], str(self.transcript))
         self.assertIsNone(fc.fc_compactlog.inflight("w1:p2"))
         self.assertEqual(fc.fc_compactlog.pane_state("w1:p2")["baseline"], 30000)
 

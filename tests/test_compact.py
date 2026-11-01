@@ -77,6 +77,7 @@ class Policy(unittest.TestCase):
 
 
 import json, shutil, tempfile, time
+from types import SimpleNamespace
 
 ROWS = []
 
@@ -559,6 +560,81 @@ class Consider(unittest.TestCase):
         self.assertEqual(v["decision"], "qualifies")
         self.assertIn("deploy with key", seen[0])
         self.assertNotIn(secret, seen[0])
+
+
+class Weekly(unittest.TestCase):
+    def setUp(self):
+        d = Path(tempfile.mkdtemp()); self.addCleanup(shutil.rmtree, d)
+        p = mock.patch.object(fc.fc_config, "CONFIG_PATH", d / "config.json"); p.start(); self.addCleanup(p.stop)
+        self.root = d / "projects"
+        (self.root / "proj").mkdir(parents=True)
+        self.path = self.root / "proj" / "sess-abcdef12.jsonl"
+        ROWS.clear()
+        usage = lambda n: {"input_tokens": n - 20, "cache_read_input_tokens": 20, "output_tokens": 1}
+        rec("assistant", at="2026-11-01T09:00:00.000Z", message={"id": "m1", "usage": usage(100), "content": []})
+        rec("system", at="2026-11-01T10:00:00.000Z", subtype="compact_boundary", compactMetadata={"trigger": "auto", "preTokens": 160000, "postTokens": 20000})
+        rec("user", at="2026-11-01T10:05:00.000Z", message={"role": "user", "content": "focus, what next?"}, origin={"kind": "human"})
+        rec("assistant", at="2026-11-01T11:00:00.000Z", message={"id": "m2", "usage": usage(100), "content": []})
+        rec("system", at="2026-11-01T12:00:00.000Z", subtype="compact_boundary", compactMetadata={"trigger": "auto", "preTokens": 174000, "postTokens": 20000})
+        rec("user", at="2026-11-01T12:05:00.000Z", message={"role": "user", "content": "thanks"}, origin={"kind": "human"})
+        rec("assistant", at="2026-11-02T08:00:00.000Z", message={"id": "m3", "usage": usage(100), "content": []})
+        rec("system", at="2026-11-02T09:00:00.000Z", subtype="compact_boundary", compactMetadata={"trigger": "manual", "preTokens": 90000, "postTokens": 30000})
+        self.path.write_text("".join(json.dumps(r) + "\n" for r in ROWS))
+        self.log = [{"kind": "compaction", "at": "2026-11-02T09:00:30Z", "pane": "w1:p2", "role": "manager", "trigger": "compose",
+                     "pre": 90000, "post": 30000, "duration_ms": 9000, "outcome": "done", "transcript": str(self.path)}]
+
+    def test_the_week_counts_triggers_medians_input_and_the_phrase_share(self):
+        w = fc.fc_compactlog.week(self.root, since=0, log=self.log)
+        self.assertEqual(w["compactions"], {"native": 2, "compose": 1})
+        self.assertEqual(w["median_pre"]["native"], 167000)
+        self.assertEqual(w["median_pre"]["compose"], 90000)
+        self.assertEqual(w["where_were_we"], (1, 3))
+        self.assertEqual(sum(w["input_per_session_day"].values()), 300)
+        self.assertEqual(w["input_per_session_day"][("sess-abcdef12", "2026-11-01")], 200)
+
+    def test_a_boundary_is_matched_by_its_own_transcript_and_the_time_window_once(self):
+        other = [{**self.log[0], "transcript": str(self.root / "proj" / "other.jsonl")}]
+        self.assertEqual(fc.fc_compactlog.week(self.root, 0, other)["compactions"], {"native": 2, "manual": 1})
+        early = [{**self.log[0], "at": "2026-11-02T08:49:00Z"}]  # 660 seconds before: out of the window
+        self.assertEqual(fc.fc_compactlog.week(self.root, 0, early)["compactions"], {"native": 2, "manual": 1})
+        bare = [{k: v for k, v in dict(self.log[0], trigger=t, at=at).items() if k != "transcript"} for t, at in (("compose", "2026-11-02T09:00:30Z"), ("ceiling", "2026-11-02T09:00:40Z"))]
+        self.assertEqual(fc.fc_compactlog.week(self.root, 0, bare)["compactions"], {"native": 2, "compose": 1})  # one record, one boundary
+        timeout = [{**self.log[0], "outcome": "timeout"}]
+        self.assertEqual(fc.fc_compactlog.week(self.root, 0, timeout)["compactions"], {"native": 2, "manual": 1})
+
+    def test_the_window_drops_older_boundaries_and_days(self):
+        since = fc.fc_compactlog.epoch("2026-11-02T00:00:00Z")
+        w = fc.fc_compactlog.week(self.root, since, self.log)
+        self.assertEqual(w["compactions"], {"compose": 1})
+        self.assertEqual(w["input_per_session_day"], {("sess-abcdef12", "2026-11-02"): 100})
+        self.assertEqual(w["where_were_we"], (0, 1))
+
+    def test_where_were_we_is_a_case_insensitive_phrase_list(self):
+        self.assertTrue(fc.fc_compactlog.where_were_we("Focus, what do we need to do next?"))
+        self.assertFalse(fc.fc_compactlog.where_were_we("thanks, go ahead"))
+        self.assertFalse(fc.fc_compactlog.where_were_we("x" * 200 + "status"))
+
+    def test_the_command_prints_the_summary(self):
+        out = []
+        now = fc.fc_compactlog.epoch("2026-11-03T00:00:00Z")
+        with mock.patch.object(fc.fc_compactlog, "transcripts", return_value=list(self.root.glob("*/*.jsonl"))), \
+                mock.patch.object(fc.fc_compactlog, "read", side_effect=lambda since=None: self.log), \
+                mock.patch.object(time, "time", return_value=now), mock.patch("builtins.print", out.append):
+            fc.fc_compactlog.cmd_compactions(SimpleNamespace(repo=".", project=None, days=7, since=None))
+        self.assertEqual(out[0], "compactions in the last 7 days (where-were-we is a phrase heuristic)")
+        self.assertIn("  native: 2, median before 167000", out)
+        self.assertIn("  compose: 1, median before 90000", out)
+        self.assertIn("  2026-11-01 sess-abc: 200 input tokens", out)
+        self.assertIn("  where were we: 1/3 first prompts after a compaction", out)
+
+    def test_since_picks_the_window_by_date(self):
+        out = []
+        with mock.patch.object(fc.fc_compactlog, "transcripts", return_value=[self.path]), mock.patch.object(fc.fc_compactlog, "read", return_value=self.log), \
+                mock.patch("builtins.print", out.append):
+            fc.fc_compactlog.cmd_compactions(SimpleNamespace(repo=".", project=None, days=7, since="2026-11-02"))
+        self.assertTrue(out[0].startswith("compactions since 2026-11-02"))
+        self.assertIn("  compose: 1, median before 90000", out)
+        self.assertFalse(any(l.strip().startswith("native") for l in out))
 
 
 if __name__ == "__main__":

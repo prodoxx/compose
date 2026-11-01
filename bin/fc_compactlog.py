@@ -1,5 +1,6 @@
-import calendar, hashlib, json, os, re, time
-import fc_config, fc_core
+import calendar, hashlib, json, os, re, statistics, time
+from pathlib import Path
+import fc_config, fc_core, fc_transcript
 
 # The on-disk side of judged compaction: an append-only measurement log, the prompts compose typed into a pane, one in-flight marker per
 # pane, and the judge's per-pane state. Everything lives under the config home's compact/ folder. Nothing here judges or touches a terminal.
@@ -109,3 +110,89 @@ def pane_state(pane):
 def save_pane_state(pane, state):
     state_dir().mkdir(parents=True, exist_ok=True)
     fc_core.atomic_write(state_path(pane), json.dumps(state))
+
+
+# ---------- the weekly measurement: every Claude Code transcript on this Mac against the log ----------
+WHERE_WERE_WE = ("focus", "where were we", "how are we", "status", "what next", "something is wrong")
+MATCH_WINDOW = 600  # seconds between a transcript boundary and the log record written just after it
+TRIGGER_ORDER = ("compose", "ceiling", "native", "manual")
+
+def where_were_we(text):
+    """Whether a prompt reads like asking where things stand: a phrase from the list in its first 200 characters, any case."""
+    head = str(text)[:200].lower()
+    return any(phrase in head for phrase in WHERE_WERE_WE)
+
+def transcripts(root=None):
+    """Every session transcript under the Claude Code projects folder, sorted."""
+    root = root or Path.home() / ".claude" / "projects"
+    return sorted(root.rglob("*.jsonl"))
+
+def boundary_epoch(at):
+    """A transcript time (`2026-11-01T10:00:00.000Z`) as epoch seconds, or None when it is not one."""
+    try:
+        return calendar.timegm(time.strptime(at[:19], "%Y-%m-%dT%H:%M:%S"))
+    except (TypeError, ValueError):
+        return None
+
+def claim(done, path, when):
+    """The nearest unused log record of a finished compaction for a boundary at `when` in this transcript, marked used; None when there is none.
+    The log record is written after the boundary lands and names the transcript, a record without one matches on the time alone."""
+    best = None
+    for item in done:
+        rec, stamp = item["rec"], item["epoch"]
+        if item["used"] or abs(stamp - when) > MATCH_WINDOW or rec.get("transcript") not in (None, str(path)):
+            continue
+        rank = (rec.get("transcript") is None, abs(stamp - when))  # a record that names this transcript beats one that does not
+        if best is None or rank < best[0]:
+            best = (rank, item)
+    if best is None:
+        return None
+    best[1]["used"] = True
+    return best[1]["rec"]
+
+def numeric(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+def week(root, since, log):
+    """The window's compactions by trigger (a log record decides `compose` or `ceiling`; else the boundary's own `manual`, else `native`),
+    the median context before each trigger's, input tokens per (session, date), and (hits, total) of first prompts after a boundary that ask where things stand."""
+    done = [{"rec": r, "epoch": e, "used": False} for r in log
+            if r.get("kind") == "compaction" and r.get("outcome") == "done" and (e := epoch(r.get("at"))) is not None]
+    counts, pre, hits, total, input_by_day = {}, {}, 0, 0, {}
+    first_day = time.strftime("%Y-%m-%d", time.gmtime(since))
+    for path in transcripts(root):
+        rows = fc_transcript.records(path)
+        for boundary in fc_transcript.compactions(rows):
+            when = boundary_epoch(boundary["at"])
+            if when is None or when < since:
+                continue
+            matched = claim(done, path, when)
+            trigger = matched.get("trigger") if matched and matched.get("trigger") in ("compose", "ceiling") else None
+            trigger = trigger or ("manual" if boundary["trigger"] == "manual" else "native")
+            counts[trigger] = counts.get(trigger, 0) + 1
+            if numeric(boundary["pre"]):
+                pre.setdefault(trigger, []).append(boundary["pre"])
+            first = fc_transcript.owner_prompts(rows, after=boundary["at"])[:1]
+            total += 1
+            hits += bool(first and where_were_we(first[0]["text"]))
+        for date, tokens in fc_transcript.daily_input(rows).items():
+            if date >= first_day:
+                input_by_day[(path.stem, date)] = tokens
+    return {"compactions": counts, "median_pre": {t: int(statistics.median(v)) for t, v in pre.items()},
+            "input_per_session_day": input_by_day, "where_were_we": (hits, total)}
+
+def cmd_compactions(a):
+    """Print the window's compactions by trigger, input per session per day and the where-were-we share."""
+    if a.since:
+        since, label = calendar.timegm(time.strptime(a.since, "%Y-%m-%d")), f"since {a.since}"
+    else:
+        since, label = time.time() - a.days * 86400, f"in the last {a.days} days"
+    w = week(Path.home() / ".claude" / "projects", since, read(since - MATCH_WINDOW))
+    print(f"compactions {label} (where-were-we is a phrase heuristic)")
+    for trigger in sorted(w["compactions"], key=lambda t: TRIGGER_ORDER.index(t) if t in TRIGGER_ORDER else len(TRIGGER_ORDER)):
+        median = w["median_pre"].get(trigger)
+        print(f"  {trigger}: {w['compactions'][trigger]}, median before {median if median is not None else 'unknown'}")
+    for (session, date), tokens in sorted(w["input_per_session_day"].items(), key=lambda kv: (kv[0][1], kv[0][0])):
+        print(f"  {date} {session[:8]}: {tokens} input tokens")
+    hits, total = w["where_were_we"]
+    print(f"  where were we: {hits}/{total} first prompts after a compaction")

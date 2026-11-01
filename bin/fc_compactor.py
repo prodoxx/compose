@@ -147,7 +147,7 @@ def compact(a):
     if not wait_settled(pane):
         return finish(pane, role, "handoff", "not-settled")
     if owner_typed_since(transcript, pane, sent_after):
-        fc_compactlog.append("compaction", pane=pane, role=role, trigger=trigger_for(mode), outcome="aborted-owner-typing")
+        fc_compactlog.append("compaction", pane=pane, role=role, trigger=trigger_for(mode), transcript=str(transcript.path), outcome="aborted-owner-typing")
         return fc_compactlog.clear_inflight(pane)
     give_up = time.monotonic() + REQUIET_LIMIT
     while not pane_quiet(pane):
@@ -171,7 +171,7 @@ def compact(a):
             time.sleep(POLL)
     done = new is not None
     new = new or {}
-    fc_compactlog.append("compaction", pane=pane, role=role, trigger=trigger_for(mode), pre=new.get("pre"),
+    fc_compactlog.append("compaction", pane=pane, role=role, trigger=trigger_for(mode), transcript=str(transcript.path), pre=new.get("pre"),
                          post=new.get("post"), duration_ms=new.get("duration_ms"), outcome="done" if done else "timeout")
     if done:
         state = {k: v for k, v in fc_compactlog.pane_state(pane).items() if k != "retry_after"}
