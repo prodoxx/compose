@@ -22,11 +22,24 @@ class CompactConfig(unittest.TestCase):
         for compact, msg in (({"minimum": 0}, "compact.minimum must be a whole number of 1 or more, not 0"),
                              ({"idle_seconds": -1}, "compact.idle_seconds must be a whole number of 0 or more, not -1"),
                              ({"minimum": True}, "compact.minimum must be a whole number of 1 or more, not True"),  # a bool is not a whole number
-                             ({"judged": "no"},"compact.judged must be true or false, not 'no'")):
+                             ({"judged": "no"}, "compact.judged must be true or false, not 'no'")):
             with self.assertRaises(SystemExit) as c: self.apply(compact)
             self.assertEqual(c.exception.code, f"{fc_config.CONFIG_PATH}: {msg}")
         self.apply({"ceiling": 180000})
         self.assertEqual(fc_config.COMPACT, {**fc_config.COMPACT_DEFAULTS, "ceiling": 180000})
+
+    def test_the_ceiling_is_not_below_the_minimum(self):
+        with self.assertRaises(SystemExit) as c: self.apply({"minimum": 90000, "ceiling": 80000})
+        self.assertEqual(c.exception.code, f"{fc_config.CONFIG_PATH}: compact.ceiling must not be below compact.minimum")
+        self.apply({"minimum": 90000, "ceiling": 90000})
+        self.assertEqual((fc_config.COMPACT["minimum"], fc_config.COMPACT["ceiling"]), (90000, 90000))
+
+    def test_compact_is_an_object_of_known_settings(self):
+        for compact, msg in (([1], "compact must be an object of settings, not [1]"),
+                             ("off", "compact must be an object of settings, not 'off'"),
+                             ({"idle": 60}, "compact has no setting 'idle': it takes judged, minimum, budget, ceiling, idle_seconds, cooldown")):
+            with self.assertRaises(SystemExit) as c: self.apply(compact)
+            self.assertEqual(c.exception.code, f"{fc_config.CONFIG_PATH}: {msg}")
 
     def test_the_env_var_turns_everything_off(self):
         with mock.patch.dict(os.environ, {"COMPOSE_NO_COMPACT": "1"}): self.assertEqual(fc_config.compact_off(), "COMPOSE_NO_COMPACT is set")

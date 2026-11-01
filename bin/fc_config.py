@@ -200,12 +200,20 @@ def apply_config(move=True, harness=None):
         sys.exit(f"{CONFIG_PATH}: factory.night_budget must be a number of dollars, 0 or more, not {FACTORY['night_budget']!r}")
     if not (isinstance(FACTORY["night_until"], str) and re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", FACTORY["night_until"])):
         sys.exit(f"{CONFIG_PATH}: factory.night_until must be HH:MM, not {FACTORY['night_until']!r}")
-    COMPACT = {**COMPACT_DEFAULTS, **st.get("compact", {})}
+    compact = st.get("compact", {})
+    if not isinstance(compact, dict):
+        sys.exit(f"{CONFIG_PATH}: compact must be an object of settings, not {compact!r}")
+    for k in compact:
+        if k not in COMPACT_DEFAULTS:
+            sys.exit(f"{CONFIG_PATH}: compact has no setting {k!r}: it takes {', '.join(COMPACT_DEFAULTS)}")
+    COMPACT = {**COMPACT_DEFAULTS, **compact}
     if type(COMPACT["judged"]) is not bool:
         sys.exit(f"{CONFIG_PATH}: compact.judged must be true or false, not {COMPACT['judged']!r}")
     for k, least in (("minimum", 1), ("budget", 1), ("ceiling", 1), ("idle_seconds", 0), ("cooldown", 0)):
         if type(COMPACT[k]) is not int or COMPACT[k] < least:
             sys.exit(f"{CONFIG_PATH}: compact.{k} must be a whole number of {least} or more, not {COMPACT[k]!r}")
+    if COMPACT["ceiling"] < COMPACT["minimum"]:  # a ceiling below the minimum would compact before the judge is ever asked
+        sys.exit(f"{CONFIG_PATH}: compact.ceiling must not be below compact.minimum")
     WORKSPACE = name
     HARNESS = harness
     auth = fc_auth.read_auth(AUTH_PATH)
