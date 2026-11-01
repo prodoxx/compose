@@ -14,6 +14,7 @@ SETTLE_LIMIT = 300.0
 START_WAIT = 10.0  # how long the pane gets to start working on the handoff prompt before it counts as already done
 REQUIET_LIMIT = 60.0
 COMPACT_LIMIT = 300.0
+MARKER_REFRESH = 60.0  # the in-flight marker expires after 900 seconds and the idle gate can wait 1800
 
 _HANDOFF = "compose: before a compaction, bring your handoff at {path} up to date now: sections %s, under 3,000 words, then reply with one line and nothing else."
 HANDOFF_PROMPTS = {
@@ -69,21 +70,49 @@ def utc_second_before_now():
     own whole-second text, so an owner prompt that arrives a second early aborts a compaction, which is the safe side."""
     return time.strftime(fc_compactlog.TIME_FORMAT, time.gmtime(time.time() - 1))
 
+class Watched:
+    """A transcript's rows, re-read only when the file's size or modification time changed since the last read (a failed stat re-reads)."""
+    def __init__(self, path):
+        self.path, self.sig, self._rows = Path(path), None, []
+
+    def rows(self):
+        try:
+            st = os.stat(self.path)
+            sig = (st.st_size, st.st_mtime_ns)
+        except OSError:
+            sig = None
+        if sig is None or sig != self.sig:
+            self._rows, self.sig = fc_transcript.records(self.path), sig
+        return self._rows
+
+def _watched(transcript):
+    return transcript if isinstance(transcript, Watched) else Watched(transcript)
+
 def owner_typed_since(transcript, pane, since_iso):
-    """Whether the transcript holds a prompt stamped after `since_iso` that compose did not type into this pane."""
-    return any(not fc_compactlog.was_typed(pane, p["text"], since_iso) for p in fc_transcript.owner_prompts(fc_transcript.records(transcript), after=since_iso))
+    """Whether the transcript (a path) holds a prompt stamped after `since_iso` that compose did not type into this pane."""
+    return any(not fc_compactlog.was_typed(pane, p["text"], since_iso) for p in fc_transcript.owner_prompts(_watched(transcript).rows(), after=since_iso))
+
+def trigger_for(mode):
+    """The compaction log's name for a run: `compose` for a judged one, `ceiling` for one at the ceiling."""
+    return "compose" if mode == "judged" else "ceiling"
 
 def wait_quiet(pane, transcript, mode):
-    """Wait until the pane has been quiet for the idle window with no owner prompt in it. False after GATE_LIMIT seconds."""
+    """Wait until the pane has been quiet for the idle window with no owner prompt in it. False after GATE_LIMIT seconds.
+    The pane's in-flight marker is refreshed every MARKER_REFRESH seconds, since the wait outlasts its expiry."""
+    watched = _watched(transcript)
     hold = fc_config.COMPACT["idle_seconds"] if mode == "judged" else CEILING_HOLD
     give_up = time.monotonic() + GATE_LIMIT
+    refreshed = time.monotonic()
     began = since = None
     while time.monotonic() < give_up:
+        if time.monotonic() - refreshed >= MARKER_REFRESH:
+            fc_compactlog.set_inflight(pane, "idle", os.getpid(), mode)
+            refreshed = time.monotonic()
         if pane_quiet(pane):
             now = time.monotonic()
             if began is None:
                 began, since = now, utc_second_before_now()
-            if owner_typed_since(transcript, pane, since):
+            if owner_typed_since(watched, pane, since):
                 began = None  # the owner is at the keyboard: the window starts over
             elif now - began >= hold:
                 return True
@@ -103,10 +132,10 @@ def finish(pane, role, name, outcome, **fields):
     fc_compactlog.clear_inflight(pane)
 
 def compact(a):
-    pane, role, transcript, mode, handoff = a.pane, a.role, Path(a.transcript), a.mode, a.handoff
+    pane, role, transcript, mode, handoff = a.pane, a.role, Watched(a.transcript), a.mode, a.handoff
     pid = os.getpid()
     if role not in HANDOFF_PROMPTS:
-        return finish(pane, role, "idle", "unknown-role")
+        return step(pane, role, "idle", "unknown-role")  # no marker of ours was set: another compactor's may hold this pane
     fc_compactlog.set_inflight(pane, "idle", pid, mode)
     if not wait_quiet(pane, transcript, mode):
         return finish(pane, role, "idle", "gave-up")
@@ -118,14 +147,14 @@ def compact(a):
     if not wait_settled(pane):
         return finish(pane, role, "handoff", "not-settled")
     if owner_typed_since(transcript, pane, sent_after):
-        fc_compactlog.append("compaction", pane=pane, role=role, trigger=mode, outcome="aborted-owner-typing")
+        fc_compactlog.append("compaction", pane=pane, role=role, trigger=trigger_for(mode), outcome="aborted-owner-typing")
         return fc_compactlog.clear_inflight(pane)
     give_up = time.monotonic() + REQUIET_LIMIT
     while not pane_quiet(pane):
         if time.monotonic() >= give_up:
             return finish(pane, role, "compact", "not-quiet")
         time.sleep(POLL)
-    before = len(fc_transcript.compactions(fc_transcript.records(transcript)))
+    before = len(fc_transcript.compactions(transcript.rows()))
     step(pane, role, "compact", mode=mode)
     if not fc_manager.tell(pane, FOCUS.format(path=handoff)):
         return finish(pane, role, "compact", "refused")
@@ -133,7 +162,7 @@ def compact(a):
     give_up = time.monotonic() + COMPACT_LIMIT
     new = None
     while new is None:
-        found = fc_transcript.compactions(fc_transcript.records(transcript))
+        found = fc_transcript.compactions(transcript.rows())
         if len(found) > before:
             new = found[before]
         elif time.monotonic() >= give_up:
@@ -142,11 +171,13 @@ def compact(a):
             time.sleep(POLL)
     done = new is not None
     new = new or {}
-    fc_compactlog.append("compaction", pane=pane, role=role, trigger="compose" if mode == "judged" else "ceiling", pre=new.get("pre"),
+    fc_compactlog.append("compaction", pane=pane, role=role, trigger=trigger_for(mode), pre=new.get("pre"),
                          post=new.get("post"), duration_ms=new.get("duration_ms"), outcome="done" if done else "timeout")
     if done:
         state = {k: v for k, v in fc_compactlog.pane_state(pane).items() if k != "retry_after"}
-        fc_compactlog.save_pane_state(pane, {**state, "baseline": new.get("post"), "failures": 0})
+        if new.get("post") is not None:  # a boundary without postTokens leaves the old baseline in place
+            state["baseline"] = new["post"]
+        fc_compactlog.save_pane_state(pane, {**state, "failures": 0})
     fc_compactlog.clear_inflight(pane)
 
 def cmd_compactor(a):

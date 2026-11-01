@@ -14,6 +14,7 @@ import argparse, json, shutil, subprocess, tempfile, time
 IDLE_BUFFER = ["  Next I write the tech doc.", "", "────────────", "❯", "────────────", "  Opus 5.5 | ctx: 7%"]
 TYPING_BUFFER = ["  Next I write the tech doc.", "", "────────────", "❯ go ahead with the tech doc", "────────────", "  Opus 5.5 | ctx: 7%"]
 ROWS = []
+real_records = fc.fc_transcript.records
 
 
 def rec(kind, **k):
@@ -69,14 +70,22 @@ class Typist(unittest.TestCase):
         self.prompts, self.statuses, self.tell_returns = [], [], True
         self.owner_types_after_handoff = self.compose_types_after_handoff = False
         self.compact_lands = True
+        self.boundary_meta = {"trigger": "manual", "preTokens": 90000, "postTokens": 30000, "durationMs": 9000}
+        self.records_calls = self.handoff_at = self.records_at_handoff = None
+        self.records_calls = 0
         ROWS.clear()
         rec("user", message={"role": "user", "content": "go"}, origin={"kind": "human"})
         self.transcript = write()
         for target, name, val in ((fc.fc_config, "CONFIG_PATH", d / "config.json"), (fc.fc_config, "COMPACT", {**fc.fc_config.COMPACT_DEFAULTS, "idle_seconds": 0}),
                                   (fc.fc_herdr, "herdr", self.herdr), (fc.fc_herdr, "herdr_text", lambda *a, **k: "\n".join(IDLE_BUFFER)),
-                                  (fc.fc_manager, "tell", self.tell), (time, "sleep", self.sleep), (time, "monotonic", lambda: self.clock)):
+                                  (fc.fc_manager, "tell", self.tell), (time, "sleep", self.sleep), (time, "monotonic", lambda: self.clock),
+                                  (fc.fc_transcript, "records", self.counted_records)):
             p = mock.patch.object(target, name, val); p.start(); self.addCleanup(p.stop)
         self.handoff = d / "handoff.md"
+
+    def counted_records(self, path):
+        self.records_calls += 1
+        return real_records(path)
 
     def sleep(self, seconds):
         self.clock += seconds  # the waits run on a clock only sleep moves
@@ -95,6 +104,7 @@ class Typist(unittest.TestCase):
             return False
         self.prompts.append(text)
         if text.startswith("compose:"):
+            self.handoff_at, self.records_at_handoff = self.clock, self.records_calls
             if self.owner_types_after_handoff:
                 self.append_row({"type": "user", "timestamp": now_stamp(), "uuid": "o1", "origin": {"kind": "human"}, "message": {"role": "user", "content": "wait, not now"}})
             if self.compose_types_after_handoff:
@@ -102,7 +112,7 @@ class Typist(unittest.TestCase):
                 self.append_row({"type": "user", "timestamp": now_stamp(), "uuid": "c1", "origin": {"kind": "human"}, "message": {"role": "user", "content": "compose typed this"}})
         elif text.startswith("/compact") and self.compact_lands:
             self.append_row({"type": "system", "subtype": "compact_boundary", "timestamp": now_stamp(), "uuid": "b1",
-                             "compactMetadata": {"trigger": "manual", "preTokens": 90000, "postTokens": 30000, "durationMs": 9000}})
+                             "compactMetadata": self.boundary_meta})
         return True
 
     def run_compactor(self, mode="judged", statuses=("idle",), role="manager"):
@@ -132,7 +142,8 @@ class Typist(unittest.TestCase):
         self.owner_types_after_handoff = True
         self.run_compactor(mode="judged", statuses=["idle", "idle", "working", "idle", "idle"])
         self.assertEqual(len(self.prompts), 1)
-        self.assertEqual(fc.fc_compactlog.read()[-1]["outcome"], "aborted-owner-typing")
+        last = fc.fc_compactlog.read()[-1]
+        self.assertEqual((last["outcome"], last["trigger"]), ("aborted-owner-typing", "compose"))
         self.assertIsNone(fc.fc_compactlog.inflight("w1:p2"))
 
     def test_a_prompt_compose_typed_itself_does_not_count_as_the_owner(self):
@@ -145,7 +156,71 @@ class Typist(unittest.TestCase):
             self.run_compactor(mode="ceiling", statuses=["idle", "idle", "working", "idle", "idle", "idle"])
         self.assertEqual(len(self.prompts), 2)
         self.assertEqual(fc.fc_compactlog.read()[-1]["trigger"], "ceiling")
+        self.assertGreaterEqual(self.clock, 5)
         self.assertLess(self.clock, 120)
+
+    def test_a_ceiling_hold_is_about_five_seconds_whatever_the_idle_window(self):
+        with mock.patch.object(fc.fc_config, "COMPACT", {**fc.fc_config.COMPACT_DEFAULTS, "idle_seconds": 9999}):
+            self.run_compactor(mode="ceiling", statuses=["idle"])
+        self.assertGreaterEqual(self.handoff_at, 5)
+        self.assertLess(self.handoff_at, 10)
+
+    def test_the_quiet_must_hold_for_the_whole_idle_window(self):
+        with mock.patch.object(fc.fc_config, "COMPACT", {**fc.fc_config.COMPACT_DEFAULTS, "idle_seconds": 6}):
+            self.run_compactor(statuses=["idle"])
+        self.assertGreaterEqual(self.handoff_at, 6)
+        self.assertLess(self.handoff_at, 10)
+
+    def test_a_poll_that_is_not_quiet_restarts_the_window(self):
+        with mock.patch.object(fc.fc_config, "COMPACT", {**fc.fc_config.COMPACT_DEFAULTS, "idle_seconds": 6}):
+            self.run_compactor(statuses=["idle", "working", "idle"])  # idle at 0, working at 2, then idle from 4: the window ends at 10, not 6
+        self.assertGreaterEqual(self.handoff_at, 10)
+        self.assertEqual(len(self.prompts), 2)
+
+    def test_an_owner_prompt_inside_the_window_restarts_it(self):
+        base = time.time()
+        orig_sleep = self.sleep
+        def sleep(seconds):
+            orig_sleep(seconds)
+            if self.clock == 2:  # the owner submits a prompt mid-window
+                self.append_row({"type": "user", "timestamp": now_stamp(), "uuid": "o1", "origin": {"kind": "human"}, "message": {"role": "user", "content": "one more thing"}})
+        with mock.patch.object(time, "time", lambda: base + self.clock), mock.patch.object(time, "sleep", sleep), \
+                mock.patch.object(fc.fc_config, "COMPACT", {**fc.fc_config.COMPACT_DEFAULTS, "idle_seconds": 6}):
+            self.run_compactor(statuses=["idle"])
+        self.assertGreaterEqual(self.handoff_at, 10)  # the prompt at 2 voided the window begun at 0; the new one begins at 4 and holds until 10, not 6
+
+    def test_the_transcript_is_read_again_only_when_it_changed(self):
+        with mock.patch.object(fc.fc_config, "COMPACT", {**fc.fc_config.COMPACT_DEFAULTS, "idle_seconds": 6}):
+            self.run_compactor(statuses=["idle"])
+        self.assertEqual(self.records_at_handoff, 1)  # four quiet polls, one read
+
+    def test_the_marker_is_refreshed_through_a_long_idle_gate(self):
+        base = time.time()
+        seen = []
+        orig_sleep = self.sleep
+        def sleep(seconds):
+            orig_sleep(seconds)
+            seen.append((self.clock, fc.fc_compactlog.inflight("w1:p2")))
+        with mock.patch.object(time, "time", lambda: base + self.clock), mock.patch.object(time, "sleep", sleep):
+            self.run_compactor(statuses=["working"])
+        late = [marker for clock, marker in seen if 900 <= clock < 1800]
+        self.assertTrue(late)
+        self.assertTrue(all(m is not None for m in late))
+        self.assertGreater(max(m["at"] for m in late), base + 1700)
+
+    def test_a_boundary_without_post_tokens_keeps_the_old_baseline(self):
+        self.boundary_meta = {"trigger": "manual", "preTokens": 90000}
+        fc.fc_compactlog.save_pane_state("w1:p2", {"baseline": 5, "failures": 2})
+        self.run_compactor(statuses=["idle", "idle", "working", "idle", "idle", "idle"])
+        self.assertEqual(fc.fc_compactlog.read()[-1]["outcome"], "done")
+        self.assertEqual(fc.fc_compactlog.pane_state("w1:p2"), {"baseline": 5, "failures": 0})
+
+    def test_an_unknown_role_leaves_another_compactors_marker_alone(self):
+        fc.fc_compactlog.set_inflight("w1:p2", "compact", 1234, "judged")
+        self.run_compactor(role="nobody")
+        self.assertEqual(fc.fc_compactlog.read()[-1]["outcome"], "unknown-role")
+        self.assertEqual(fc.fc_compactlog.inflight("w1:p2")["pid"], 1234)
+        self.assertEqual(self.prompts, [])
 
     def test_a_refused_prompt_clears_the_marker(self):
         self.tell_returns = False
@@ -195,6 +270,26 @@ class Typist(unittest.TestCase):
         self.assertEqual(argv[argv.index("--mode") + 1], "judged")
         self.assertTrue(kw["start_new_session"])
         self.assertEqual((kw["stdin"], kw["stdout"], kw["stderr"]), (subprocess.DEVNULL,) * 3)
+
+
+class Watching(unittest.TestCase):
+    def test_a_transcript_is_parsed_again_only_after_it_grew(self):
+        path = Path(tempfile.mkdtemp()) / "s.jsonl"
+        path.write_text(json.dumps({"type": "user"}) + "\n")
+        calls = []
+        def counted(p):
+            calls.append(p); return real_records(p)
+        with mock.patch.object(fc.fc_transcript, "records", counted):
+            w = fc.fc_compactor.Watched(path)
+            self.assertEqual((len(w.rows()), len(w.rows())), (1, 1))
+            self.assertEqual(len(calls), 1)
+            with open(path, "a") as f:
+                f.write(json.dumps({"type": "user"}) + "\n")
+            self.assertEqual(len(w.rows()), 2)
+            self.assertEqual(len(calls), 2)
+            path.unlink()
+            self.assertEqual(w.rows(), [])  # a failed stat reads again
+            self.assertEqual(len(calls), 3)
 
 
 class Registered(unittest.TestCase):
