@@ -36,10 +36,10 @@ A prompt still on screen before the start is declined with `n`, and a start that
 A timeout that stays names what the pane waits on, such as `the new pane's shell is waiting on a prompt: '...'`, instead of a bare `timeout`.
 An explicit `zstyle ':omz:update' mode prompt` in `~/.zshenv`, `~/.zprofile`, `~/.zshrc` or `~/.zlogin` outranks those variables, so `compose doctor` lists it as `MISSING: shell startup` with the line to change (`mode reminder` or `disabled`).
 
-The engineering manager is the session you started, so compose sets neither its model nor its compaction.
+The engineering manager is the session you started, so compose sets neither its model nor a compaction window.
 It relays and supervises while planning goes to the planner on the strongest model, so Sonnet serves it well.
-Cap its context with `"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "200000"` in the `env` of `~/.claude/settings.json`, as compose caps every teammate at 150k.
-That variable outranks `modelSettings.<model>.autoCompactWindow` and the `--autocompact` flag, and a session reads it only when it starts.
+Leave its window at the model's default and set no `CLAUDE_CODE_AUTO_COMPACT_WINDOW` of your own, because compose judges when the engineering manager's context is at a finished moment and compacts it then, after asking it to write its handoff.
+It forces one at the `compact.ceiling` tokens in `~/.compose/config.json` (150k by default), and `compose compactions` shows the week's compactions by trigger.
 
 The engineering manager and the team lead write no code.
 For the team lead the plugin enforces this.
@@ -169,8 +169,9 @@ A Codex session has no background wake, so it runs `compose watch ... --timeout 
 A lock keeps one watch per watcher.
 A second hook exits at once, and a second `watch` of the same session is refused, naming the first one's pid.
 The hook does nothing in any other session, and its watch ends with the session that parked it (an engineering manager's hook passes a stop signal on to its watches and ends them itself when its session is gone).
-Every Claude Code teammate compacts at 150k tokens, since every turn re-sends the whole session and a long one pays for its size on each of them.
+Every Claude Code teammate but the team lead compacts at 150k tokens, since every turn re-sends the whole session and a long one pays for its size on each of them.
 The window is `CLAUDE_CODE_AUTO_COMPACT_WINDOW` in the session's `--settings` env, because that variable outranks the `--autocompact` flag and would let a value in your own settings win.
+The team lead gets no window from compose, because the Stop hook judges its turns and compacts it at a finished moment or at the ceiling, as it does the engineering manager.
 After a context compaction, the plugin's SessionStart hook (`compose reenter`) points any teammate back at its own brief, `results/crew/<agent>.brief.md`.
 Every teammate's tab carries its name in `COMPOSE_TEAMMATE` for that, since `COMPOSE_ROLE` is `crew` for all but the team lead and the planner.
 
@@ -182,4 +183,4 @@ After a compaction, `compose reenter` points the team lead at its handoff as wel
 `compose crew restart --force` restarts one that has work in flight, from the handoff and the project's state; mid-turn it always refuses.
 A `run` or `verify` it started keeps going meanwhile.
 Those work in their own session, so a closed tab or a crashed session never ends them.
-The engineering manager, and a team lead outside herdr, still run `watch` in the background themselves.
+Only outside herdr do the engineering manager and the team lead run `watch` in the background themselves; inside herdr the hook parks the manager's watches too.

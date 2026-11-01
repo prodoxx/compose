@@ -34,6 +34,13 @@ class Docs(unittest.TestCase):
                     bad.append(f"{p.relative_to(ROOT)} -> {target}")
         self.assertEqual(bad, [])
 
+    def test_the_manager_loop_never_tells_the_manager_to_start_a_watch(self):
+        text = (ROOT / "sections" / "0h.md").read_text()
+        self.assertNotIn("start `watch` again", text)
+        self.assertIn("the Stop hook (`compose rewake`) parks", text)
+        for f in ("sections/0f.md", "sections/0k.md", "commands/planner.md", "commands/designer.md"):
+            self.assertNotRegex((ROOT / f).read_text(), r"start (that project's |a )?`compose watch", f)
+
 
 if __name__ == "__main__":
     unittest.main()
