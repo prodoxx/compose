@@ -122,7 +122,7 @@ Then:
 - `event away=on`: the product owner is away; continue under 0h's Away rules.
 - `event yolo=on`: yolo is on until an explicit off; continue under 0h's Yolo rules.
 - `event run=live`: a run is in progress, maybe started by an earlier session; it outlives its session.
-  Supervise with `watch` and `results/run.log`; never start a second run.
+  Supervise it: the watch the Stop hook parks reports it, and `results/run.log` shows it; never start a second run.
 - Inside herdr, as the engineering manager: `compose crew list --project <slug>`.
   A live `<slug>-orchestrator` owns the project: resume the relay loop (0h), and any brainstorm left mid-way (0b) from the feature issue, nothing else.
   None, or its tab closed: start it again with `crew start --role orchestrator`, briefed to continue from 0r.
@@ -282,7 +282,8 @@ model: pi:openrouter-fast/z-ai/glm-5.3-flash@preset/glm-5-3-flash-fast
 - Fresh session per task.
   Never chain tasks in one session.
 - Keep the target repo's fixed context small: short AGENTS.md, no unneeded MCP servers, no duplicate skills.
-- Every turn re-sends the whole session, and every Claude teammate compacts at 150k tokens, so spend turns and context on purpose.
+- Every turn re-sends the whole session, and every Claude teammate but the team lead compacts at 150k tokens, so spend turns and context on purpose.
+  The team lead's window stays at the model's default because compose judges its compactions, as it does the engineering manager's.
   Look at an image once, downscaled or cropped first (`compose shrink <png>`); export or read it again only after it changed.
   Draw Frame0 in `compose frame0 draw` lists, a page per call, never shape by shape; reorder, delete, and lint pages with `compose frame0 move|delete|links|lint`.
   A harness subagent gets a named model (`model: "sonnet"` for searches and fixes), never the session's by inheritance.
