@@ -715,6 +715,11 @@ class PromptRecord(unittest.TestCase):
         _, records = self.prompt_to("lead-x")
         self.assertEqual([(r["pane"], r.get("agent")) for r in records], [("lead-x", "lead-x")])
 
+    def test_an_agent_answer_of_another_shape_is_logged_under_the_name(self):
+        for answer in ({"agent": "w3:p7"}, ["w3:p7"], {"agent": {"pane_id": 7}}):
+            _, records = self.prompt_to("lead-x", json.dumps({"result": answer}))
+            self.assertEqual([(r["pane"], r.get("agent")) for r in records], [("lead-x", "lead-x")], answer)
+
     def test_a_prompt_sent_to_a_pane_id_asks_herdr_nothing_more(self):
         calls, records = self.prompt_to("w1:p2")
         self.assertEqual(calls, [["agent", "prompt"]])

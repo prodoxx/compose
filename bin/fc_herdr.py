@@ -66,7 +66,9 @@ def _record_prompt(args):
     if tuple(map(str, args[:2])) == ("agent", "prompt") and len(args) > 3:
         import fc_compactlog  # imported here, not at the top: no import cycle, and this module's place in the load order stays
         target = str(args[2])
-        pane = target if PANE_ID.fullmatch(target) else ((herdr("agent", "get", target, timeout=10) or {}).get("agent") or {}).get("pane_id")
+        got = {"agent": {"pane_id": target}} if PANE_ID.fullmatch(target) else herdr("agent", "get", target, timeout=10)
+        agent = got.get("agent") if isinstance(got, dict) else None
+        pane = agent.get("pane_id") if isinstance(agent, dict) and isinstance(agent.get("pane_id"), str) else None
         try:
             fc_compactlog.typed(pane or target, str(args[3]), agent=None if pane == target else target)
         except OSError:

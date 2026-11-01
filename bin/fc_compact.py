@@ -1,4 +1,4 @@
-import json, math, os, re, time
+import math, os, re, time
 import fc_config, fc_core, fc_compactlog, fc_models, fc_snapshot, fc_transcript
 
 # The compact-adviser judge policy (packages/claude-mod/lib/judge.ts and state.ts), ported as pure functions: the two
