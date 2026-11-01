@@ -397,7 +397,7 @@ class Rewake(unittest.TestCase):
         err = io.StringIO()
         with mock.patch.dict(os.environ, env or self.env), mock.patch.object(fc.fc_core, "project_dir", **({"side_effect": project_dirs} if project_dirs else {"return_value": self.proj})) as self.project_dir, \
                 mock.patch.object(fc.fc_watch, "watch_snapshot", side_effect=snaps), mock.patch.object(fc.fc_watch, "WATCH_INTERVAL", 0.01), mock.patch.object(fc.fc_watch, "WATCH_SETTLE", 0), \
-                mock.patch.object(fc.fc_compactor, "start") as start, mock.patch.object(fc.fc_core, "checkout", return_value=None), \
+                mock.patch.object(fc.fc_compactor, "start", return_value=4242) as start, mock.patch.object(fc.fc_core, "checkout", return_value=None), \
                 mock.patch.object(fc.fc_core, "all_projects", return_value={}), \
                 mock.patch.object(sys, "stdin", io.StringIO(raw if raw is not None else json.dumps({"session_id": session, **(hook or {})}))), contextlib.redirect_stderr(err):
             try:
@@ -432,6 +432,7 @@ class Rewake(unittest.TestCase):
             code, err, start = self.rewake([wsnap("running"), wsnap("passed")], hook={"transcript_path": self.transcript(90000), "cwd": "/r"})
         self.assertEqual(code, 2)
         self.assertEqual(c.call_args.args[:2], ("s1-pane", "lead"))
+        self.assertEqual(fc.fc_transcript.context_tokens(c.call_args.kwargs["rows"]), 90000)  # the rows the hook read, passed down once
         self.assertEqual(start.call_args.args[3], "judged")
         self.assertEqual([r["kind"] for r in fc.fc_compactlog.read()], ["turn"])
         self.assertEqual(fc.fc_compactlog.read()[0]["tokens"], 90000)
@@ -444,6 +445,12 @@ class Rewake(unittest.TestCase):
         self.assertEqual((pane, role, mode, repo), ("s1-pane", "lead", "judged", "/r"))
         self.assertEqual(handoff, self.proj / "scratch" / "hw-orchestrator" / "handoff.md")
         self.assertEqual(str(transcript), self.transcript(90000))
+
+    def test_the_hook_holds_the_pane_for_the_compactor_it_started(self):
+        with mock.patch.object(fc.fc_compact, "consider", return_value={"decision": "qualifies"}):
+            self.rewake([wsnap("running"), wsnap("passed")], hook={"transcript_path": self.transcript(90000), "cwd": "/r"})
+        marker = fc.fc_compactlog.inflight("s1-pane")  # set before the hook returns: a second Stop cannot start a second compactor
+        self.assertEqual((marker["pid"], marker["step"], marker["mode"]), (4242, "idle", "judged"))
 
     def test_the_ceiling_starts_the_compactor_in_ceiling_mode(self):
         with mock.patch.object(fc.fc_compact, "consider", return_value={"decision": "ceiling"}):
@@ -496,7 +503,7 @@ class Rewake(unittest.TestCase):
                 mock.patch.object(fc.fc_core, "all_projects", return_value={n: (repo / "wt" / n, p) for n, p in projs.items()}), \
                 mock.patch.object(fc.fc_core, "project_dir", side_effect=lambda a: projs[a.project]), \
                 mock.patch.object(fc.fc_watch, "watch_snapshot", snapshot), mock.patch.object(fc.fc_watch, "WATCH_INTERVAL", 0.01), mock.patch.object(fc.fc_watch, "WATCH_SETTLE", 0), \
-                mock.patch.object(fc.fc_proc, "keep_awake"), mock.patch.object(fc.fc_compactor, "start"), \
+                mock.patch.object(fc.fc_proc, "keep_awake"), mock.patch.object(fc.fc_compactor, "start", return_value=4242), \
                 mock.patch.object(fc.fc_factory, "verb_watch", factory or mock.Mock()), mock.patch.object(fc.fc_rewake, "park", wraps=fc.fc_rewake.park) as park, \
                 mock.patch.object(sys, "stdin", io.StringIO(json.dumps({"session_id": "s1", "cwd": str(repo)}))), open(out, "w") as err, \
                 mock.patch.object(sys, "stderr", err):

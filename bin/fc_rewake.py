@@ -30,23 +30,25 @@ def session_role(ev):
 
 def judge_turn(role, handoff, repo, ev):
     """Log this settled turn and, unless a compaction of the pane is already under way, ask whether it is a good moment to compact; a verdict
-    that qualifies (or the ceiling) starts the detached compactor. Does nothing without a pane, a handoff, or a transcript on disk."""
+    that qualifies (or the ceiling) starts the detached compactor, and the pane's in-flight marker is set here, before the hook returns, so a
+    Stop that comes before the compactor runs cannot start a second one. Does nothing without a pane, a handoff, or a transcript on disk."""
     pane = fc_core.session_id()
     path = ev.get("transcript_path")
     transcript = Path(path) if path else None
     if not pane or handoff is None or transcript is None or not transcript.is_file():
         return
-    tokens = fc_transcript.context_tokens(fc_transcript.records(transcript))
+    rows = fc_transcript.records(transcript)  # read once: the judge gets these rows too
+    tokens = fc_transcript.context_tokens(rows)
     fc_compactlog.append("turn", pane=pane, role=role, tokens=tokens)
     marker = fc_compactlog.inflight(pane)
     if marker:
         fc_compactlog.append("verdict", pane=pane, role=role, tokens=tokens, decision="in-flight",
                              reason=f"a {marker.get('mode') or 'compaction'} compaction is at {marker.get('step') or 'work'}")
         return
-    verdict = fc_compact.consider(pane, role, transcript)
+    verdict = fc_compact.consider(pane, role, transcript, rows=rows)
     mode = {"qualifies": "judged", "ceiling": "ceiling"}.get(verdict.get("decision"))
     if mode:
-        fc_compactor.start(pane, role, transcript, mode, handoff, repo)
+        fc_compactlog.set_inflight(pane, "idle", fc_compactor.start(pane, role, transcript, mode, handoff, repo), mode)
 
 def manager_targets(repo, pane, session):
     """One watch's arguments per project the engineering manager in herdr pane `pane` holds: the project's own worktree (the repository

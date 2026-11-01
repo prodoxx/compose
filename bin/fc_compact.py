@@ -129,12 +129,17 @@ def backoff(failures, now):
     failures = min(failures + 1, 6)
     return failures, now + min(300, 5 * 2 ** failures)
 
+def settling(state, tokens, exchanges):
+    """Whether the pane is still settling after a compaction compose made: fewer than 3 exchanges or `cooldown` new tokens past its baseline.
+    The ceiling waits this out too, or a session that compacts to above the ceiling would compact again on every turn."""
+    baseline = state.get("baseline")
+    return baseline is not None and (tokens < baseline + fc_config.COMPACT["cooldown"] or exchanges < 3)
+
 def cooldown_reason(state, tokens, exchanges, now):
     """Why not to ask the judge about this pane now, else None. A key missing from `state` means that check does not apply."""
     if now < (state.get("retry_after") or 0):
         return "TypeSafe backoff"
-    baseline = state.get("baseline")
-    if baseline is not None and (tokens < baseline + fc_config.COMPACT["cooldown"] or exchanges < 3):
+    if settling(state, tokens, exchanges):
         return "Settling after a compaction"
     asked_at = state.get("last_asked_at")
     if asked_at is not None and now - asked_at < 120:
@@ -158,12 +163,13 @@ def _live_messages(rows):
     return fc_transcript.messages(rows[marks[-1]["index"] + 1:] if marks else rows)
 
 def _request_bytes(state):
-    body = {"model": os.environ.get("TYPESAFE_MODEL", "jev-latest"), "state": state, "questions": QUESTIONS}
-    return len(json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+    """The size of the request jev_ask sends for this state, measured as it goes on the wire."""
+    return len(fc_models.wire({"model": os.environ.get("TYPESAFE_MODEL", "jev-latest"), "state": state, "questions": QUESTIONS}))
 
-def consider(pane, role, transcript, now=None):
+def consider(pane, role, transcript, now=None, rows=None):
     """Whether this pane's settled turn is a good moment to compact, asking the judge at most once. Appends the verdict to
-    the log and returns it. Never raises: any failure is a verdict with decision "error" and the kind as its reason."""
+    the log and returns it. Never raises: any failure is a verdict with decision "error" and the kind as its reason.
+    `rows` are the transcript's records when the caller already read them; else the transcript is read here."""
     now = time.time() if now is None else now
     verdict = {"pane": pane, "role": role, "tokens": None, "p_finished": None, "p_hands_on": None, "score": None,
                "floor": None, "usage": None, "decision": "", "reason": ""}
@@ -197,7 +203,7 @@ def consider(pane, role, transcript, now=None):
     if fc_config.compact_off():
         return done("off")
     try:
-        rows = fc_transcript.records(transcript)
+        rows = fc_transcript.records(transcript) if rows is None else rows
         tokens = fc_transcript.context_tokens(rows)
         exchanges = fc_transcript.exchanges_since_compaction(rows)
         cfg = fc_config.COMPACT
@@ -205,7 +211,8 @@ def consider(pane, role, transcript, now=None):
         if tokens is not None:
             verdict["usage"] = round(tokens / cfg["budget"], 3)
         if tokens is not None and tokens >= cfg["ceiling"]:
-            return done("ceiling")
+            state = fc_compactlog.pane_state(pane)
+            return done("cooldown", "Settling after a compaction") if settling(state, tokens, exchanges) else done("ceiling")
         if not cfg["judged"]:
             return done("off")
         if tokens is None or tokens < cfg["minimum"]:

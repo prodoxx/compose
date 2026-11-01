@@ -473,6 +473,27 @@ class Consider(unittest.TestCase):
             v, _ = self.consider(150000)
         self.assertEqual(v["decision"], "off")
 
+    def test_the_ceiling_waits_out_the_settling_after_a_compaction_but_not_the_ask_throttle(self):
+        ROWS.clear()
+        rec("system", subtype="compact_boundary", compactMetadata={"trigger": "manual", "preTokens": 170000, "postTokens": 152000})
+        rec("user", message={"role": "user", "content": "go on"}, origin={"kind": "human"})
+        fc.fc_compactlog.save_pane_state("w1:p2", {"baseline": 152000, "last_asked_at": 999.0})
+        v, j = self.consider(155000)  # just compacted and still past the ceiling: compacting again would land at the same size
+        self.assertEqual((v["decision"], v["reason"], j.call_count), ("cooldown", "Settling after a compaction", 0))
+        for n in range(2):  # two more answered exchanges make three since the boundary
+            rec("user", message={"role": "user", "content": f"next {n}"}, origin={"kind": "human"})
+            rec("assistant", message={"id": f"r{n}", "content": [{"type": "text", "text": "ok"}], "usage": {"input_tokens": 160000}})
+        rec("user", message={"role": "user", "content": "and now"}, origin={"kind": "human"})
+        v, _ = self.consider(175000, now=1001.0)  # settled; asked a second ago, which only throttles asking the judge
+        self.assertEqual(v["decision"], "ceiling")
+
+    def test_the_request_is_measured_as_it_is_sent(self):
+        state = {"text": "café, naïve, 日本語 " * 50}
+        sent = []
+        with mock.patch.object(fc.fc_models, "http_json", lambda req, *a, **k: sent.append(req.data) or {"usage": {}}):
+            fc.fc_models.jev_ask({}, {}, state, fc.fc_compact.QUESTIONS, "compact judge")
+        self.assertEqual(fc.fc_compact._request_bytes(state), len(sent[0]))
+
     def test_an_error_backs_off_and_a_second_turn_waits(self):
         v, _ = self.consider(90000, ask=mock.Mock(side_effect=RuntimeError("typesafe: HTTP 500 boom")))
         self.assertEqual((v["decision"], v["reason"]), ("error", "server"))
@@ -522,6 +543,14 @@ class Consider(unittest.TestCase):
         self.assertEqual(v["decision"], "qualifies")
         self.assertIn("new topic", seen[0])
         self.assertNotIn("zebras", seen[0])
+
+    def test_rows_the_hook_already_read_are_not_read_again(self):
+        path = self.turn(90000)
+        rows = fc.fc_transcript.records(path)
+        with mock.patch.object(fc.fc_transcript, "records", side_effect=AssertionError("read again")), \
+                mock.patch.object(fc.fc_models, "jev_ask", return_value=self.reply):
+            v = fc.fc_compact.consider("w1:p2", "manager", path, now=1000.0, rows=rows)
+        self.assertEqual((v["decision"], v["tokens"]), ("qualifies", 90000))
 
     def test_the_judged_switch_off_asks_nothing(self):
         fc.fc_config.COMPACT["judged"] = False
