@@ -651,10 +651,16 @@ class Reenter(unittest.TestCase):
         self.assertIn("Never start a compose watch", out)
 
     def test_a_handoff_that_cannot_be_checked_prints_nothing_and_never_traces(self):
+        real = Path.exists
+        def exists(path, *a, **k):  # only the handoff cannot be checked: any other path answers as it would
+            if path.name.endswith("-handoff.md"):
+                raise PermissionError("EACCES")
+            return real(path, *a, **k)
         with mock.patch.object(fc.fc_manager, "is_manager", return_value=True), mock.patch.object(fc.fc_manager, "manager_projects", return_value=[self.proj]), \
-                mock.patch.object(Path, "exists", side_effect=PermissionError("EACCES")):
+                mock.patch.object(Path, "exists", autospec=True, side_effect=exists) as checked:
             out, _ = self.reenter({"HERDR_PANE_ID": "w1:p9", "CLAUDE_CODE_ENTRYPOINT": "cli"})
         self.assertEqual(out, "")
+        self.assertTrue(any(c.args[0].name.endswith("-handoff.md") for c in checked.call_args_list))
 
     def test_a_session_outside_a_repo_prints_nothing_and_never_traces(self):
         with mock.patch.object(fc.fc_manager, "is_manager", side_effect=OSError("no repo")):

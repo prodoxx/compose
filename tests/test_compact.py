@@ -1,6 +1,7 @@
 import hermetic  # first: no test sees the real home
-import importlib.machinery, importlib.util, os, sys, unittest
+import importlib.machinery, importlib.util, json, os, shutil, sys, tempfile, time, unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 # tests/test_modules.py fails a test file without the next line
 os.environ["HERDR_ENV"] = ""
@@ -8,7 +9,6 @@ _spec = importlib.util.spec_from_loader("fc", importlib.machinery.SourceFileLoad
 fc = importlib.util.module_from_spec(_spec)
 for _m in [m for m in sys.modules if m.startswith("fc_") and m not in ("fc_cost", "fc_mcp", "fc_sessions")]: del sys.modules[_m]
 _spec.loader.exec_module(fc)
-import fc_config
 
 
 class Policy(unittest.TestCase):
@@ -76,9 +76,6 @@ class Policy(unittest.TestCase):
         self.assertIsNone(fc.fc_compact.cooldown_reason({}, 90000, 5, 1000.0))
 
 
-import json, shutil, tempfile, time
-from types import SimpleNamespace
-
 ROWS = []
 
 
@@ -125,6 +122,7 @@ class Transcript(unittest.TestCase):
         rec("user", at="2026-11-01T10:00:04Z", message={"role": "user", "content": "<task-notification>x</task-notification>"})
         rec("user", at="2026-11-01T10:00:05Z", message={"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]})
         rec("user", at="2026-11-01T10:00:06Z", message={"role": "user", "content": "<command-message>compose</command-message>"}, origin={"kind": "human"})
+        rec("user", at="2026-11-01T10:00:07Z", message={"role": "user", "content": " \n\t "}, origin={"kind": "human"})  # only whitespace: nothing typed
         rows = fc.fc_transcript.records(self.write())
         self.assertEqual([p["text"] for p in fc.fc_transcript.owner_prompts(rows)], ["focus, what next?", "<command-message>compose</command-message>"])
         self.assertEqual([p["text"] for p in fc.fc_transcript.owner_prompts(rows, after="2026-11-01T10:00:01Z")], ["<command-message>compose</command-message>"])

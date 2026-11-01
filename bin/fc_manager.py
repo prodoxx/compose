@@ -6,8 +6,8 @@ import json, os, sys
 from pathlib import Path
 import fc_core, fc_herdr, fc_factorystate, fc_compactlog
 
-TOLD = ("compose: the engineering manager session in herdr pane {new} took over {what} at {at}. You no longer manage {them}. Stop every "
-        "`compose watch` and `compose factory watch` you run for {them}, start no teammate or watch there again, and drop any question you "
+TOLD = ("compose: the engineering manager session in herdr pane {new} took over {what} at {at}. You no longer manage {them}: the hook "
+        "parks no watch for {them} any more. Start no teammate there again, and drop any question you "
         "still have open about {them}: ask the product owner nothing more about {them}, and mention the move to them at most once, as a "
         "statement. Its teammates now report to {new}. Anything else you manage stays yours. If the product owner wants {them} back they "
         "will say so; then run the same command with --takeover.")
@@ -28,7 +28,7 @@ def started_in(proj, pane):
             data = json.loads(rec.read_text())
         except (OSError, ValueError):
             continue
-        if isinstance(data, dict) and data.get("started_by") == pane and data.get("name"):
+        if isinstance(data, dict) and data.get("started_by") == pane and isinstance(data.get("name"), str) and data["name"]:
             names.append(data["name"])
     return names
 
@@ -117,7 +117,7 @@ def owner_lines(proj, watching=False):
         return []
     if watching or (rec.get("from") or {}).get("session") == mine:
         return [f"event owner=taken project={Path(proj).name} pane={holder} since={rec.get('since')!r}  (another engineering manager session took this project over "
-                f"from this one: stop every watch you run for it, start no teammate or watch there, drop any open question about it, and ask the product owner "
+                f"from this one: the hook parks no watch for it any more; start no teammate there, drop any open question about it, and ask the product owner "
                 f"nothing more about it; `compose status` shows where the manager is)"]
     if fc_herdr.herdr_manager_live(holder):
         return [f"event owner=other pane={holder} since={rec.get('since')!r}  (another engineering manager session drives this project: look "

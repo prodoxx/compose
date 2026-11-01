@@ -86,7 +86,8 @@ class Takeover(Seat):
         (pane, text), = self.herdr.prompts
         self.assertEqual(pane, OLD)
         self.assertIn(f"herdr pane {NEW} took over chat-ui", text)
-        self.assertIn("Stop every `compose watch`", text)
+        self.assertIn("You no longer manage it: the hook parks no watch for it any more.", text)
+        self.assertNotIn("Stop every", text)  # under herdr the old session runs no watch to stop
         self.assertIn("ask the product owner nothing more", text)
         self.assertEqual(said, f"took over chat-ui from the engineering manager session in herdr pane {OLD}; it was told to stop.\n")
 
@@ -324,6 +325,12 @@ class Recognition(Seat):
         (crew / "list.json").write_text("[]")
         with mock.patch.object(fc.fc_herdr, "live_agents", return_value=[{"name": "billing-planner", "pane_id": "w1:p5"}]):
             self.assertEqual([p.name for p in fc.fc_manager.manager_projects(self.repo, NEW)], ["billing"])
+
+    def test_a_crew_record_whose_name_is_not_a_string_is_skipped(self):
+        crew = self.proj("billing") / "results" / "crew"; crew.mkdir(parents=True)
+        (crew / "odd.json").write_text(json.dumps({"name": ["billing-planner"], "role": "planner", "started_by": NEW}))
+        with mock.patch.object(fc.fc_herdr, "live_agents", return_value=[{"name": "billing-planner", "pane_id": "w1:p5"}]):
+            self.assertEqual(fc.fc_manager.manager_projects(self.repo, NEW), [])
 
     def test_the_factory_seat_alone_makes_a_manager(self):
         with fc.fc_factorystate.edit(self.repo) as st: st["manager_pane"] = NEW

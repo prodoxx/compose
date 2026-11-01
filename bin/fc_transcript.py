@@ -88,7 +88,7 @@ def is_owner_prompt(row):
     if row.get("type") != "user" or row.get("isSidechain") or row.get("isMeta") or row.get("isCompactSummary"):
         return False
     content = _message(row).get("content")
-    if not _has_text(content) or not _text(content):
+    if not _has_text(content) or not _text(content).strip():  # only whitespace is nothing typed
         return False
     origin = row.get("origin")
     if isinstance(origin, dict):

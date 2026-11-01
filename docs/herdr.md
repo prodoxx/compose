@@ -128,7 +128,7 @@ An owner whose pane is gone is replaced silently, and outside herdr nothing is c
 A session is one engineering manager, so `--takeover` from a live session moves everything that session ran in the repository: every other project it held and the factory's seat (`manager_pane` in `factory.json`) come with it.
 Splitting them would leave two half managers, each answering part of the same product owner's questions.
 Projects of other repositories are not visible from here and stay where they are.
-The old session is told at once: compose prompts its pane (`herdr agent prompt`) naming the new pane and what moved, and says to stop every `compose watch` and `compose factory watch` for it, start nothing there, and ask the product owner nothing more about it.
+The old session is told at once: compose prompts its pane (`herdr agent prompt`) naming the new pane and what moved, and says the hook parks no watch for it any more, to start nothing there, and to ask the product owner nothing more about it.
 A pane at a question dialog refuses a prompt, so the move is also written in `results/manager.json` (`from`): the old session's parked `watch`, or its next `watch --now`, ends with `event owner=taken project=<slug> pane=<new pane>`, which wakes it even under `--from`.
 The old session cannot claim the project back by accident: it is refused like any second session until it runs the same command with `--takeover`.
 `compose factory watch` and `factory start` follow the same rule: a second live session is refused unless it says `--takeover`, which prompts the old one.
