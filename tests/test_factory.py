@@ -1019,6 +1019,29 @@ class Verbs(unittest.TestCase):
         st.add_event(self.repo, "event factory=y")
         self.assertTrue(self.verb("watch", timeout=5).strip().endswith("event factory=y"))
 
+    def test_a_parked_factory_watch_wakes_on_stderr_with_exit_2(self):
+        mock = self.mock
+        seen = fc.fc_factory._seen_path(self.repo)
+        seen.parent.mkdir(parents=True, exist_ok=True)
+        seen.write_text(json.dumps({"seen": 0}))
+        st.add_event(self.repo, "event factory=offer ticket=NEB-10")
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(fc.fc_factory.fc_manager, "factory_claim"), mock.patch.object(fc.fc_factory, "POLL", 0.01), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as e:
+            fc.fc_factory.verb_watch(self.argparse.Namespace(timeout=None), self.repo, rewake=True)
+        self.assertEqual((e.exception.code, out.getvalue()), (2, ""))
+        self.assertTrue(err.getvalue().startswith("compose watch woke you. When this turn ends the Stop hook parks the next watch; do not start one yourself.\n"))
+        self.assertTrue(err.getvalue().strip().endswith("event factory=offer ticket=NEB-10"))
+
+    def test_a_parked_factory_watch_starts_silently_and_ends_when_its_parent_does(self):
+        mock = self.mock
+        st.add_event(self.repo, "event factory=old")
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(fc.fc_factory.fc_manager, "factory_claim"), mock.patch.object(fc.fc_factory, "POLL", 0.01), \
+                mock.patch.object(fc.fc_factory.os, "getppid", side_effect=[100, 100, 1]), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            fc.fc_factory.verb_watch(self.argparse.Namespace(timeout=None), self.repo, rewake=True)  # no first-run line, no replay of old events
+        self.assertEqual((out.getvalue(), err.getvalue()), ("", ""))
+
     def test_pace_sets_the_cap_and_decline_snoozes_offers(self):
         self.assertEqual(self.verb("pace", "3"), "factory: day pace 3 tickets at once (was 2); nothing running is stopped\n")
         self.assertEqual(st.load_state(self.repo)["day_tickets"], 3)

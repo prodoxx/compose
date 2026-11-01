@@ -390,17 +390,18 @@ class Rewake(unittest.TestCase):
         path.write_text(json.dumps({"type": "assistant", "message": {"id": "m1", "usage": {"input_tokens": tokens, "output_tokens": 1}, "content": []}}) + "\n")
         return str(path)
 
-    def rewake(self, snaps, env=None, session="s1", hook=None):
+    def rewake(self, snaps, env=None, session="s1", hook=None, raw=None, project_dirs=None):
         """The hook reads its JSON from stdin: feed it here, since the real stdin may be a pipe nobody writes to (then the hook waits forever).
-        Returns the exit code, stderr and the mocked compactor start; the project lookup is kept as self.project_dir."""
+        `raw` is stdin as is; `project_dirs` the project lookup's side effects. Returns the exit code, stderr and the mocked compactor start;
+        the project lookup is kept as self.project_dir."""
         err = io.StringIO()
-        with mock.patch.dict(os.environ, env or self.env), mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj) as self.project_dir, \
+        with mock.patch.dict(os.environ, env or self.env), mock.patch.object(fc.fc_core, "project_dir", **({"side_effect": project_dirs} if project_dirs else {"return_value": self.proj})) as self.project_dir, \
                 mock.patch.object(fc.fc_watch, "watch_snapshot", side_effect=snaps), mock.patch.object(fc.fc_watch, "WATCH_INTERVAL", 0.01), mock.patch.object(fc.fc_watch, "WATCH_SETTLE", 0), \
                 mock.patch.object(fc.fc_compactor, "start") as start, mock.patch.object(fc.fc_core, "checkout", return_value=None), \
                 mock.patch.object(fc.fc_core, "all_projects", return_value={}), \
-                mock.patch.object(sys, "stdin", io.StringIO(json.dumps({"session_id": session, **(hook or {})}))), contextlib.redirect_stderr(err):
+                mock.patch.object(sys, "stdin", io.StringIO(raw if raw is not None else json.dumps({"session_id": session, **(hook or {})}))), contextlib.redirect_stderr(err):
             try:
-                fc.fc_watch.cmd_rewake(SimpleNamespace())
+                fc.fc_rewake.cmd_rewake(SimpleNamespace())
                 code = 0
             except SystemExit as e:
                 code = e.code
@@ -466,15 +467,84 @@ class Rewake(unittest.TestCase):
     def test_a_manager_session_is_judged_from_its_held_projects(self):
         env = {"HERDR_PANE_ID": "w1:p9", "CLAUDE_CODE_ENTRYPOINT": "cli"}
         repo = self.proj.parent.parent
-        with mock.patch.object(fc.fc_manager, "is_manager", return_value=True), mock.patch.object(fc.fc_manager, "manager_projects", return_value=[self.proj]), \
+        with mock.patch.object(fc.fc_manager, "is_manager", return_value=True), mock.patch.object(fc.fc_manager, "manager_projects", return_value=[]), \
                 mock.patch.object(fc.fc_manager, "holds_factory", return_value=False), mock.patch.object(fc.fc_compact, "consider", return_value={"decision": "qualifies"}) as c:
-            code, _, start = self.rewake([wsnap("running"), wsnap("passed")], env=env, hook={"transcript_path": self.transcript(90000), "cwd": str(repo)})
+            code, _, start = self.rewake([], env=env, hook={"transcript_path": self.transcript(90000), "cwd": str(repo)})
         self.assertEqual(c.call_args.args[:2], ("w1:p9", "manager"))
-        self.assertIn(code, (0, 2))  # parking for the manager arrives with the next task
+        self.assertEqual(code, 0)  # it holds no project and not the factory: nothing to park
         pane, role, _, mode, handoff, started_repo = start.call_args.args
         self.assertEqual((pane, role, mode), ("w1:p9", "manager", "judged"))
         self.assertEqual(handoff, fc.fc_manager.manager_handoff(repo.resolve(), "w1:p9"))
         self.assertEqual(started_repo, str(repo.resolve()))
+
+    def park_as_manager(self, queues, factory=None, hold_factory=False):
+        """The Stop hook of an engineering manager holding the projects named in `queues` (their snapshot sequences; the last one repeats),
+        with the real fork. stderr is a real file, since a forked watch writes where the parent can read it. Returns the exit code and stderr."""
+        repo = self.state.parent.resolve()
+        projs = {n: repo / ".compose" / n for n in queues}
+        for p in projs.values():
+            (p / "results").mkdir(parents=True)
+        def snapshot(wt, proj, agents=None):
+            q = queues[proj.name]  # each forked watch owns a copy of the queues
+            return q.pop(0) if len(q) > 1 else q[0]
+        out = self.state.parent / "stderr.txt"
+        env = {"HERDR_PANE_ID": "w1:p9", "CLAUDE_CODE_ENTRYPOINT": "cli"}
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(fc.fc_manager, "is_manager", return_value=True), \
+                mock.patch.object(fc.fc_manager, "manager_projects", return_value=list(projs.values())), mock.patch.object(fc.fc_manager, "claim"), \
+                mock.patch.object(fc.fc_manager, "holds_factory", return_value=hold_factory), mock.patch.object(fc.fc_manager, "owner_lines", return_value=[]), \
+                mock.patch.object(fc.fc_core, "all_projects", return_value={n: (repo / "wt" / n, p) for n, p in projs.items()}), \
+                mock.patch.object(fc.fc_core, "project_dir", side_effect=lambda a: projs[a.project]), \
+                mock.patch.object(fc.fc_watch, "watch_snapshot", snapshot), mock.patch.object(fc.fc_watch, "WATCH_INTERVAL", 0.01), mock.patch.object(fc.fc_watch, "WATCH_SETTLE", 0), \
+                mock.patch.object(fc.fc_proc, "keep_awake"), mock.patch.object(fc.fc_compactor, "start"), \
+                mock.patch.object(fc.fc_factory, "verb_watch", factory or mock.Mock(side_effect=AssertionError("the factory is not held"))), \
+                mock.patch.object(sys, "stdin", io.StringIO(json.dumps({"session_id": "s1", "cwd": str(repo)}))), open(out, "w") as err, \
+                mock.patch.object(sys, "stderr", err):
+            try:
+                fc.fc_rewake.cmd_rewake(SimpleNamespace()); code = 0
+            except SystemExit as e:
+                code = e.code
+        return code, out.read_text()
+
+    def test_a_manager_parks_one_watch_per_held_project_and_the_first_event_wakes_it(self):
+        t = time.monotonic()
+        code, err = self.park_as_manager({"alpha": [wsnap("running")], "beta": [wsnap("running"), wsnap("running"), wsnap("passed")]})
+        self.assertEqual(code, 2)
+        self.assertEqual(err.count("compose watch woke you."), 1)
+        self.assertIn("event task=001 state=passed", err)
+        self.assertLess(time.monotonic() - t, 10)  # alpha's quiet watch was ended, not waited for
+
+    def test_a_manager_that_holds_the_factory_parks_its_watch_beside_the_projects(self):
+        def factory(a, repo, rewake=False):
+            self.assertEqual((a.timeout, rewake), (None, True))
+            print("factory woke", file=sys.stderr)
+            raise SystemExit(2)
+        code, err = self.park_as_manager({"alpha": [wsnap("running")]}, factory=factory, hold_factory=True)
+        self.assertEqual((code, err), (2, "factory woke\n"))
+
+    def test_a_manager_with_only_the_factory_parks_it_in_process(self):
+        factory = mock.Mock(side_effect=SystemExit(2))
+        code, _ = self.park_as_manager({}, factory=factory, hold_factory=True)
+        self.assertEqual(code, 2)
+        a, repo = factory.call_args.args
+        self.assertEqual((a.timeout, repo, factory.call_args.kwargs), (None, self.state.parent.resolve(), {"rewake": True}))
+
+    def test_manager_targets_name_each_project_by_its_worktree(self):
+        repo, wt = Path("/r"), Path("/r/wt/alpha")
+        with mock.patch.object(fc.fc_manager, "manager_projects", return_value=[repo / ".compose" / "alpha", repo / ".compose" / "beta"]), \
+                mock.patch.object(fc.fc_core, "all_projects", return_value={"alpha": (wt, repo / ".compose" / "alpha")}):
+            targets = fc.fc_rewake.manager_targets(repo, "w1:p9", "s1")
+        self.assertEqual([(t.repo, t.project, t.session, t.timeout, t.now, t.from_) for t in targets],
+                         [(str(wt), "alpha", "s1", 0, False, None), (str(repo), "beta", "s1", 0, False, None)])  # beta is unknown: the repo itself
+
+    def test_a_lead_whose_project_cannot_be_resolved_still_parks(self):
+        code, err, start = self.rewake([wsnap("running"), wsnap("passed")], project_dirs=[SystemExit("no such project"), self.proj],
+                                       hook={"transcript_path": self.transcript(90000), "cwd": "/r"})
+        self.assertEqual((code, start.call_count), (2, 0))  # no handoff to point a compactor at
+        self.assertIn("event task=001 state=passed", err)
+
+    def test_stdin_that_is_not_an_object_is_an_empty_event(self):
+        code, err, _ = self.rewake([], env={"CLAUDE_CODE_ENTRYPOINT": "cli"}, raw="[]")
+        self.assertEqual((code, err), (0, ""))
 
     def test_a_judge_crash_never_fails_the_hook(self):
         with mock.patch.object(fc.fc_compact, "consider", side_effect=RuntimeError("boom")):
@@ -483,15 +553,15 @@ class Rewake(unittest.TestCase):
 
     def test_a_session_that_holds_nothing_keeps_native_behaviour(self):
         env = {"HERDR_PANE_ID": "w1:p9", "CLAUDE_CODE_ENTRYPOINT": "cli"}
-        with mock.patch.object(fc.fc_manager, "is_manager", return_value=False), mock.patch.object(fc.fc_compact, "consider") as c:
+        with mock.patch.object(fc.fc_manager, "is_manager", return_value=False) as manager, mock.patch.object(fc.fc_compact, "consider") as c:
             code, _, _ = self.rewake([], env=env, hook={"transcript_path": self.transcript(90000), "cwd": "/r"})
-        self.assertEqual((code, c.call_count), (0, 0))
+        self.assertEqual((code, c.call_count, manager.call_count), (0, 0, 1))
 
     def test_a_manager_check_that_raises_means_not_a_manager(self):
         env = {"HERDR_PANE_ID": "w1:p9", "CLAUDE_CODE_ENTRYPOINT": "cli"}
-        with mock.patch.object(fc.fc_manager, "is_manager", side_effect=ValueError("malformed crew record")), mock.patch.object(fc.fc_compact, "consider") as c:
+        with mock.patch.object(fc.fc_manager, "is_manager", side_effect=ValueError("malformed crew record")) as manager, mock.patch.object(fc.fc_compact, "consider") as c:
             code, _, _ = self.rewake([], env=env, hook={"transcript_path": self.transcript(90000), "cwd": "/r"})
-        self.assertEqual((code, c.call_count), (0, 0))
+        self.assertEqual((code, c.call_count, manager.call_count), (0, 0, 1))
 
     def test_a_turn_without_a_readable_transcript_is_not_judged(self):
         with mock.patch.object(fc.fc_compact, "consider") as c:
@@ -1485,7 +1555,7 @@ class RestoredTeammate(unittest.TestCase):
                     mock.patch.object(fc.fc_watch, "watch_snapshot", side_effect=snaps), mock.patch.object(fc.fc_watch, "WATCH_INTERVAL", 0.01), mock.patch.object(fc.fc_watch, "WATCH_SETTLE", 0), \
                     mock.patch.object(sys, "stdin", io.StringIO(json.dumps({"session_id": "s1", "cwd": str(repo)}))), contextlib.redirect_stderr(err):
                 try:
-                    fc.fc_watch.cmd_rewake(SimpleNamespace())
+                    fc.fc_rewake.cmd_rewake(SimpleNamespace())
                     code = 0
                 except SystemExit as e:
                     code = e.code
@@ -1494,6 +1564,45 @@ class RestoredTeammate(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("event task=001 state=passed", err)
         self.assertEqual((rewake("w10:pT", []), rewake("w1Z:p1", [])), ((0, ""), (0, "")))  # a crew teammate and the engineering manager
+
+
+class Park(unittest.TestCase):
+    """The manager's Stop hook parks several watches under one parent: the first event wakes the session once."""
+    def park(self, jobs):
+        r, w = os.pipe()
+        sink = os.fdopen(os.dup(w), "w")
+        with mock.patch.object(sys, "stderr", sink):
+            try:
+                fc.fc_rewake.park(jobs); code = 0
+            except SystemExit as e:
+                code = e.code
+        sink.close(); os.close(w)
+        with os.fdopen(r) as f: return code, f.read()
+
+    def test_one_job_runs_in_process(self):
+        def job(): print("woke", file=sys.stderr); raise SystemExit(2)
+        self.assertEqual(self.park([job]), (2, "woke\n"))
+
+    def test_the_first_event_wakes_once_and_ends_the_siblings(self):
+        def quick(): print("a woke", file=sys.stderr); raise SystemExit(2)
+        def slow(): time.sleep(30); print("b woke", file=sys.stderr); raise SystemExit(2)
+        t = time.monotonic(); code, out = self.park([quick, slow])
+        self.assertEqual((code, out), (2, "a woke\n")); self.assertLess(time.monotonic() - t, 5)
+
+    def test_a_job_that_yields_its_lock_does_not_end_the_others(self):
+        def yields(): return
+        def later(): time.sleep(0.2); print("b woke", file=sys.stderr); raise SystemExit(2)
+        self.assertEqual(self.park([yields, later]), (2, "b woke\n"))
+        self.assertEqual(self.park([yields, yields]), (0, ""))
+
+    def test_a_job_that_fails_ends_quietly_and_does_not_end_the_others(self):
+        def broken(): raise RuntimeError("boom")
+        def later(): time.sleep(0.2); print("b woke", file=sys.stderr); raise SystemExit(2)
+        self.assertEqual(self.park([broken, later]), (2, "b woke\n"))
+        self.assertEqual(self.park([broken, broken]), (0, ""))
+
+    def test_no_jobs_return_at_once(self):
+        self.assertEqual(self.park([]), (0, ""))
 
 
 class SharedGuidance(unittest.TestCase):

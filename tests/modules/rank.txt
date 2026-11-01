@@ -115,7 +115,6 @@ fc_status
 fc_spec
 fc_sleep
 fc_stall
-fc_turnjudge
 fc_watch
 fc_yolo
 fc_lead
@@ -127,3 +126,4 @@ fc_nightprep
 fc_digest
 fc_night
 fc_factory
+fc_rewake

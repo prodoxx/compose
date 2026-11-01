@@ -163,7 +163,7 @@ A teammate herdr shows as working for 30 minutes with no report and no commit ra
 The 4-minute quiet alarm for the team lead is unchanged, and time asleep does not count toward either.
 
 The team lead never starts `watch` itself.
-Its tab carries `COMPOSE_ROLE`, `COMPOSE_PROJECT`, and `COMPOSE_REPO`, and the plugin's Stop hook (`compose rewake`) parks a watch whenever one of its turns ends.
+Its tab carries `COMPOSE_ROLE`, `COMPOSE_PROJECT`, and `COMPOSE_REPO`, and the plugin's Stop hook (`compose rewake`) parks a watch whenever one of its turns ends (an engineering manager gets the same, one per project it holds).
 The watch's event wakes the idle session (Claude Code's `asyncRewake`), and the next turn end parks the next watch.
 A Codex session has no background wake, so it runs `compose watch ... --timeout 240` in the foreground.
 A lock keeps one watch per watcher.
