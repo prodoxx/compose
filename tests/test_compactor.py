@@ -14,6 +14,7 @@ import argparse, json, shutil, subprocess, tempfile, time
 IDLE_BUFFER = ["  Next I write the tech doc.", "", "────────────", "❯", "────────────", "  Opus 5.5 | ctx: 7%"]
 TYPING_BUFFER = ["  Next I write the tech doc.", "", "────────────", "❯ go ahead with the tech doc", "────────────", "  Opus 5.5 | ctx: 7%"]
 SUGGESTION_BUFFER = ["  Next I write the tech doc.", "", "────────────", "❯ \x1b[0m\x1b[2mSkip the learning note\x1b[0m\r", "────────────", "  Opus 5.5 | ctx: 7%\r"]
+BARE_RESET_BUFFER = ["  Next I write the tech doc.", "", "────────────", "❯ \x1b[2mSkip the learning note\x1b[m\r", "────────────"]
 STYLED_TYPING_BUFFER = ["  Next I write the tech doc.", "", "────────────", "\x1b[1m❯\x1b[0m go \x1b[2mahead\x1b[22m with it\r", "────────────"]
 ROWS = []
 real_records = fc.fc_transcript.records
@@ -48,6 +49,7 @@ class Gate(unittest.TestCase):
     def test_a_dim_suggested_prompt_in_the_input_line_is_not_typed_text(self):
         self.assertEqual(fc.fc_compactor.plain_lines("\n".join(SUGGESTION_BUFFER))[3], "❯ ")
         self.assertEqual(fc.fc_compactor.plain_lines("\n".join(STYLED_TYPING_BUFFER))[3], "❯ go  with it")
+        self.assertEqual(fc.fc_compactor.plain_lines("\n".join(BARE_RESET_BUFFER))[3], "❯ ")  # `\x1b[m` resets as `\x1b[0m` does
         with mock.patch.object(fc.fc_herdr, "herdr", lambda *a, **k: {"agent": {"agent_status": "idle"}}), \
                 mock.patch.object(fc.fc_herdr, "herdr_text", lambda *a, **k: "\n".join(SUGGESTION_BUFFER)):
             self.assertTrue(fc.fc_compactor.pane_quiet("w1:p2"))
@@ -199,23 +201,47 @@ class Typist(unittest.TestCase):
         self.assertGreaterEqual(self.handoff_at, 6)
         self.assertLess(self.handoff_at, 10)
 
-    def test_a_poll_that_is_not_quiet_restarts_the_window(self):
+    def test_a_busy_stretch_pauses_the_quiet_clock_instead_of_restarting_it(self):
         with mock.patch.object(fc.fc_config, "COMPACT", {**fc.fc_config.COMPACT_DEFAULTS, "idle_seconds": 6}):
-            self.run_compactor(statuses=["idle", "working", "idle"])  # idle at 0, working at 2, then idle from 4: the window ends at 10, not 6
+            # quiet 0-4 (4 s), a wake keeps it busy at 6, quiet again from 8: the 2 s from 8 to 10 complete the 6, so it acts at 10, not 14
+            self.run_compactor(statuses=["idle", "idle", "idle", "working", "idle", "idle", "working", "idle"])
         self.assertGreaterEqual(self.handoff_at, 10)
+        self.assertLess(self.handoff_at, 14)
         self.assertEqual(len(self.prompts), 2)
 
-    def test_an_owner_prompt_inside_the_window_restarts_it(self):
+    def owner_types_at(self, clock, text="one more thing", typed_by_compose=False, statuses=("idle",)):
+        """Run the compactor with a 6 s idle window while a user record lands in the transcript at `clock`; compose logs it as its own when asked."""
         base = time.time()
         orig_sleep = self.sleep
         def sleep(seconds):
             orig_sleep(seconds)
-            if self.clock == 2:  # the owner submits a prompt mid-window
-                self.append_row({"type": "user", "timestamp": now_stamp(), "uuid": "o1", "origin": {"kind": "human"}, "message": {"role": "user", "content": "one more thing"}})
+            if self.clock == clock:
+                if typed_by_compose:
+                    fc.fc_compactlog.typed("w1:p2", text)
+                self.append_row({"type": "user", "timestamp": now_stamp(), "uuid": "o1", "origin": {"kind": "human"}, "message": {"role": "user", "content": text}})
         with mock.patch.object(time, "time", lambda: base + self.clock), mock.patch.object(time, "sleep", sleep), \
                 mock.patch.object(fc.fc_config, "COMPACT", {**fc.fc_config.COMPACT_DEFAULTS, "idle_seconds": 6}):
-            self.run_compactor(statuses=["idle"])
-        self.assertGreaterEqual(self.handoff_at, 10)  # the prompt at 2 voided the window begun at 0; the new one begins at 4 and holds until 10, not 6
+            self.run_compactor(statuses=statuses)
+
+    def test_an_owner_prompt_inside_the_window_disarms_the_run(self):
+        self.owner_types_at(2)
+        self.assertEqual(self.prompts, [])
+        last = fc.fc_compactlog.read()[-1]
+        self.assertEqual((last["kind"], last["outcome"], last["trigger"], last["role"]), ("compaction", "disarmed-owner-typing", "compose", "manager"))
+        self.assertEqual(last["transcript"], str(self.transcript))
+        self.assertIsNone(fc.fc_compactlog.inflight("w1:p2"))  # the next Stop judges again
+        self.assertLess(self.clock, 6)
+
+    def test_an_owner_prompt_while_the_pane_is_busy_disarms_before_it_settles(self):
+        self.owner_types_at(2, statuses=["working"])  # the pane never goes quiet: the prompt alone ends the run, and the marker is gone before its Stop
+        self.assertEqual(fc.fc_compactlog.read()[-1]["outcome"], "disarmed-owner-typing")
+        self.assertIsNone(fc.fc_compactlog.inflight("w1:p2"))
+        self.assertLess(self.clock, 10)
+
+    def test_a_prompt_compose_typed_inside_the_window_does_not_disarm(self):
+        self.owner_types_at(2, text="compose: a teammate reported", typed_by_compose=True)
+        self.assertEqual(len(self.prompts), 2)
+        self.assertEqual(fc.fc_compactlog.read()[-1]["outcome"], "done")
 
     def test_the_transcript_is_read_again_only_when_it_changed(self):
         with mock.patch.object(fc.fc_config, "COMPACT", {**fc.fc_config.COMPACT_DEFAULTS, "idle_seconds": 6}):
@@ -249,6 +275,12 @@ class Typist(unittest.TestCase):
         self.assertEqual(fc.fc_compactlog.read()[-1]["outcome"], "unknown-role")
         self.assertEqual(fc.fc_compactlog.inflight("w1:p2")["pid"], 1234)
         self.assertEqual(self.prompts, [])
+
+    def test_an_unknown_role_releases_the_marker_the_hook_set_for_it(self):
+        fc.fc_compactlog.set_inflight("w1:p2", "idle", os.getpid(), "judged")
+        self.run_compactor(role="nobody")
+        self.assertEqual(fc.fc_compactlog.read()[-1]["outcome"], "unknown-role")
+        self.assertIsNone(fc.fc_compactlog.inflight("w1:p2"))
 
     def test_a_refused_prompt_clears_the_marker(self):
         self.tell_returns = False

@@ -5,12 +5,15 @@ import fc_compactlog, fc_config, fc_herdr, fc_manager, fc_transcript
 # The detached process the Stop hook starts to compact an engineering manager or team lead session at an idle moment: it waits for the
 # pane to be quiet, has the session write its handoff, then types `/compact` with a fixed focus. Every step lands in the compaction log
 # and every exit path clears the pane's in-flight marker. It types only into a pane that is idle with an empty input line.
+# The idle window counts quiet seconds: a wake from a parked watch or a prompt compose typed makes the pane busy for a moment, which pauses
+# the count, while a prompt from the product owner disarms the run so the next Stop judges again. A prompt the engineering manager types
+# itself through the herdr CLI in its own Bash tool is not in compose's log, so it disarms a team lead's run too: the safe side.
 
 PROMPT_MARKS = ("❯", ">")
-DIM = re.compile(r"\x1b\[2m.*?\x1b\[(?:0|22)m")  # Claude Code's suggested next prompt sits dim in the input box until the owner takes it
+DIM = re.compile(r"\x1b\[2m.*?\x1b\[(?:0|22)?m")  # Claude Code's suggested next prompt sits dim in the input box until the owner takes it
 SGR = re.compile(r"\x1b\[[0-9;]*m")
 POLL = 2.0
-GATE_LIMIT = 1800.0  # how long it waits for a quiet pane before giving up
+GATE_LIMIT = 1800.0  # how long it waits for the idle window to fill before giving up
 CEILING_HOLD = 5.0  # a ceiling compaction cannot wait for the idle window: the session is about to run out of room
 SETTLE_LIMIT = 300.0
 START_WAIT = 10.0  # how long the pane gets to start working on the handoff prompt before it counts as already done
@@ -109,33 +112,35 @@ def trigger_for(mode):
     return "compose" if mode == "judged" else "ceiling"
 
 def wait_quiet(pane, transcript, mode):
-    """Wait until the pane has been quiet for the idle window with no owner prompt in it. False after GATE_LIMIT seconds.
-    The pane's in-flight marker is refreshed every MARKER_REFRESH seconds, since the wait outlasts its expiry."""
+    """Wait until the pane has been quiet for the idle window in all: "quiet" then, "owner" as soon as the product owner prompts after the
+    wait began, "gave-up" after GATE_LIMIT seconds. Only the time between two quiet polls counts, and a busy poll pauses the count, never
+    resets it. The pane's in-flight marker is refreshed every MARKER_REFRESH seconds, since the wait outlasts its expiry."""
     watched = _watched(transcript)
     hold = fc_config.COMPACT["idle_seconds"] if mode == "judged" else CEILING_HOLD
     give_up = time.monotonic() + GATE_LIMIT
     refreshed = time.monotonic()
-    began = since = None
+    since, quiet, last = utc_second_before_now(), 0.0, None
     while time.monotonic() < give_up:
         if time.monotonic() - refreshed >= MARKER_REFRESH:
             fc_compactlog.set_inflight(pane, "idle", os.getpid(), mode)
             refreshed = time.monotonic()
+        if owner_typed_since(watched, pane, since):
+            return "owner"
         if pane_quiet(pane):
             now = time.monotonic()
-            if began is None:
-                began, since = now, utc_second_before_now()
-            if owner_typed_since(watched, pane, since):
-                began = None  # the owner is at the keyboard: the window starts over
-            elif now - began >= hold:
-                return True
+            quiet += now - last if last is not None else 0.0
+            last = now
+            if quiet >= hold:
+                return "quiet"
         else:
-            began = None
+            last = None  # busy for a moment: the count pauses
         time.sleep(POLL)
-    return False
+    return "gave-up"
 
 
 # ---------- the run ----------
 def step(pane, role, name, outcome=None, **fields):
+    """Log one step of the run (idle, handoff, compact, error), with its outcome when the run ends on it."""
     fc_compactlog.append("step", pane=pane, role=role, step=name, **({"outcome": outcome} if outcome else {}), **fields)
 
 def finish(pane, role, name, outcome, **fields):
@@ -143,13 +148,25 @@ def finish(pane, role, name, outcome, **fields):
     step(pane, role, name, outcome, **fields)
     fc_compactlog.clear_inflight(pane)
 
+def stopped(pane, role, mode, transcript, outcome):
+    """End the run as a compaction that did not happen because the product owner spoke, and release the pane."""
+    fc_compactlog.append("compaction", pane=pane, role=role, trigger=trigger_for(mode), transcript=str(transcript.path), outcome=outcome)
+    fc_compactlog.clear_inflight(pane)
+
 def compact(a):
+    """The run: wait for the idle window, have the session write its handoff, wait for it to settle, then type `/compact` and log the boundary
+    it lands as the compaction, with the pane's new baseline."""
     pane, role, transcript, mode, handoff = a.pane, a.role, Watched(a.transcript), a.mode, a.handoff
     pid = os.getpid()
     if role not in HANDOFF_PROMPTS:
-        return step(pane, role, "idle", "unknown-role")  # no marker of ours was set: another compactor's may hold this pane
-    fc_compactlog.set_inflight(pane, "idle", pid, mode)
-    if not wait_quiet(pane, transcript, mode):
+        if (fc_compactlog.inflight(pane) or {}).get("pid") == pid:
+            fc_compactlog.clear_inflight(pane)  # the marker the hook set for this run; another compactor's is left alone
+        return step(pane, role, "idle", "unknown-role")
+    fc_compactlog.set_inflight(pane, "idle", pid, mode)  # the hook set it with this pid: this refreshes it
+    held = wait_quiet(pane, transcript, mode)
+    if held == "owner":
+        return stopped(pane, role, mode, transcript, "disarmed-owner-typing")
+    if held != "quiet":
         return finish(pane, role, "idle", "gave-up")
     sent_after = utc_second_before_now()
     step(pane, role, "handoff", mode=mode)
@@ -159,14 +176,13 @@ def compact(a):
     if not wait_settled(pane):
         return finish(pane, role, "handoff", "not-settled")
     if owner_typed_since(transcript, pane, sent_after):
-        fc_compactlog.append("compaction", pane=pane, role=role, trigger=trigger_for(mode), transcript=str(transcript.path), outcome="aborted-owner-typing")
-        return fc_compactlog.clear_inflight(pane)
+        return stopped(pane, role, mode, transcript, "aborted-owner-typing")
+    before = len(fc_transcript.compactions(transcript.rows()))  # counted first: on a long transcript this read takes a second
     give_up = time.monotonic() + REQUIET_LIMIT
     while not pane_quiet(pane):
         if time.monotonic() >= give_up:
             return finish(pane, role, "compact", "not-quiet")
         time.sleep(POLL)
-    before = len(fc_transcript.compactions(transcript.rows()))
     step(pane, role, "compact", mode=mode)
     if not fc_manager.tell(pane, FOCUS.format(path=handoff)):
         return finish(pane, role, "compact", "refused")
