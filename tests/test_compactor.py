@@ -13,6 +13,8 @@ import argparse, json, shutil, subprocess, tempfile, time
 
 IDLE_BUFFER = ["  Next I write the tech doc.", "", "────────────", "❯", "────────────", "  Opus 5.5 | ctx: 7%"]
 TYPING_BUFFER = ["  Next I write the tech doc.", "", "────────────", "❯ go ahead with the tech doc", "────────────", "  Opus 5.5 | ctx: 7%"]
+SUGGESTION_BUFFER = ["  Next I write the tech doc.", "", "────────────", "❯ \x1b[0m\x1b[2mSkip the learning note\x1b[0m\r", "────────────", "  Opus 5.5 | ctx: 7%\r"]
+STYLED_TYPING_BUFFER = ["  Next I write the tech doc.", "", "────────────", "\x1b[1m❯\x1b[0m go \x1b[2mahead\x1b[22m with it\r", "────────────"]
 ROWS = []
 real_records = fc.fc_transcript.records
 
@@ -42,6 +44,22 @@ class Gate(unittest.TestCase):
     def test_an_echoed_prompt_above_the_input_line_does_not_count(self):
         self.assertEqual(fc.fc_compactor.input_line(["❯ the earlier prompt", "  reply", "❯", "  status"]), "")
         self.assertEqual(fc.fc_compactor.input_line(["❯", "  reply", "> typing", "  status"]), "typing")
+
+    def test_a_dim_suggested_prompt_in_the_input_line_is_not_typed_text(self):
+        self.assertEqual(fc.fc_compactor.plain_lines("\n".join(SUGGESTION_BUFFER))[3], "❯ ")
+        self.assertEqual(fc.fc_compactor.plain_lines("\n".join(STYLED_TYPING_BUFFER))[3], "❯ go  with it")
+        with mock.patch.object(fc.fc_herdr, "herdr", lambda *a, **k: {"agent": {"agent_status": "idle"}}), \
+                mock.patch.object(fc.fc_herdr, "herdr_text", lambda *a, **k: "\n".join(SUGGESTION_BUFFER)):
+            self.assertTrue(fc.fc_compactor.pane_quiet("w1:p2"))
+        with mock.patch.object(fc.fc_herdr, "herdr", lambda *a, **k: {"agent": {"agent_status": "idle"}}), \
+                mock.patch.object(fc.fc_herdr, "herdr_text", lambda *a, **k: "\n".join(STYLED_TYPING_BUFFER)):
+            self.assertFalse(fc.fc_compactor.pane_quiet("w1:p2"))
+
+    def test_pane_input_reads_the_visible_rows_with_styling(self):
+        seen = []
+        with mock.patch.object(fc.fc_herdr, "herdr_text", lambda *a, **k: seen.append(a) or "\n".join(IDLE_BUFFER)):
+            self.assertEqual(fc.fc_compactor.pane_input("w1:p2"), "")
+        self.assertEqual(seen, [("agent", "read", "w1:p2", "--source", "visible", "--format", "ansi", "--lines", "12")])
 
     def test_pane_status_reads_the_agent_record_herdr_answers_with(self):
         record = {"agent": {"agent_status": "done", "pane_id": "w1:p2", "name": "lead"}, "type": "agent_info"}

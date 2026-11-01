@@ -1,4 +1,4 @@
-import os, subprocess, sys, time
+import os, re, subprocess, sys, time
 from pathlib import Path
 import fc_compactlog, fc_config, fc_herdr, fc_manager, fc_transcript
 
@@ -7,6 +7,8 @@ import fc_compactlog, fc_config, fc_herdr, fc_manager, fc_transcript
 # and every exit path clears the pane's in-flight marker. It types only into a pane that is idle with an empty input line.
 
 PROMPT_MARKS = ("❯", ">")
+DIM = re.compile(r"\x1b\[2m.*?\x1b\[(?:0|22)m")  # Claude Code's suggested next prompt sits dim in the input box until the owner takes it
+SGR = re.compile(r"\x1b\[[0-9;]*m")
 POLL = 2.0
 GATE_LIMIT = 1800.0  # how long it waits for a quiet pane before giving up
 CEILING_HOLD = 5.0  # a ceiling compaction cannot wait for the idle window: the session is about to run out of room
@@ -42,11 +44,19 @@ def pane_status(pane):
     status = agent.get("agent_status") if isinstance(agent, dict) else None
     return status if isinstance(status, str) else None
 
+def plain_lines(ansi_text):
+    """The pane's rows as plain text, with dim text dropped first: a suggested prompt the owner has not taken is dim, typed text is not."""
+    return [SGR.sub("", DIM.sub("", line)).rstrip("\r") for line in ansi_text.split("\n")]
+
+def pane_input(pane):
+    """What waits in the pane's input line (see `input_line`), read with styling so a dim suggested prompt does not count as typed text."""
+    return input_line(plain_lines(fc_herdr.herdr_text("agent", "read", pane, "--source", "visible", "--format", "ansi", "--lines", "12")))
+
 def pane_quiet(pane):
     """Whether the agent is idle or done and nothing waits in its input line."""
     if pane_status(pane) not in ("idle", "done"):
         return False
-    return input_line(fc_herdr.herdr_text("agent", "read", pane, "--source", "detection", "--lines", "12").split("\n")) == ""
+    return pane_input(pane) == ""
 
 def wait_settled(pane, timeout=SETTLE_LIMIT, poll=POLL):
     """Wait for the pane to take a prompt and finish it: up to START_WAIT seconds for `working` or `blocked`, then until `idle` or `done`.
