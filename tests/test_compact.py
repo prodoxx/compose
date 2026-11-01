@@ -530,3 +530,29 @@ class Consider(unittest.TestCase):
         fc.fc_config.COMPACT["judged"] = False
         v, j = self.consider(90000)
         self.assertEqual((v["decision"], j.call_count), ("off", 0))
+
+    def test_a_bad_config_still_lets_the_ceiling_stand_but_blocks_the_ask(self):
+        broken = mock.Mock(side_effect=SystemExit("bad"))
+        with mock.patch.object(fc.fc_config, "apply_config", broken):
+            v, j = self.consider(150000)
+            self.assertEqual((v["decision"], j.call_count), ("ceiling", 0))
+            v, j = self.consider(90000, now=2000.0)
+        self.assertEqual((v["decision"], v["reason"], j.call_count), ("error", "configuration", 0))
+
+    def test_the_config_is_applied_before_any_gate(self):
+        applied = mock.Mock()
+        with mock.patch.object(fc.fc_config, "apply_config", applied):
+            v, _ = self.consider(1000)
+        self.assertEqual(v["decision"], "below-minimum")
+        applied.assert_called_once_with(move=False)
+
+    def test_known_secrets_never_reach_the_judge(self):
+        secret = "sk-test-secret-value-1234"
+        ROWS.clear()
+        rec("user", message={"role": "user", "content": f"deploy with key {secret} please"}, origin={"kind": "human"})
+        seen = []
+        with mock.patch.object(fc.fc_core, "SECRET_VALUES", {secret}):
+            v, _ = self.consider(90000, ask=lambda env, cfg, state, *a, **k: seen.append(json.dumps(state)) or self.reply)
+        self.assertEqual(v["decision"], "qualifies")
+        self.assertIn("deploy with key", seen[0])
+        self.assertNotIn(secret, seen[0])

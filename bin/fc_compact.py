@@ -1,5 +1,5 @@
 import json, math, os, re, time
-import fc_config, fc_compactlog, fc_models, fc_snapshot, fc_transcript
+import fc_config, fc_core, fc_compactlog, fc_models, fc_snapshot, fc_transcript
 
 # The compact-adviser judge policy (packages/claude-mod/lib/judge.ts and state.ts), ported as pure functions: the two
 # questions sent to the judge, the score and floor curve that decide whether a checkpoint qualifies, how a context
@@ -176,6 +176,12 @@ def consider(pane, role, transcript, now=None):
             pass  # the log is for measuring; it must not break a Stop hook
         return verdict
 
+    try:  # the Stop hook runs without compose.py's setup: the config, the TypeSafe key and the secret values come from here
+        fc_config.apply_config(move=False)
+        bad_config = False
+    except (Exception, SystemExit):
+        bad_config = True  # the gates still run on whatever COMPACT holds; the verdict comes where the key is fetched
+
     if fc_config.compact_off():
         return done("off")
     try:
@@ -208,16 +214,16 @@ def consider(pane, role, transcript, now=None):
             pass
         return done("error", kind)
 
-    try:
-        fc_config.apply_config(move=False)
-        fc_config.typesafe_key(os.environ, "compact judge")
-    except (Exception, SystemExit):
+    if bad_config:
         return fail("configuration", False)
-    cfg = fc_config.COMPACT  # apply_config re-reads it
+    try:
+        fc_config.typesafe_key(os.environ, "compact judge")
+    except Exception:
+        return fail("configuration", False)
     if role not in PROFILES:
         return fail("configuration", False)
     try:
-        snap = fc_snapshot.snapshot(_live_messages(rows))
+        snap = fc_snapshot.snapshot(_live_messages(rows), secrets=tuple(sorted(fc_core.secret_values(), key=len, reverse=True)))
         if _request_bytes(snap["state"]) > MAX_REQUEST_BYTES:
             return fail("input", False)
     except Exception:
