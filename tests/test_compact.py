@@ -209,5 +209,155 @@ class Transcript(unittest.TestCase):
         self.assertEqual(fc.fc_transcript.transcript_path("/Users/r/apps/x.y", "abc").parent.name, "-Users-r-apps-x-y")
 
 
+class SnapshotPort(unittest.TestCase):
+    def msgs(self):
+        return [{"role": "user", "text": "Always keep tests green.", "toolUses": []},
+                {"role": "user", "text": fc.fc_snapshot.SUMMARY_PREFIX + " ... older summary", "toolUses": []},
+                {"role": "assistant", "text": "Wrote the file.", "toolUses": [
+                    {"tool": "Write", "input": {"file_path": "/tmp/a.md"}, "text": "x" * 2000, "isError": False},
+                    {"tool": "Bash", "input": {"command": "echo hi > /tmp/b.txt && cat ~/.ssh/id_rsa"}, "text": "hi", "isError": False}]}]
+
+    def test_state_shape_and_artifacts(self):
+        s = fc.fc_snapshot.snapshot(self.msgs())
+        self.assertEqual(sorted(s), ["autoCoverage", "checkpointText", "conversationTokens", "state"])
+        self.assertEqual(sorted(s["state"]), ["compaction", "coverage", "previousSummary", "recent", "savedArtifacts", "userConstraints"])
+        self.assertEqual(s["state"]["userConstraints"], [{"role": "user", "text": "Always keep tests green."}])
+        self.assertEqual(s["state"]["savedArtifacts"], ["/tmp/a.md", "/tmp/b.txt"])
+        self.assertTrue(s["state"]["previousSummary"].startswith(fc.fc_snapshot.SUMMARY_PREFIX))
+        self.assertEqual(s["checkpointText"], json.dumps(["Always keep tests green.", "Wrote the file."]))
+
+    def test_tool_results_are_middle_clipped_to_the_budget(self):
+        tools = fc.fc_snapshot.snapshot(self.msgs())["state"]["recent"][0]["tools"]
+        self.assertLessEqual(len(tools[0]["excerpt"].encode()), fc.fc_snapshot.TOOL_RESULT_BUDGET)
+        self.assertIn("...[truncated ", tools[0]["excerpt"])
+        self.assertTrue(fc.fc_snapshot.snapshot(self.msgs())["state"]["coverage"]["recentTextTruncated"])
+
+    def test_secrets_and_sensitive_paths_are_redacted(self):
+        s = fc.fc_snapshot.snapshot([{"role": "user", "text": "key sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789", "toolUses": []},
+                                     {"role": "assistant", "text": "ok", "toolUses": [{"tool": "Read", "input": {"file_path": "/home/u/.env"}, "text": "SECRET=1", "isError": False}]}], secrets=("hunter2",))
+        self.assertNotIn("sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789", json.dumps(s))
+        self.assertEqual(s["state"]["recent"][0]["tools"][0]["excerpt"], "[Sensitive file content excluded]")
+        self.assertTrue(s["state"]["coverage"]["redacted"])
+        self.assertFalse(s["autoCoverage"])
+
+    def test_token_estimate_is_chars_over_four(self):
+        self.assertEqual(fc.fc_snapshot.estimate_conversation_tokens([{"role": "user", "text": "abcdefgh", "toolUses": []}]), 2)
+
+    def test_token_estimate_counts_tool_input_and_result_text(self):
+        m = {"role": "assistant", "text": "", "toolUses": [{"tool": "Bash", "input": {"command": "ls"}, "text": "abcd", "isError": False}]}
+        self.assertEqual(fc.fc_snapshot.estimate_conversation_tokens([m]), -(-(len(json.dumps({"command": "ls"}, separators=(",", ":"))) + 4) // 4))
+        self.assertEqual(fc.fc_snapshot.estimate_conversation_tokens([]), 0)
+
+    def test_clip_cuts_on_bytes_and_drops_a_split_character(self):
+        self.assertEqual(fc.fc_snapshot.clip("abc", 3), ("abc", False))
+        self.assertEqual(fc.fc_snapshot.clip("abcdefgh", 6), ("abc", True))
+        self.assertEqual(fc.fc_snapshot.clip("é" * 10, 8), ("éé", True))
+        self.assertEqual(fc.fc_snapshot.clip("abc", 0), ("", True))
+
+    def test_clip_middle_keeps_the_head_and_tail_around_a_marker(self):
+        text, truncated = fc.fc_snapshot.clip_middle("A" * 100 + "B" * 100, 60)
+        self.assertTrue(truncated)
+        self.assertLessEqual(len(text.encode()), 60)
+        self.assertTrue(text.startswith("AAA") and text.endswith("BBB"))
+        self.assertRegex(text, r"\.\.\.\[truncated 1\d\d bytes\]\.\.\.")
+        self.assertEqual(fc.fc_snapshot.clip_middle("short", 60), ("short", False))
+        self.assertEqual(fc.fc_snapshot.clip_middle("long text here", 0), ("", True))
+        self.assertEqual(fc.fc_snapshot.clip_middle("x" * 100, 10), ("x" * 7, True))
+
+    def test_redact_removes_keys_tokens_private_keys_and_assignments(self):
+        text, hit = fc.fc_snapshot.redact("a Bearer abc.def ghp_" + "a" * 20 + " API_KEY=hunter2 -----BEGIN RSA PRIVATE KEY-----\nMII\n-----END RSA PRIVATE KEY----- z")
+        self.assertTrue(hit)
+        self.assertEqual(text, "a [REDACTED] [REDACTED] API_KEY=[REDACTED] [REDACTED PRIVATE KEY] z")
+        self.assertEqual(fc.fc_snapshot.redact("nothing here"), ("nothing here", False))
+
+    def test_owned_settings_lose_the_saved_key_but_keep_the_rest(self):
+        text, hit = fc.fc_snapshot.redact_owned_settings(json.dumps({"mods": {"a.typesafeApiKey": "k1", "typesafeApiKey": "", "keep": 1}, "typesafeApiKey": "k2"}))
+        self.assertTrue(hit)
+        self.assertEqual(json.loads(text), {"mods": {"a.typesafeApiKey": "[REDACTED]", "typesafeApiKey": "", "keep": 1}, "typesafeApiKey": "[REDACTED]"})
+        text, hit = fc.fc_snapshot.redact_owned_settings('{"typesafeApiKey": "abc", "x"')
+        self.assertEqual((text, hit), ('{"typesafeApiKey":"[REDACTED]", "x"', True))
+        self.assertEqual(fc.fc_snapshot.redact_owned_settings("typesafeApiKey=abc rest"), ("typesafeApiKey=[REDACTED] rest", True))
+        self.assertEqual(fc.fc_snapshot.redact_owned_settings('{"a": 1}'), ('{"a": 1}', False))
+
+    def test_known_secrets_are_trimmed_and_blank_ones_ignored(self):
+        self.assertEqual(fc.fc_snapshot.scrub_known_secrets("pw=hunter2 hunter2", [" hunter2 ", "", None, "  "]), ("pw=[REDACTED] [REDACTED]", True))
+        self.assertEqual(fc.fc_snapshot.scrub_known_secrets("clean", ["zzz"]), ("clean", False))
+
+    def test_shell_written_paths(self):
+        paths = fc.fc_snapshot.shell_written_paths
+        self.assertEqual(paths("echo a > /tmp/x.txt; echo b >> y.log; echo c >| z.out"), ["/tmp/x.txt", "y.log", "z.out"])
+        self.assertEqual(paths("make 2> err.log"), [])
+        self.assertEqual(paths("make 1> out.log > /dev/null"), ["out.log"])
+        self.assertEqual(paths("ls | tee a.txt -a b.txt"), ["a.txt", "b.txt"])
+        self.assertEqual(paths("sudo env X=1 tee out.txt"), ["out.txt"])
+        self.assertEqual(paths("sed -i '' -e s/a/b/ f1 f2"), ["f1", "f2"])
+        self.assertEqual(paths("sed -i s/a/b/ f1"), [])  # a word after a bare -i could be a BSD suffix or a GNU script
+        self.assertEqual(paths("sed -i -e s/a/b/ f1"), ["f1"])
+        self.assertEqual(paths("sed -n p f1"), [])
+        self.assertEqual(paths("echo $HOME > $OUT"), [])
+        self.assertEqual(paths("echo > 'my file.txt'"), ["my file.txt"])
+        self.assertEqual(paths("echo > my\\ file.txt"), ["my file.txt"])
+        self.assertEqual(paths("[[ a > b ]] && echo hi > real.txt"), ["real.txt"])
+        self.assertEqual(paths("cat <<EOF > doc.md\nbody > not.txt\nEOF\necho > after.txt"), ["doc.md", "after.txt"])
+        self.assertEqual(paths("cat <<-EOF\n\tbody > no.txt\n\tEOF\necho > after.txt"), ["after.txt"])
+        self.assertEqual(paths("echo 'multi\nline > no.txt' > yes.txt"), ["yes.txt"])
+        self.assertEqual(paths("echo a # > no.txt"), [])
+
+    def test_error_tool_uses_and_sensitive_paths_are_not_artifacts(self):
+        m = [{"role": "assistant", "text": "x", "toolUses": [
+            {"tool": "Write", "input": {"file_path": "/a/failed.md"}, "text": "no", "isError": True},
+            {"tool": "Write", "input": {"file_path": "/a/.env.local"}, "text": "ok", "isError": False},
+            {"tool": "Write", "input": {"file_path": "/a/server.pem"}, "text": "ok", "isError": False},
+            {"tool": "Edit", "input": {"file_path": "/a/one.py"}, "text": "ok", "isError": False},
+            {"tool": "Edit", "input": {"file_path": "/a/two.py"}, "text": "ok", "isError": False},
+            {"tool": "Edit", "input": {"file_path": "/a/one.py"}, "text": "ok", "isError": False},
+            {"tool": "Read", "input": {"file_path": "/a/read.py"}, "text": "ok", "isError": False}]}]
+        self.assertEqual(fc.fc_snapshot.snapshot(m)["state"]["savedArtifacts"], ["/a/two.py", "/a/one.py"])
+
+    def test_only_the_last_eight_artifacts_survive(self):
+        uses = [{"tool": "Write", "input": {"file_path": f"/f{i}"}, "text": "", "isError": False} for i in range(12)]
+        got = fc.fc_snapshot.snapshot([{"role": "assistant", "text": "", "toolUses": uses}])["state"]["savedArtifacts"]
+        self.assertEqual(got, [f"/f{i}" for i in range(4, 12)])
+
+    def test_only_the_recent_tail_is_kept_but_every_owner_ask_is(self):
+        m = []
+        for i in range(40):
+            m += [{"role": "user", "text": f"ask {i}", "toolUses": []}, {"role": "assistant", "text": f"reply {i}", "toolUses": []}]
+        s = fc.fc_snapshot.snapshot(m)["state"]
+        self.assertEqual(len(s["userConstraints"]), 40)
+        self.assertEqual(len(s["recent"]), 32)
+        self.assertEqual(s["recent"][0]["text"], "reply 8")
+        self.assertEqual(s["coverage"]["olderMessagesOmitted"], 16)
+        self.assertNotIn("tools", s["recent"][0])
+        self.assertFalse(s["coverage"]["transcriptLimitReached"])
+        self.assertFalse(s["coverage"]["hasImages"])
+
+    def test_the_newest_summary_wins_and_is_clipped(self):
+        p = fc.fc_snapshot.SUMMARY_PREFIX
+        m = [{"role": "user", "text": p + " old", "toolUses": []}, {"role": "user", "text": p + " new " + "y" * 3000, "toolUses": []}]
+        s = fc.fc_snapshot.snapshot(m)["state"]
+        self.assertTrue(s["previousSummary"].startswith(p + " new "))
+        self.assertEqual(len(s["previousSummary"].encode()), 1500 - 3)
+        self.assertEqual(s["userConstraints"], [])
+
+    def test_user_budget_drops_the_oldest_asks_first(self):
+        m = [{"role": "user", "text": "old " * 1500, "toolUses": []}, {"role": "user", "text": "new " * 1500, "toolUses": []}, {"role": "user", "text": "last", "toolUses": []}]
+        s = fc.fc_snapshot.snapshot(m)
+        self.assertEqual([u["text"][:3] for u in s["state"]["userConstraints"]], ["old", "new", "las"])
+        self.assertEqual(s["state"]["coverage"]["omittedUserMessages"], 1)
+        self.assertFalse(s["autoCoverage"])
+
+    def test_the_transcript_limit_flag_follows_the_message_count(self):
+        m = [{"role": "user", "text": "q", "toolUses": []}] * fc.fc_snapshot.MESSAGE_LIMIT
+        s = fc.fc_snapshot.snapshot(m)
+        self.assertTrue(s["state"]["coverage"]["transcriptLimitReached"])
+        self.assertFalse(s["autoCoverage"])
+
+    def test_the_compaction_note_is_the_mods(self):
+        self.assertEqual(fc.fc_snapshot.snapshot([])["state"]["compaction"]["description"],
+                         "Lossy structured summary of older context (request, files, errors, pending tasks, current work, next step) plus a few recent messages. Exact tool output and long file contents are compressed away. Other compaction hooks may differ.")
+        self.assertEqual(fc.fc_snapshot.snapshot([])["checkpointText"], json.dumps(["", ""]))
+
+
 if __name__ == "__main__":
     unittest.main()
