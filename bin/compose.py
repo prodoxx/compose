@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fc_cost, fc_mcp  # noqa: E402
-import fc_core, fc_proc, fc_readguard, fc_libapi, fc_green, fc_gate, fc_config, fc_tasks, fc_linear, fc_linear_cmd, fc_prd, fc_delivery, fc_factorystate, fc_factoryturn, fc_lead, fc_factory, fc_claude, fc_models, fc_route, fc_quick, fc_herdr, fc_worktree, fc_layers, fc_blockers, fc_stack, fc_change, fc_frame0, fc_f0pages, fc_ask, fc_decide, fc_hooks, fc_pin, fc_reports, fc_manager, fc_crew, fc_toolbug, fc_init, fc_clean, fc_figma, fc_briefs, fc_buildercheck, fc_reconcile, fc_format, fc_implement, fc_shrink, fc_jev, fc_accept, fc_fixround, fc_detach, fc_verify, fc_taskreview, fc_ship, fc_prove, fc_run, fc_status, fc_tiers, fc_tierpin, fc_budget, fc_spec, fc_watch, fc_history, fc_yolo, fc_bench, fc_setup, fc_update, fc_readiness  # noqa: E402
+import fc_core, fc_proc, fc_readguard, fc_libapi, fc_green, fc_gate, fc_config, fc_compact, fc_transcript, fc_snapshot, fc_compactlog, fc_tasks, fc_linear, fc_linear_cmd, fc_prd, fc_delivery, fc_factorystate, fc_factoryturn, fc_lead, fc_factory, fc_claude, fc_models, fc_route, fc_quick, fc_herdr, fc_worktree, fc_layers, fc_blockers, fc_stack, fc_change, fc_frame0, fc_f0pages, fc_ask, fc_decide, fc_hooks, fc_pin, fc_reports, fc_manager, fc_compactor, fc_crew, fc_toolbug, fc_init, fc_clean, fc_figma, fc_briefs, fc_buildercheck, fc_reconcile, fc_format, fc_implement, fc_shrink, fc_jev, fc_accept, fc_fixround, fc_detach, fc_verify, fc_taskreview, fc_ship, fc_prove, fc_run, fc_status, fc_tiers, fc_tierpin, fc_budget, fc_spec, fc_watch, fc_rewake, fc_history, fc_yolo, fc_bench, fc_setup, fc_update, fc_readiness  # noqa: E402
 
 DETACHED = fc_detach.DETACHED
 
@@ -140,8 +140,10 @@ def main():
                             ("figma", fc_figma.cmd_figma, "check | tree | judge | publish: store the target Figma file key, prove Framelink reads it, record the plan's limits; save a task's node tree; judge it with Jev; say whether a library publish is pending"),
                             ("teardown", fc_crew.cmd_teardown, "close the project's implementer, verify, and finished teammate tabs (the team lead's done does this)"),
                             ("guard", fc_hooks.cmd_guard, "Claude Code PreToolUse hook: the team lead writes no code (reads the hook event on stdin)"),
-                            ("rewake", fc_watch.cmd_rewake, "Claude Code Stop hook: park a watch after each team lead turn; its event wakes the session"),
+                            ("rewake", fc_rewake.cmd_rewake, "Claude Code Stop hook: judge each team lead or engineering manager turn for compaction and park the watches after it; the first event wakes the session"),
+                            ("compactor", fc_compactor.cmd_compactor, "Internal: the detached process the Stop hook starts to compact a manager or lead session at an idle moment"),
                             ("reenter", fc_watch.cmd_reenter, "Claude Code SessionStart hook: after a compaction, point the teammate back at its brief, the board, and Linear"),
+                            ("compactions", fc_compactlog.cmd_compactions, "the week's compactions across every Claude Code session on this Mac by trigger, context before each, input per session per day, the where-were-we share, and the runs that ended before compacting: --days <n> (default 7) or --since <YYYY-MM-DD>"),
                             ("skillcheck", fc_hooks.cmd_skillcheck, "Claude Code UserPromptSubmit and PostToolUse(Skill) hook: tell a compose session the skill changed since it read it"),
                             ("shrink", fc_shrink.cmd_shrink, "make a small JPEG copy of each image so an LLM reads it for fewer tokens; prints its pixels and bytes before and after"),
                             ("workspace", fc_config.cmd_workspace, f"show workspaces, or switch: `workspace personal` (config: {fc_config.CONFIG_PATH})")):
@@ -156,6 +158,13 @@ def main():
         if name == "setup":
             s.add_argument("--yes", action="store_true", help="take every default, skip every key, never prompt")
             s.add_argument("--dry-run", action="store_true", help="walk the whole setup and change nothing: every change prints as a would line")
+        if name == "compactor":
+            for flag in ("--pane", "--role", "--transcript", "--handoff"):
+                s.add_argument(flag, required=True)
+            s.add_argument("--mode", required=True, choices=("judged", "ceiling"))
+        if name == "compactions":
+            s.add_argument("--days", type=int, default=7)
+            s.add_argument("--since")
         if name == "sync":
             s.add_argument("--stdin", action="store_true", help="read the sync JSON from stdin instead of Linear")
         if name == "linear":
@@ -436,7 +445,7 @@ def main():
         proj = fc_core.project_dir(ns)
         fc_update.hold(a.cmd, proj.name, ns.repo)
         fc_pin.pin(proj, ns.repo)
-    if a.fn not in (fc_config.cmd_workspace, fc_hooks.cmd_guard, fc_watch.cmd_rewake, fc_hooks.cmd_skillcheck):  # the hooks run in every session: no config, no output
+    if a.fn not in (fc_config.cmd_workspace, fc_hooks.cmd_guard, fc_rewake.cmd_rewake, fc_hooks.cmd_skillcheck):  # the hooks run in every session: no config, no output
         ws = fc_config.apply_config(move=not getattr(a, "dry_run", False), harness=getattr(a, "harness", None))  # "default" when no workspace is chosen
         sys.stdout, sys.stderr = fc_core.Scrubbed(sys.stdout), fc_core.Scrubbed(sys.stderr)
         if a.cmd in ("run", "verify", "review", "bench", "resume"):  # the commands that spend; `watch` output stays one line

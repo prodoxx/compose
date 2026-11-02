@@ -3,7 +3,7 @@ import importlib.machinery, importlib.util, io, json, os, shutil, tempfile, unit
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
-import sys, time
+import subprocess, sys, time
 os.environ["HERDR_ENV"] = ""
 
 _spec = importlib.util.spec_from_loader("fc", importlib.machinery.SourceFileLoader("fc", str(Path(__file__).resolve().parents[1] / "bin" / "compose.py")))
@@ -651,6 +651,84 @@ class HerdrPromptSession(unittest.TestCase):
     def test_a_failure_without_json_returns_stderr_or_error(self):
         self.assertEqual(self.call("sys.stderr.write('boom: pane gone\\n'); sys.exit(2)", "agent", "prompt", "a", "hi"), (None, "boom: pane gone"))
         self.assertEqual(self.call("sys.exit(3)", "agent", "prompt", "a", "hi"), (None, "error"))
+
+
+class PromptRecord(unittest.TestCase):
+    """Every `agent prompt` herdr() sends is logged as a typed prompt, so the compactor can tell it from the product owner's."""
+
+    def run_prompt(self, returncode, call=None):
+        """(what `call` returned, the log's records) with a fake herdr client that exits `returncode` and a scratch config home."""
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d, True)
+        call = call or (lambda: fc.fc_herdr.herdr("agent", "prompt", "w1:p2", "hello"))
+        done = subprocess.CompletedProcess([], returncode, stdout='{"result": {}}', stderr="")
+        with mock.patch.object(fc.fc_config, "CONFIG_PATH", d / "config.json"), \
+             mock.patch.dict(os.environ, {"HERDR_ENV": "1", "HERDR_SOCKET_PATH": "/tmp/herdr.sock"}), \
+             mock.patch.object(fc.fc_herdr.subprocess, "run", return_value=done):
+            result = call()
+            return result, fc.fc_compactlog.read()
+
+    def wait_prompt(self):
+        return fc.fc_herdr.herdr_error("agent", "prompt", "w1:p2", "hello", "--wait")
+
+    def test_every_agent_prompt_is_recorded(self):
+        _, records = self.run_prompt(0)
+        self.assertEqual([(r["kind"], r["pane"]) for r in records], [("typed", "w1:p2")])
+        self.assertEqual(records[0]["text"], "hello")
+
+    def test_a_failed_prompt_records_nothing(self):
+        self.assertEqual(self.run_prompt(1)[1], [])
+
+    def test_a_prompt_sent_through_herdr_error_is_recorded_too(self):
+        result, records = self.run_prompt(0, self.wait_prompt)
+        self.assertEqual(result, ({}, None))
+        self.assertEqual([(r["kind"], r["pane"], r["text"]) for r in records], [("typed", "w1:p2", "hello")])
+
+    def test_a_failed_herdr_error_prompt_records_nothing(self):
+        result, records = self.run_prompt(1, self.wait_prompt)
+        self.assertEqual(result, (None, "error"))
+        self.assertEqual(records, [])
+
+    def prompt_to(self, target, agent_get=""):
+        """(the herdr subcommands run, the log's records) after a prompt sent to `target`, with `herdr agent get` answering
+        `agent_get` (a failed call when empty)."""
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d, True)
+        calls = []
+        def run(argv, **kw):
+            calls.append(argv[1:3])
+            out = agent_get if argv[1:3] == ["agent", "get"] else '{"result": {}}'
+            return subprocess.CompletedProcess(argv, 0 if out else 1, stdout=out, stderr="")
+        with mock.patch.object(fc.fc_config, "CONFIG_PATH", d / "config.json"), \
+             mock.patch.dict(os.environ, {"HERDR_ENV": "1", "HERDR_SOCKET_PATH": "/tmp/herdr.sock"}), \
+             mock.patch.object(fc.fc_herdr.subprocess, "run", side_effect=run):
+            fc.fc_herdr.herdr("agent", "prompt", target, "hello")
+            return calls, fc.fc_compactlog.read()
+
+    def test_a_prompt_sent_by_agent_name_is_logged_under_its_pane(self):
+        got = json.dumps({"result": {"agent": {"agent_status": "idle", "pane_id": "w3:p7", "name": "lead-x"}}})
+        calls, records = self.prompt_to("lead-x", got)
+        self.assertEqual(calls, [["agent", "prompt"], ["agent", "get"]])
+        self.assertEqual([(r["pane"], r.get("agent"), r["text"]) for r in records], [("w3:p7", "lead-x", "hello")])
+
+    def test_a_prompt_to_an_agent_herdr_cannot_place_is_logged_under_its_name(self):
+        _, records = self.prompt_to("lead-x")
+        self.assertEqual([(r["pane"], r.get("agent")) for r in records], [("lead-x", "lead-x")])
+
+    def test_an_agent_answer_of_another_shape_is_logged_under_the_name(self):
+        for answer in ({"agent": "w3:p7"}, ["w3:p7"], {"agent": {"pane_id": 7}}):
+            _, records = self.prompt_to("lead-x", json.dumps({"result": answer}))
+            self.assertEqual([(r["pane"], r.get("agent")) for r in records], [("lead-x", "lead-x")], answer)
+
+    def test_a_prompt_sent_to_a_pane_id_asks_herdr_nothing_more(self):
+        calls, records = self.prompt_to("w1:p2")
+        self.assertEqual(calls, [["agent", "prompt"]])
+        self.assertEqual([(r["pane"], r.get("agent")) for r in records], [("w1:p2", None)])
+
+    def test_a_log_write_failure_does_not_break_either_call(self):
+        with mock.patch.object(fc.fc_compactlog, "typed", mock.Mock(side_effect=OSError("disk"))):
+            self.assertEqual(self.run_prompt(0, self.wait_prompt)[0], ({}, None))
+            self.assertEqual(self.run_prompt(0)[0], {})
 
 if __name__ == "__main__":
     unittest.main()

@@ -18,6 +18,7 @@ KEYS = ("OPENROUTER_API_KEY", "TEXT_MODEL_API_KEY", "OPENCODE_CONFIG_CONTENT", "
 CALLERS = ("COMPOSE_TEST_SLOT",  # the slot of a `compose timed` running the suite: a lock under the real home, not a test's
            "HERDR_PANE_ID",  # the herdr pane the suite runs in is the session identity of a watch, crew start, or yolo: a test sets its own
            "COMPOSE_ROLE",  # the suite run in a teammate's tab (a toolsmith's) is no engineering manager: a test sets its own
+           "COMPOSE_NO_COMPACT",  # a shell with compaction switched off would change the doctor's compaction line: a test sets its own
            "HERDR_ENV", "HERDR_SOCKET_PATH", "HERDR_SESSION", "HERDR_WORKSPACE_ID", "HERDR_TAB_ID", "HERDR_BIN_PATH")  # the suite is no pane of the user's herdr: a test that needs one sets its own
 
 

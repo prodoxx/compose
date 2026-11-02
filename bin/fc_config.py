@@ -61,6 +61,8 @@ LOAD = {}  # `load` from the config: the keys that move limits() off its default
 FACTORY_DEFAULTS = {"day_tickets": 2, "turn_seconds": 120, "offer_snooze_minutes": 60,
                     "night_tickets": 6, "night_until": "07:00", "night_budget": 20.0, "prep_ahead": 3}
 FACTORY = dict(FACTORY_DEFAULTS)  # `factory` from the config over FACTORY_DEFAULTS: the build loop's pace, turn length and offer snooze
+COMPACT_DEFAULTS = {"judged": True, "minimum": 40000, "budget": 150000, "ceiling": 150000, "idle_seconds": 180, "cooldown": 20000}
+COMPACT = dict(COMPACT_DEFAULTS)  # `compact` from the config over COMPACT_DEFAULTS: when a session is compacted at a task boundary
 LINEAR_KEY = None  # the active workspace's Linear API key, set by apply_config; never printed or passed in argv
 WORKSPACE = "default"
 CREW_EFFORT = {}  # the same keys -> Claude Code --effort, for entries written as {"model": ..., "effort": ...}
@@ -148,10 +150,14 @@ def settings(cfg, harness=None):
         out[k] = {**out[k], **v} if isinstance(v, dict) and isinstance(out.get(k), dict) else v
     return name, out
 
+def compact_off():
+    """Why compaction is off for this session (COMPOSE_NO_COMPACT is set and non-empty), else None."""
+    return "COMPOSE_NO_COMPACT is set" if os.environ.get("COMPOSE_NO_COMPACT") else None
+
 def apply_config(move=True, harness=None):
     """Point models, keys, and env at the active workspace. Its key wins over the shell and the jev .env, and every
     OpenRouter caller (pi, OpenCode, the fast-model review, jev's e2e text helper) bills to it."""
-    global DEFAULT_MODEL, FALLBACK_MODEL, FALLBACK_AFTER, TEST_READER, REVIEW_MODEL, READINESS_MODEL, NIGHT_MODEL, OPENROUTER_KEY, CREW_MODELS, CREW_EFFORT, CREW_FALLBACK, LINEAR_KEY, WORKSPACE, PARALLEL, CLAUDE_PARALLEL, LOAD, FACTORY, PROVIDERS, TIERS, PRICES, HARNESS
+    global DEFAULT_MODEL, FALLBACK_MODEL, FALLBACK_AFTER, TEST_READER, REVIEW_MODEL, READINESS_MODEL, NIGHT_MODEL, OPENROUTER_KEY, CREW_MODELS, CREW_EFFORT, CREW_FALLBACK, LINEAR_KEY, WORKSPACE, PARALLEL, CLAUDE_PARALLEL, LOAD, FACTORY, COMPACT, PROVIDERS, TIERS, PRICES, HARNESS
     if move:
         for line in fc_auth.move_keys(CONFIG_PATH, ENV_FILE, AUTH_PATH):  # old keys leave config.json and .env first, stdout stays clean
             print(line, file=sys.stderr)
@@ -194,6 +200,20 @@ def apply_config(move=True, harness=None):
         sys.exit(f"{CONFIG_PATH}: factory.night_budget must be a number of dollars, 0 or more, not {FACTORY['night_budget']!r}")
     if not (isinstance(FACTORY["night_until"], str) and re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", FACTORY["night_until"])):
         sys.exit(f"{CONFIG_PATH}: factory.night_until must be HH:MM, not {FACTORY['night_until']!r}")
+    compact = st.get("compact", {})
+    if not isinstance(compact, dict):
+        sys.exit(f"{CONFIG_PATH}: compact must be an object of settings, not {compact!r}")
+    for k in compact:
+        if k not in COMPACT_DEFAULTS:
+            sys.exit(f"{CONFIG_PATH}: compact has no setting {k!r}: it takes {', '.join(COMPACT_DEFAULTS)}")
+    COMPACT = {**COMPACT_DEFAULTS, **compact}
+    if type(COMPACT["judged"]) is not bool:
+        sys.exit(f"{CONFIG_PATH}: compact.judged must be true or false, not {COMPACT['judged']!r}")
+    for k, least in (("minimum", 1), ("budget", 1), ("ceiling", 1), ("idle_seconds", 0), ("cooldown", 0)):
+        if type(COMPACT[k]) is not int or COMPACT[k] < least:
+            sys.exit(f"{CONFIG_PATH}: compact.{k} must be a whole number of {least} or more, not {COMPACT[k]!r}")
+    if COMPACT["ceiling"] < COMPACT["minimum"]:  # a ceiling below the minimum would compact before the judge is ever asked
+        sys.exit(f"{CONFIG_PATH}: compact.ceiling must not be below compact.minimum")
     WORKSPACE = name
     HARNESS = harness
     auth = fc_auth.read_auth(AUTH_PATH)

@@ -36,10 +36,10 @@ A prompt still on screen before the start is declined with `n`, and a start that
 A timeout that stays names what the pane waits on, such as `the new pane's shell is waiting on a prompt: '...'`, instead of a bare `timeout`.
 An explicit `zstyle ':omz:update' mode prompt` in `~/.zshenv`, `~/.zprofile`, `~/.zshrc` or `~/.zlogin` outranks those variables, so `compose doctor` lists it as `MISSING: shell startup` with the line to change (`mode reminder` or `disabled`).
 
-The engineering manager is the session you started, so compose sets neither its model nor its compaction.
+The engineering manager is the session you started, so compose sets neither its model nor a compaction window.
 It relays and supervises while planning goes to the planner on the strongest model, so Sonnet serves it well.
-Cap its context with `"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "200000"` in the `env` of `~/.claude/settings.json`, as compose caps every teammate at 150k.
-That variable outranks `modelSettings.<model>.autoCompactWindow` and the `--autocompact` flag, and a session reads it only when it starts.
+Leave its window at the model's default and set no `CLAUDE_CODE_AUTO_COMPACT_WINDOW` of your own, because compose judges when the engineering manager's context is at a finished moment and compacts it then, after asking it to write its handoff.
+compose forces one at the `compact.ceiling` tokens in `~/.compose/config.json` (150k by default), and `compose compactions` shows the week's compactions by trigger.
 
 The engineering manager and the team lead write no code.
 For the team lead the plugin enforces this.
@@ -129,7 +129,7 @@ An owner whose pane is gone is replaced silently, and outside herdr nothing is c
 A session is one engineering manager, so `--takeover` from a live session moves everything that session ran in the repository: every other project it held and the factory's seat (`manager_pane` in `factory.json`) come with it.
 Splitting them would leave two half managers, each answering part of the same product owner's questions.
 Projects of other repositories are not visible from here and stay where they are.
-The old session is told at once: compose prompts its pane (`herdr agent prompt`) naming the new pane and what moved, and says to stop every `compose watch` and `compose factory watch` for it, start nothing there, and ask the product owner nothing more about it.
+The old session is told at once: compose prompts its pane (`herdr agent prompt`) naming the new pane and what moved, and says the hook parks no watch for it any more, to start nothing there, and to ask the product owner nothing more about it.
 A pane at a question dialog refuses a prompt, so the move is also written in `results/manager.json` (`from`): the old session's parked `watch`, or its next `watch --now`, ends with `event owner=taken project=<slug> pane=<new pane>`, which wakes it even under `--from`.
 The old session cannot claim the project back by accident: it is refused like any second session until it runs the same command with `--takeover`.
 `compose factory watch` and `factory start` follow the same rule: a second live session is refused unless it says `--takeover`, which prompts the old one.
@@ -164,14 +164,15 @@ A teammate herdr shows as working for 30 minutes with no report and no commit ra
 The 4-minute quiet alarm for the team lead is unchanged, and time asleep does not count toward either.
 
 The team lead never starts `watch` itself.
-Its tab carries `COMPOSE_ROLE`, `COMPOSE_PROJECT`, and `COMPOSE_REPO`, and the plugin's Stop hook (`compose rewake`) parks a watch whenever one of its turns ends.
+Its tab carries `COMPOSE_ROLE`, `COMPOSE_PROJECT`, and `COMPOSE_REPO`, and the plugin's Stop hook (`compose rewake`) parks a watch whenever one of its turns ends (an engineering manager gets the same: one per project it holds, and one for the factory when it holds that seat, all under the hook so the first event wakes it once).
 The watch's event wakes the idle session (Claude Code's `asyncRewake`), and the next turn end parks the next watch.
 A Codex session has no background wake, so it runs `compose watch ... --timeout 240` in the foreground.
 A lock keeps one watch per watcher.
 A second hook exits at once, and a second `watch` of the same session is refused, naming the first one's pid.
-The hook does nothing in any other session, and its watch ends with the session that parked it.
-Every Claude Code teammate compacts at 150k tokens, since every turn re-sends the whole session and a long one pays for its size on each of them.
+The hook does nothing in any other session, and its watch ends with the session that parked it (an engineering manager's hook passes a stop signal on to its watches and ends them itself when its session is gone).
+Every Claude Code teammate but the team lead compacts at 150k tokens, since every turn re-sends the whole session and a long one pays for its size on each of them.
 The window is `CLAUDE_CODE_AUTO_COMPACT_WINDOW` in the session's `--settings` env, because that variable outranks the `--autocompact` flag and would let a value in your own settings win.
+The team lead gets no window from compose, because the Stop hook judges its turns and compacts it at a finished moment or at the ceiling, as it does the engineering manager.
 After a context compaction, the plugin's SessionStart hook (`compose reenter`) points any teammate back at its own brief, `results/crew/<agent>.brief.md`.
 Every teammate's tab carries its name in `COMPOSE_TEAMMATE` for that, since `COMPOSE_ROLE` is `crew` for all but the team lead and the planner.
 
@@ -183,4 +184,5 @@ After a compaction, `compose reenter` points the team lead at its handoff as wel
 `compose crew restart --force` restarts one that has work in flight, from the handoff and the project's state; mid-turn it always refuses.
 A `run` or `verify` it started keeps going meanwhile.
 Those work in their own session, so a closed tab or a crashed session never ends them.
-The engineering manager, and a team lead outside herdr, still run `watch` in the background themselves.
+Only outside herdr do the engineering manager and the team lead run `watch` themselves; inside herdr the hook parks the manager's watches too.
+Outside herdr, or in a harness without a Stop hook, the engineering manager runs `compose watch --repo <wt> --project <slug> --from orchestrator --timeout 240` as a Bash background command, never in a Monitor (it expires silently, and a turn that ends on it never wakes), acts on the lines it prints, and runs it again.

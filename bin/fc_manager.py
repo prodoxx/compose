@@ -2,12 +2,12 @@
 `compose status` leads with so a session that is not the manager finds the one that is.
 fc_herdr keeps the record of one project (results/manager.json); a session is one manager, so a takeover moves everything the
 old session held in the repo, and tells it, instead of leaving two half managers."""
-import os, sys
+import json, os, sys
 from pathlib import Path
-import fc_core, fc_herdr, fc_factorystate
+import fc_core, fc_herdr, fc_factorystate, fc_compactlog
 
-TOLD = ("compose: the engineering manager session in herdr pane {new} took over {what} at {at}. You no longer manage {them}. Stop every "
-        "`compose watch` and `compose factory watch` you run for {them}, start no teammate or watch there again, and drop any question you "
+TOLD = ("compose: the engineering manager session in herdr pane {new} took over {what} at {at}. You no longer manage {them}: the hook "
+        "parks no watch for {them} any more. Start no teammate there again, and drop any question you "
         "still have open about {them}: ask the product owner nothing more about {them}, and mention the move to them at most once, as a "
         "statement. Its teammates now report to {new}. Anything else you manage stays yours. If the product owner wants {them} back they "
         "will say so; then run the same command with --takeover.")
@@ -19,6 +19,41 @@ def tell(pane, text):
 def held_by(repo, pane):
     """The project directories of this repository whose manager record names herdr pane `pane`."""
     return [proj for _, (_, proj) in sorted(fc_core.all_projects(Path(repo)).items()) if fc_herdr.herdr_manager_record(proj).get("session") == pane]
+
+def started_in(proj, pane):
+    """The names of the teammates in project directory `proj` whose crew record says herdr pane `pane` started them."""
+    names = []
+    for rec in sorted((Path(proj) / "results" / "crew").glob("*.json")):
+        try:
+            data = json.loads(rec.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict) and data.get("started_by") == pane and isinstance(data.get("name"), str) and data["name"]:
+            names.append(data["name"])
+    return names
+
+def manager_projects(repo, pane):
+    """The project directories herdr pane `pane` manages, sorted by project name: the ones whose manager record names it, and the ones
+    where a teammate it started is still live (a manager that has not run `compose manage` yet still owns the teammates it started)."""
+    held = set(held_by(repo, pane))
+    started = {proj: started_in(proj, pane) for _, (_, proj) in fc_core.all_projects(Path(repo)).items() if proj not in held}
+    started = {proj: names for proj, names in started.items() if names}
+    if started:
+        live = {a.get("name") for a in fc_herdr.live_agents()}
+        held.update(proj for proj, names in started.items() if live.intersection(names))
+    return sorted(held, key=lambda proj: Path(proj).name)
+
+def holds_factory(repo, pane):
+    """Whether herdr pane `pane` holds the factory's manager seat."""
+    return fc_factorystate.load_state(repo)["manager_pane"] == pane
+
+def is_manager(repo, pane):
+    """Whether herdr pane `pane` (None when the session is in no pane) is an engineering manager session."""
+    return pane is not None and bool(manager_projects(repo, pane) or holds_factory(repo, pane))
+
+def manager_handoff(repo, pane):
+    """Where the manager session in herdr pane `pane` writes the handoff its next window starts from, beside the repository's link file."""
+    return fc_core.repo_link(repo).with_name(f"manager-{fc_compactlog.safe(pane)}-handoff.md")
 
 def take_factory(repo, old):
     """Move the factory's manager seat from herdr pane `old` to this session; whether `old` held it."""
@@ -82,7 +117,7 @@ def owner_lines(proj, watching=False):
         return []
     if watching or (rec.get("from") or {}).get("session") == mine:
         return [f"event owner=taken project={Path(proj).name} pane={holder} since={rec.get('since')!r}  (another engineering manager session took this project over "
-                f"from this one: stop every watch you run for it, start no teammate or watch there, drop any open question about it, and ask the product owner "
+                f"from this one: the hook parks no watch for it any more; start no teammate there, drop any open question about it, and ask the product owner "
                 f"nothing more about it; `compose status` shows where the manager is)"]
     if fc_herdr.herdr_manager_live(holder):
         return [f"event owner=other pane={holder} since={rec.get('since')!r}  (another engineering manager session drives this project: look "

@@ -296,10 +296,14 @@ def flag_home(before, what, sid=None):
         say(f"WARNING: ~/.compose changed while {what} ran: {', '.join(changed)}, and no compose outside it wrote that. Project code "
             "gets its own COMPOSE_CONFIG, so this one wrote the user's by its own path, unless another program did; check those files")
 
+def secret_values():
+    """Every secret to keep out of output: the value of each secret var in the process env and each key apply_config collected.
+    Values under 8 characters are left out, since redacting a short one would mangle ordinary text."""
+    return {v for v in {os.environ.get(k) or "" for k in SECRET_VARS} | SECRET_VALUES if len(v) >= 8}
+
 def scrub(text):
-    """text with the value of every secret var in the process env, and every key apply_config collected, as <redacted>."""
-    values = {os.environ.get(k) or "" for k in SECRET_VARS} | SECRET_VALUES
-    for v in sorted((v for v in values if len(v) >= 8), key=len, reverse=True):  # a short value would redact ordinary text
+    """text with every secret value as <redacted>."""
+    for v in sorted(secret_values(), key=len, reverse=True):
         text = text.replace(v, REDACTED)
     return text
 

@@ -393,6 +393,7 @@ def watch_filter(events, slug, sources, direct=(), others=()):
     return [e for e in events if f"crew={me} " not in e and not e.startswith(f"event stall=idle agent={me} ")]  # idle: it waits on this watch
 
 WATCH_INTERVAL = 2.0
+WOKE = "compose watch woke you. When this turn ends the Stop hook parks the next watch; do not start one yourself."  # first line of a parked watch's wake
 WATCH_SETTLE = 10.0  # seconds a wake waits for the rest of its burst (a wave of tasks finishing together is one wake, not N)
 INFO_HOLD = 300.0  # seconds progress pings (is_info) wait for a wake to travel with before they wake alone
 POWER_EVERY = 30.0  # seconds between two looks for a battery stop the Mac's charger now lifts
@@ -512,7 +513,7 @@ def cmd_watch(a, rewake=False):
                     ev = look(after, stalls)
                 fc_crew.manager_attention(proj, ev)
                 if rewake:
-                    emit("compose watch woke you. When this turn ends the Stop hook parks the next watch; do not start one yourself.")
+                    emit(WOKE)
                     try:
                         if note := fc_hooks.skill_notice(a.session):  # a wake is a prompt the UserPromptSubmit hook never sees
                             emit(note)
@@ -535,24 +536,6 @@ def cmd_watch(a, rewake=False):
                       f"{'PASS' if after['verify'] and after['verify'][1] else 'FAIL' if after['verify'] else 'not run'}")
                 sys.exit(2)
 
-def cmd_rewake(a):
-    """Claude Code Stop hook (the plugin's hooks.json, asyncRewake): when a team lead's turn ends, park a watch whose event
-    wakes the idle session. Its herdr tab carries the role, project, and worktree. Every other session returns at once,
-    a headless one (`claude -p`, which Claude Code marks CLAUDE_CODE_ENTRYPOINT=sdk-*) too. A wake names skill files changed since the last one."""
-    if os.environ.get("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk"):
-        return
-    try:
-        ev = json.load(sys.stdin)
-    except Exception:
-        ev = {}
-    fc_hooks.restore_pane_env(ev.get("cwd"))  # a team lead restored after a computer restart has lost the env its tab was created with
-    project = os.environ.get("COMPOSE_PROJECT")
-    if os.environ.get("COMPOSE_ROLE") != "orchestrator" or not project:
-        return
-    session = re.sub(r"[^\w-]", "", ev.get("session_id") or "")
-    cmd_watch(argparse.Namespace(repo=os.environ.get("COMPOSE_REPO") or ".", project=project, now=False, from_=None,
-                                 timeout=0, stall=None, interval=WATCH_INTERVAL, settle=WATCH_SETTLE, session=session), rewake=True)
-
 def crew_in_pane(proj, pane):
     """The teammate whose record says it runs in herdr pane `pane`, else None."""
     for f in sorted(fc_crew.crew_dir(proj).glob("*.json")) if pane else ():
@@ -564,17 +547,43 @@ def crew_in_pane(proj, pane):
             return c.get("name")
     return None
 
+def manager_reentry():
+    """After a compaction, the lines that point the engineering manager in this herdr pane back at its handoff and projects; none for any other session
+    (the hook must never fail the session: outside a repository there is nothing to say)."""
+    pane = fc_core.session_id()
+    try:
+        main = fc_core.main_checkout(os.getcwd())
+        if not fc_manager.is_manager(main, pane):
+            return []
+        projects, handoff = fc_manager.manager_projects(main, pane), fc_manager.manager_handoff(main, pane)
+        read = (f"Read your handoff {handoff} first: teammates live, open questions, decisions, focus." if handoff.exists()
+                else f"You have no handoff yet at {handoff}; write one when compose asks.")
+    except Exception:
+        return []
+    names = ", ".join(p.name for p in projects) or "the factory"
+    return [f"Your context was just compacted; you are the engineering manager for {names} in {main}.", read,
+            *(f"Run `compose status --repo {p.parent.parent} --project {p.name}` and `compose watch --repo {p.parent.parent} --project {p.name} --now`" for p in projects),
+            "Never start a compose watch or compose factory watch yourself: the Stop hook parks one after each of your turns and its event wakes you.",
+            "Re-read the product owner's open questions in the handoff before acting; say where you are in one line only when they ask."]
+
 def cmd_reenter(a):
-    """Claude Code SessionStart hook (matcher compact): after a compaction the session continues by re-entering through 0r, not from scratch.
+    """Claude Code SessionStart hook (matcher compact): after a compaction the session continues from its brief and handoff, not from scratch.
     Its herdr tab carries the role, the teammate's name, project, and worktree. COMPOSE_ROLE is `crew` for every teammate but the
     guarded ones, so the brief is found by the name (a session started before its tab carried one: by the pane its record names).
+    The engineering manager has no role: its herdr pane is found in the repository's manager records and it is pointed at its handoff.
     Every other session returns at once, a headless one (`claude -p`, which Claude Code marks CLAUDE_CODE_ENTRYPOINT=sdk-*) too."""
     project, role = os.environ.get("COMPOSE_PROJECT"), os.environ.get("COMPOSE_ROLE")
-    if not role or not project or os.environ.get("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk"):
+    if os.environ.get("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk"):
+        return
+    if not role:
+        for line in manager_reentry():
+            print(line)
+        return
+    if not project:
         return
     proj = fc_core.project_dir(argparse.Namespace(repo=os.environ.get("COMPOSE_REPO") or ".", project=project))
     name = os.environ.get("COMPOSE_TEAMMATE") or crew_in_pane(proj, os.environ.get("HERDR_PANE_ID")) or fc_herdr.agent_name(project, role)
-    print("Your context was just compacted; the session continues by re-entering through 0r, not from scratch.")
+    print("Your context was just compacted; the session continues from its brief and handoff, not from scratch.")
     print(f"Re-read your brief file {fc_crew.crew_dir(proj) / f'{name}.brief.md'} now.")
     if role == "orchestrator":
         print(f"Then read your handoff {fc_crew.handoff_path(proj, name)}: the open threads, holds, pending go's and live teammates you wrote down; keep it current.")

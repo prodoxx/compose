@@ -55,7 +55,24 @@ def herdr(*args, check=False, timeout=120):
         if check:
             raise RuntimeError(f"herdr {' '.join(map(str, args[:2]))}: {(out.get('error') or {}).get('code') or p.stderr.strip()[-200:]}")
         return None
+    _record_prompt(args)
     return out.get("result", out)
+
+PANE_ID = re.compile(r"w\d+:p[0-9A-Za-z]+")
+def _record_prompt(args):
+    """Log a delivered `agent prompt` as typed by compose: the transcript will hold it, and the compactor must not take it for the
+    product owner's. It is logged under the pane id the compactor checks, so a prompt sent to an agent name asks herdr for that agent's
+    pane (under the name when herdr cannot say). The log is measurement only: a failed write never turns a delivered prompt into an exception."""
+    if tuple(map(str, args[:2])) == ("agent", "prompt") and len(args) > 3:
+        import fc_compactlog  # imported here, not at the top: no import cycle, and this module's place in the load order stays
+        target = str(args[2])
+        got = {"agent": {"pane_id": target}} if PANE_ID.fullmatch(target) else herdr("agent", "get", target, timeout=10)
+        agent = got.get("agent") if isinstance(got, dict) else None
+        pane = agent.get("pane_id") if isinstance(agent, dict) and isinstance(agent.get("pane_id"), str) else None
+        try:
+            fc_compactlog.typed(pane or target, str(args[3]), agent=None if pane == target else target)
+        except OSError:
+            pass
 
 def herdr_error(*args, timeout=120):
     """Like herdr() but returns the error code string on failure ("timeout", "agent_blocked", ...) instead of None.
@@ -67,6 +84,7 @@ def herdr_error(*args, timeout=120):
         out = {}
     if p.returncode or "error" in out:
         return None, ((out.get("error") or {}).get("code") or p.stderr.strip()[-200:] or "error")
+    _record_prompt(args)
     return out.get("result", out), None
 
 def herdr_text(*args, timeout=30):

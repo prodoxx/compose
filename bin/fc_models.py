@@ -525,7 +525,11 @@ class TooBig(RuntimeError):
     request never passes, a smaller state can."""
 
 
-def jev_ask(env, cfg, state, questions, label):
+def wire(body):
+    """A JSON request body as the bytes that go on the wire: ASCII-escaped, so a non-ASCII character counts as its escape."""
+    return json.dumps(body).encode()
+
+def jev_ask(env, cfg, state, questions, label, timeout=None):
     """One TypeSafe (Jev) request: choice questions against one state, on the cost ledger. Returns Jev's whole reply.
     An Image in the state or the questions goes as an image asset, with the header that turns images on."""
     key = fc_config.typesafe_key(env, label)
@@ -536,9 +540,9 @@ def jev_ask(env, cfg, state, questions, label):
     if assets:  # the image bytes are never scrubbed: a secret cannot be in them, and a replaced byte would break the file
         body["assets"] = {r: {k: v for k, v in a.items() if k != "path"} for r, a in assets.items()}
         headers["TypeSafe-Danger-Zone-Images"] = "true"
-    req = urllib.request.Request("https://api.typesafe.ai/v1/systemone", data=json.dumps(body).encode(), headers=headers)
+    req = urllib.request.Request("https://api.typesafe.ai/v1/systemone", data=wire(body), headers=headers)
     try:
-        out = http_json(req, f"typesafe ({label})", timeout=180 if assets else 90)
+        out = http_json(req, f"typesafe ({label})", timeout=timeout or (180 if assets else 90))
     except RuntimeError as e:
         if "max_tokens_exceeded" in str(e):
             raise TooBig(str(e)) from e

@@ -238,9 +238,13 @@ def verb_status(a, repo):
 def _seen_path(repo):
     return fc_factorystate.state_path(repo).with_name(f"factory-watch-{fc_watch.watch_key()}.json")
 
-def verb_watch(a, repo):
+def verb_watch(a, repo, rewake=False):
+    """Block until the factory logs an event, print it, return. `rewake` is the engineering manager's Stop hook mode (fc_rewake): nothing goes
+    to stdout, a first run starts silently at the log's end, the event goes to stderr after fc_watch.WOKE with exit 2, and the watch returns when the
+    session that parked it is gone (its parent process changes). A `timeout` of None waits without a deadline."""
     path = _seen_path(repo)
     fc_manager.factory_claim(repo, getattr(a, "takeover", False))  # the loop starts team leads from this pane; one manager session holds it
+    parent = os.getppid()
     try:
         mem = json.loads(path.read_text())
     except (OSError, ValueError):
@@ -249,8 +253,10 @@ def verb_watch(a, repo):
         seen = max([e["n"] for e in fc_factorystate.events_since(repo, 0)], default=0)
         path.parent.mkdir(parents=True, exist_ok=True)
         fc_core.atomic_write(path, json.dumps({"seen": seen, "lost": None}))
-        print(f"[{fc_core.now()}] event factory=watching from={seen}  (earlier events: compose factory status)")
-        return
+        mem = {"seen": seen, "lost": None}
+        if not rewake:
+            print(f"[{fc_core.now()}] event factory=watching from={seen}  (earlier events: compose factory status)")
+            return
     seen, lost = mem.get("seen", 0), mem.get("lost")
     deadline = None if a.timeout is None else time.monotonic() + float(a.timeout)
     while True:
@@ -265,12 +271,17 @@ def verb_watch(a, repo):
         if out:
             path.parent.mkdir(parents=True, exist_ok=True)
             fc_core.atomic_write(path, json.dumps({"seen": seen, "lost": lost}))
+            if rewake:
+                print("\n".join([fc_watch.WOKE, *out]), file=sys.stderr)
+                sys.exit(2)
             print("\n".join(out))
             return
         if deadline is not None and time.monotonic() >= deadline:
             print(f"[{fc_core.now()}] event timeout")
             sys.exit(2)
         time.sleep(POLL if deadline is None else max(0.0, min(POLL, deadline - time.monotonic())))
+        if rewake and os.getppid() != parent:
+            return  # the session that parked this hook is gone
 
 def verb_pace(a, repo):
     with fc_factorystate.edit(repo) as state:

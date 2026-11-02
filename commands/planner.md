@@ -13,12 +13,11 @@ When the ticket has no approved design (a feature or epic), or is a story labele
 Brainstorming is shaping, so it runs `compose decide`, `compose buildercheck`, and `compose linear`, and the planner starts only after the product owner approves.
 Start the planner:
 `compose planner --project <slug> --issue <id> | compose crew start --project <slug> --role planner --title planner --brief -`
-The planner reports to you, since you started it, so your one `compose watch --project <slug>` on this project reports it, the `--from orchestrator` watch for a live team lead included.
-Never start a second watch for it: a second one is refused while the first runs, and the first one already reports the planner.
-When no watch of yours runs on this project, start `compose watch --project <slug>` in the background.
+The planner reports to you, since you started it, so its reports reach you through the watch the Stop hook parks, the `--from orchestrator` watch for a live team lead included.
+Start no watch for it: the parked one already reports the planner.
 Relay every report to the product owner as 0h describes, in one or two sentences each.
 For a `needs-user` with open questions, ask them here one at a time as 0h says, recording each answer with `compose decide --project <slug> --issue <issue> --new "<decision>" --quote "<their words>" --closes <id>`.
-Then tell the planner `herdr agent prompt <slug>-planner "decided: <ids>; read Decisions so far"`, and start your one `watch` again.
+Then tell the planner `herdr agent prompt <slug>-planner "decided: <ids>; read Decisions so far"`, and end your turn; the hook parks the next watch.
 For `stories <issue>`, play the proposal back as one chunk, record `compose decide --project <slug> --new "stories <issue> approved" --quote "<their words>"`, then `herdr agent prompt <slug>-planner "stories approved: create them"`.
 Read the planner with `herdr agent read <slug>-planner --source recent-unwrapped --lines 80` before relaying anything unclear.
 In this session, never plan, write stories, or cut tasks.

@@ -7,6 +7,9 @@ fc_started
 fc_auth
 fc_config
 fc_pace
+fc_transcript
+fc_snapshot
+fc_compactlog
 fc_linearapi
 fc_load
 fc_history
@@ -33,6 +36,7 @@ fc_prd
 fc_delivery
 fc_notify
 fc_models
+fc_compact
 fc_credit
 fc_routejev
 fc_route
@@ -58,6 +62,7 @@ fc_pin
 fc_reports
 fc_factorystate
 fc_manager
+fc_compactor
 fc_crewpick
 fc_crew
 fc_shed
@@ -121,3 +126,4 @@ fc_nightprep
 fc_digest
 fc_night
 fc_factory
+fc_rewake
