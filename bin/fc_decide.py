@@ -1,5 +1,6 @@
 """The project's open questions, on one page (`compose decisions`), and the one way a decision is recorded (`compose decide`):
-with the product owner's words attached, or as an unconfirmed recommendation while away or yolo is on."""
+with the product owner's words attached, as an unconfirmed recommendation while away or yolo is on, or as compose's own ruling
+on an easily reversible decision (`--ruling`), posture or not."""
 import json, re, sys, time
 import fc_core, fc_tasks, fc_linear, fc_linear_cmd, fc_plan, fc_herdr, fc_change, fc_ask
 
@@ -8,6 +9,36 @@ import fc_core, fc_tasks, fc_linear, fc_linear_cmd, fc_plan, fc_herdr, fc_change
 OPEN, DECIDED = "Not yet specified", "Decisions so far"
 UNCONFIRMED = "({mode} recommendation, unconfirmed, {date})"  # the tag on a line the engineering manager decided for the product owner
 CONFIRMED = '(product owner, {date}; said: "{quote}")'       # the tag on a line the product owner decided, their words attached
+RULING = "(compose ruling, unconfirmed, {date})"            # the tag on a reversible decision compose ruled on itself, so the work never stalled
+# The never-set: actions no posture, words, or ruling ever pre-authorize (sections/0h.md). The night answerer reads it too.
+NEVER_WORDS = re.compile("|".join((
+    r"force[- ]?push|push\s+--force|--force\b|--delete-unmerged|--delete-remote|--abandon",
+    r"(?:delete|drop|wipe|truncate)\s+(?:the\s+)?(?:branch|database|table|data|bucket)",
+    r"(?:add|create|rotate|new|generate|paste|use)\s+(?:a\s+|an\s+|the\s+)?(?:new\s+)?(?:api[- ]?key|secret key|access token|credential)",
+    r"(?:switch|change)\s+(?:the\s+)?(?:model|provider)",
+    r"(?:buy|purchase|pay for|subscribe to|upgrade (?:the )?plan)",
+    r"billing account|payment halt|toolsmith")), re.I)
+# What a ruling never covers beyond the never-set: an act that leaves the project's worktrees and Linear (a push, a merge, a land, a
+# deploy, a message sent), a delete, money, and the scope the product owner settled. Verbs with their object, so `push notifications`
+# and `landing page` stay rulable.
+IRREVERSIBLE = re.compile("|".join((
+    r"push(?:es|ed|ing)?\s+(?:the\s+|a\s+|it\s+)?(?:stack|branch|base|main|layer|pr|to\b|--)",
+    r"merg(?:e|es|ed|ing)\s+(?:the\s+|a\s+|it\s+)?(?:pr|pull|branch|stack|layer|into|to\s+main)",
+    r"land(?:s|ed)?\s+(?:the\s+|a\s+)?(?:stack|pr|layer|branch)",
+    r"deploy(?:s|ed|ing)?\b|publish(?:es|ed|ing)?\b|release\s+(?:the\s+|a\s+)?(?:build|version|app)|ship(?:s|ped)?\s+(?:it|the|to)\b",
+    r"delet(?:e|es|ed|ing)\s+(?:the\s+|a\s+)?(?:branch|worktree|file|repo|remote|issue|ticket|story|stories|data|record)",
+    r"(?:send|post|mail)(?:s|ed|ing)?\s+(?:an?\s+|the\s+)?(?:e-?mail|mail|message|notification|comment to|tweet|announcement)",
+    r"\b(?:pay|pays|paid|paying|charge|charges|charged|buy|buys|bought|purchase[sd]?)\b",
+    r"(?:drop|cancel|remove|add|cut)(?:s|ped|led|ed|ting|ling|ing)?\s+(?:the\s+|a\s+)?(?:story|stories|scope|epic)\b")), re.I)
+
+def never_hits(*texts) -> list[str]:
+    """The never-set words `texts` carry, lowercased and sorted; empty when none."""
+    return sorted({m.group(0).lower() for t in texts for m in NEVER_WORDS.finditer(t)})
+
+def irreversible(*texts) -> list[str]:
+    """The words in `texts` that name an act a ruling never covers: the never-set, and anything that leaves the worktrees and Linear."""
+    hits = set(never_hits(*texts)) | {m.group(0).lower() for t in texts for m in IRREVERSIBLE.finditer(t)}
+    return sorted(h for h in hits if not any(h != o and h in o for o in hits))  # `pay` inside `pay for` is the one hit
 ANSWER = re.compile(rf"^\s*({fc_ask.CARD_ID}|D\d+)(?:\s*[:=.]\s*(.+?))?\s*$")  # a bare `D7` or `Q3` confirms a recorded line; the old `Q1: A` answers a card
 TAG = re.compile(r"\s*\([^()]*\)\s*$")  # the tag a decision line ends with
 APPROVAL = re.compile(r"^(?:the )?(?:design|stories|tech doc|PRD)\b[^.]{0,60}?\b(?:is |are )?approved\.?$", re.I)  # a go line the skill writes: refused while questions are open
@@ -181,16 +212,17 @@ def record_new(body, items, tag):
     body = fc_plan.replace_section(body, heading_line(body, DECIDED), "\n".join(dec))
     return close_questions(body, [i for _, ids in items for i in ids]), lines
 
-def check_replaces(body, ident, replaces, change, quote):
+def check_replaces(body, ident, replaces, change, quote, ruling=False):
     """Refuse a --replaces that names no live line, that comes after stories exist outside a change of course, or that rewrites a
-    confirmed line without the product owner's words."""
+    confirmed line without the product owner's words (a ruling may, inside a change of course: the struck line keeps their choice one --quote away)."""
     old = decided_line(body, replaces)
     if not old:
         sys.exit(f"not recorded: {replaces} is not a live decision on {ident}; --replaces names a line that is not struck through")
     if not change and [c for c in fc_linear.linear_children(ident) if ((c.get("state") or {}).get("name") or "").lower() not in fc_tasks.CANCELED]:
         sys.exit(f"not recorded: {ident} already has stories or tasks, so {replaces} changes through a change of course: compose change start")
-    if not quote and "unconfirmed" not in old:
-        sys.exit(f'not recorded: {replaces} is confirmed; replacing it needs the product owner\'s words: add --quote "<their message, verbatim>"')
+    if not quote and not (ruling and change) and "unconfirmed" not in old:
+        sys.exit(f'not recorded: {replaces} is confirmed; replacing it needs the product owner\'s words: add --quote "<their message, verbatim>"'
+                 + ("" if not ruling else ", or a change of course (--change <id>) so the struck line keeps their choice"))
 
 def write_map(lid, old, new):
     """Write a map's description and wait until Linear reads it back."""
@@ -217,14 +249,19 @@ def clear_elsewhere(proj, ident, closed):
 def cmd_decide(a):
     """Record the product owner's answers on the map, their words attached (`--quote`), and tell the team lead. Each answer is a
     `--new` decision line, `--closes` naming the open questions it settles; `--drop` closes a question the answers made moot. Without
-    --quote it refuses, unless away or yolo is on: then the line lands tagged unconfirmed and is logged for the digest. An approval
+    --quote it refuses, unless away or yolo is on (the line lands tagged unconfirmed and is logged for the digest) or --ruling says the
+    decision is compose's own, easily reversible call (tagged a compose ruling; refused when it names an act a ruling never covers). An approval
     is refused while questions are open. With --change <id>, the lines carry the change's id and --replaces strikes the old line with it."""
     proj = fc_core.project_dir(a)
     quote = " ".join((a.quote or "").split())
     posture = fc_tasks.yolo_state(proj)
-    if not quote and not posture:
+    ruling = bool(getattr(a, "ruling", False))
+    if ruling and quote:
+        sys.exit("not recorded: --ruling is compose's own call and --quote is the product owner's words; a decision is one or the other")
+    if not quote and not posture and not ruling:
         sys.exit('not recorded: a decision is recorded only with the product owner\'s words: add --quote "<their message, verbatim>". '
-                 "While away or yolo is on, `compose decide` without --quote records the recommendation as unconfirmed.")
+                 "While away or yolo is on, `compose decide` without --quote records the recommendation as unconfirmed. "
+                 "An easily reversible decision that is compose's own to make (SKILL.md: rule, do not stall) is recorded with --ruling.")
     news = [t for t in (getattr(a, "new", None) or []) if t.strip()]
     closes, drops = list(getattr(a, "closes", None) or []), list(getattr(a, "drop", None) or [])
     replaces, change = getattr(a, "replaces", None), getattr(a, "change", None)
@@ -240,13 +277,14 @@ def cmd_decide(a):
         sys.exit(f"not recorded: {', '.join(twice)} {'is' if len(twice) == 1 else 'are'} named more than once across --closes, --drop and the "
                  "answers; record each question once")
     if not quote and any(ans is None for _, ans in answers):
-        sys.exit('not recorded: confirming a recorded decision needs the product owner\'s words: add --quote "<their message, verbatim>"')
+        sys.exit('not recorded: confirming a recorded decision needs the product owner\'s words: add --quote "<their message, verbatim>"'
+                 + ("; a ruling records a decision, it confirms none" if ruling else ""))
     lid, ident, body = read_map(map_issue(proj, a))
     qs = open_questions(body)
     if bad := [i for i in closes + drops if i not in qs]:
         sys.exit(f"not recorded: {', '.join(bad)} {'is' if len(bad) == 1 else 'are'} not an open question on {ident}; the open ones are {', '.join(qs) or 'none'}")
     if replaces:
-        check_replaces(body, ident, replaces, change, quote)
+        check_replaces(body, ident, replaces, change, quote, ruling)
     answered = set(closes + drops) | {cid for cid, ans in answers if ans is not None}
     accepted = [cid for cid in qs if cid not in answered] if a.accept_all else []  # answers given win
     if missing := [cid for cid in accepted if not qs[cid]["recommendation"]]:
@@ -254,8 +292,12 @@ def cmd_decide(a):
     if (left := [cid for cid in qs if cid not in answered and cid not in accepted]) and any(APPROVAL.search(t) for t in news):
         sys.exit(f"not recorded: {ident} still has open questions: {', '.join(left)}. Ask them first and record each answer with "
                  f"--new \"<decision>\" --quote \"<their words>\" --closes <id> (or --drop <id> for one the answers made moot), then the approval.")
+    if ruling and (hits := irreversible(*news, *(qs[cid]["recommendation"] for cid in accepted), *(a.answers or []))):
+        sys.exit(f"not recorded: a ruling covers only an easily reversible decision, and this one names {', '.join(hits)}: "
+                 "it goes to the product owner as one needs-user line with the recommendation (sections/0h.md)")
     date = time.strftime("%Y-%m-%d")
-    tag = CONFIRMED.format(date=date, quote=quote.replace('"', "'")) if quote else UNCONFIRMED.format(mode=posture["mode"], date=date)
+    tag = (CONFIRMED.format(date=date, quote=quote.replace('"', "'")) if quote else RULING.format(date=date) if ruling
+           else UNCONFIRMED.format(mode=posture["mode"], date=date))
     if change:
         tag = f"({change}; " + tag[1:]
     new_body, lines = record(body, answers, tag, change) if answers else (body, [])
@@ -277,6 +319,10 @@ def cmd_decide(a):
         fc_core.atomic_write(proj / "results" / "yolo.json", json.dumps(posture, indent=2))
     for l in lines:
         print(f"recorded on {ident}: {l}")
+    if ruling and lines:
+        ids = ", ".join(l.split(":")[0] for l in lines)
+        print(f"ruled, not the product owner's: name it `ruled: {ids} <decision>` in the next report; they confirm or overturn it with their words, "
+              f"`compose decide --project {proj.name} --quote \"<their words>\" {ids.split(', ')[0]}`, or `--new ... --replaces` (a change of course once tasks are dispatched)")
     for other, ids in cleared:
         print(f"cleared {', '.join(ids)} from Not yet specified on {other}")
     if any(ans is not None for _, ans in answers):

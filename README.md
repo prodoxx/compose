@@ -110,6 +110,7 @@ Code was never the bottleneck.
 The hard parts are deciding what to build and proving that it works.
 `compose` puts its strongest model on exactly those two jobs and hands the typing to fast models that cost about a cent a task.
 You stay the one who decides.
+Anything easily reversible, compose rules on itself and tells you in its next report, so it never waits on you for a call you can overturn; a push, a delete, money, scope, and anything a user would see still wait for your word.
 
 **Tests come from your intent.**
 Each task's test is written from the spec before any code exists.

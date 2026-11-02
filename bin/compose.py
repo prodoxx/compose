@@ -127,7 +127,7 @@ def main():
                             ("yolo", fc_yolo.cmd_yolo, "the engineering manager answers until an explicit off, and the product owner may steer: [--push] [words] enters, `decided \"<q>: <a>\"` logs an answer taken, --clear-words empties the words, `digest` prints the digest, `off` prints it and archives"),
                             ("change", fc_change.cmd_change, "start | done | undo | keep|part|discard <task id> [--files a,b] a change of course: what changed in Linear and why, undoable; settle paused work"),
                             ("decisions", fc_decide.cmd_decisions, "print the project's pending-decisions page: every open question with its recommendation and when it was asked, then the decisions to confirm; --issue picks another map"),
-                            ("decide", fc_decide.cmd_decide, "record the product owner's decisions on the map (--new \"<decision>\" --closes Q1, --drop Q2, or --accept-all) with their words attached: --quote \"<what they said>\"; without it, only under away or yolo, as unconfirmed; it prints the open questions left"),
+                            ("decide", fc_decide.cmd_decide, "record the product owner's decisions on the map (--new \"<decision>\" --closes Q1, --drop Q2, or --accept-all) with their words attached: --quote \"<what they said>\"; without it, under away or yolo as unconfirmed, or with --ruling as compose's own call on an easily reversible decision; it prints the open questions left"),
                             ("reconcile", fc_reconcile.cmd_reconcile, "the one-time cleanup of a messy Linear project: list | check --file | show | apply --go | notices"),
                             ("crew", fc_lead.cmd_crew, "start | list | focus | stop teammates, the Claude sessions in the project's herdr space (the team lead, the architect, helpers); restart the team lead fresh from its handoff"),
                             ("report", fc_crew.cmd_report, "a teammate session reports up: working | needs-user | blocked | done, with one line"),
@@ -340,6 +340,8 @@ def main():
             s.add_argument("--replaces", help="with exactly one --new: the live decision it replaces; the old line is struck through, (replaced by D<m>), or (C<n>) with --change")
             s.add_argument("--quote", help="the product owner's words, verbatim: the decision is recorded only with them")
             s.add_argument("--accept-all", action="store_true", help="record every open question's recommendation as its own unconfirmed D<n> line (decisions given win)")
+            s.add_argument("--ruling", action="store_true", help="compose's own call on an easily reversible decision (SKILL.md: rule, do not stall): recorded without --quote, "
+                           "tagged (compose ruling, unconfirmed, <date>); refused when the decision names a push, merge, land, deploy, delete, message sent, money, scope, or the never-set")
             s.add_argument("--change", help="the open change of course these decisions belong to, e.g. C2: a --replaces line is struck through with (C2)")
         if name == "change":
             s.add_argument("action", choices=("start", "done", "undo", "keep", "part", "discard"))

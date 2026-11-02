@@ -77,10 +77,10 @@ class Decide(unittest.TestCase):
         (self.proj / "linear.json").write_text(json.dumps({"feature": "NEB-1"}))
         self.linear = FakeLinear(MAP)
 
-    def run_cmd(self, fn, *answers, quote=None, accept_all=False, issue=None, change=None, new=None, replaces=None, closes=None, drop=None):
+    def run_cmd(self, fn, *answers, quote=None, accept_all=False, issue=None, change=None, new=None, replaces=None, closes=None, drop=None, ruling=False):
         out = io.StringIO()
         a = SimpleNamespace(repo=".", project="shop", answers=list(answers), quote=quote, accept_all=accept_all, issue=issue, change=change,
-                            new=new or [], replaces=replaces, closes=closes or [], drop=drop or [])
+                            new=new or [], replaces=replaces, closes=closes or [], drop=drop or [], ruling=ruling)
         with mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), mock.patch.object(fc.fc_linear, "linear_gql", self.linear.gql), \
                 mock.patch.object(fc.fc_linear_cmd, "SETTLE_SECONDS", 0), contextlib.redirect_stdout(out):
             fn(a)
@@ -448,6 +448,68 @@ class Decide(unittest.TestCase):
         self.linear.children.append({"identifier": "NEB-4", "state": {"name": "Todo"}})
         self.linear.writes = []
         self.refuses("already has stories or tasks", new=["three stores"], replaces="D2", quote="three")
+
+    # ---------- --ruling: compose's own call on an easily reversible decision, posture or not ----------
+    def test_a_ruling_records_a_reversible_decision_without_a_quote_and_without_a_posture(self):
+        out = self.decide(new=["split 004 in two along the API boundary"], closes=["Q1"], ruling=True)
+        self.assertIn(f"- D5: split 004 in two along the API boundary (closes Q1) (compose ruling, unconfirmed, {TODAY})", self.linear.body)
+        self.assertNotIn("Which auth?", self.linear.body)
+        self.assertIn("ruled, not the product owner's: name it `ruled: D5 <decision>` in the next report", out)
+        self.assertIn('compose decide --project shop --quote "<their words>" D5', out)
+        self.assertFalse((self.proj / "results" / "yolo.json").exists())
+
+    def test_a_ruling_is_listed_to_confirm_and_a_quote_makes_it_the_product_owners(self):
+        self.decide(new=["Clerk"], closes=["Q1"], ruling=True)
+        self.assertIn("Decisions to confirm (2):", self.decisions())
+        self.assertIn(f"- D5: Clerk (closes Q1) (compose ruling, unconfirmed, {TODAY})", self.decisions())
+        self.decide("D5", quote="yes, Clerk")
+        self.assertIn(f'- D5: Clerk (closes Q1) (product owner, {TODAY}; said: "yes, Clerk")', self.linear.body)
+
+    def test_a_ruling_that_names_an_act_it_never_covers_is_refused(self):
+        for text, hit in (("push the stack now", "push the stack"), ("merge the PR into main", "merge the pr"), ("land the stack tonight", "land the stack"),
+                          ("delete the branch and start over", "delete the branch"), ("switch the model to opus", "switch the model"),
+                          ("drop the story about exports", "drop the story"), ("send an email to the beta list", "send an email"),
+                          ("deploy to staging", "deploy"), ("pay for the pro tier", "pay for")):
+            self.refuses(f"a ruling covers only an easily reversible decision, and this one names {hit}", new=[text], closes=["Q1"], ruling=True)
+
+    def test_a_ruling_reads_verbs_with_their_object_so_everyday_words_stay_rulable(self):
+        for text in ("push notifications stay off by default", "the landing page shows three cards", "merge the two helper modules into one file",
+                     "ship dates come from the order record", "the pushed state lives in the store"):
+            self.assertEqual(fc.fc_decide.irreversible(text), [], text)
+        self.decide(new=["push notifications stay off by default"], closes=["Q1"], ruling=True)
+        self.assertIn("- D5: push notifications stay off by default (closes Q1) (compose ruling", self.linear.body)
+
+    def test_a_ruling_and_a_quote_together_are_refused(self):
+        self.refuses("one or the other", new=["Clerk"], closes=["Q1"], quote="clerk", ruling=True)
+
+    def test_a_ruling_confirms_nothing(self):
+        self.refuses("a ruling records a decision, it confirms none", "Q3", ruling=True)
+
+    def test_accept_all_as_a_ruling_records_each_recommendation_as_a_ruling(self):
+        self.decide(accept_all=True, ruling=True)
+        self.assertIn(f"- D5: Clerk (closes Q1) (compose ruling, unconfirmed, {TODAY})", self.linear.body)
+        self.assertIn(f"- D6: SQLite (closes Q2) (compose ruling, unconfirmed, {TODAY})", self.linear.body)
+
+    def test_accept_all_as_a_ruling_is_refused_when_a_recommendation_names_an_irreversible_act(self):
+        self.linear.body = MAP.replace("Recommendation: SQLite", "Recommendation: push the stack to Postgres")
+        self.refuses("push the stack", accept_all=True, ruling=True)
+
+    def test_a_ruling_under_away_is_tagged_a_ruling_and_logged_for_the_digest(self):
+        y = {"mode": "away", "since": "2026-10-24 08:00:00", "decisions": [], "words": "", "push": False}
+        (self.proj / "results" / "yolo.json").write_text(json.dumps(y))
+        self.decide(new=["Clerk"], closes=["Q1"], ruling=True)
+        self.assertIn(f"- D5: Clerk (closes Q1) (compose ruling, unconfirmed, {TODAY})", self.linear.body)
+        logged = json.loads((self.proj / "results" / "yolo.json").read_text())["decisions"]
+        self.assertEqual([d["text"].split(" (")[0] for d in logged], ["D5: Clerk"])
+
+    def test_a_ruling_replaces_a_confirmed_line_only_inside_a_change_of_course(self):
+        self.refuses("D4 is confirmed", new=["two stores"], replaces="D4", ruling=True)
+        self.decide(new=["two stores"], replaces="D4", change="C1", ruling=True)
+        self.assertIn('- ~~D4: one store (product owner, 2026-10-20; said: "one")~~ (C1)', self.linear.body)
+        self.assertIn(f"- D5: two stores (C1; compose ruling, unconfirmed, {TODAY})", self.linear.body)
+
+    def test_the_refusal_without_a_quote_names_the_ruling_form(self):
+        self.refuses("recorded with --ruling", new=["x"], closes=["Q1"])
 
     def yolo(self):
         (self.proj / "results" / "yolo.json").write_text(json.dumps({"mode": "yolo", "since": "2026-10-24 08:00:00", "decisions": [], "words": "", "push": False}))

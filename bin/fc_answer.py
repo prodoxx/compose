@@ -3,18 +3,13 @@ from __future__ import annotations
 import json, os, re, subprocess, time
 from pathlib import Path
 
-import fc_ask, fc_claude, fc_config, fc_core, fc_crew, fc_delivery, fc_factorystate, fc_factoryturn, fc_herdr, fc_models, fc_nightstate, fc_tasks, fc_yolo
+import fc_ask, fc_claude, fc_config, fc_core, fc_crew, fc_decide, fc_delivery, fc_factorystate, fc_factoryturn, fc_herdr, fc_models, fc_nightstate, fc_tasks, fc_yolo
 
 ANSWERERS = 2
 MORNING = ("shape ", "deep-dive ", "stories ")
 ISSUE_RE = re.compile(r"\b([A-Z][A-Z0-9]*-\d+)\b")
-NEVER_WORDS = re.compile("|".join((
-    r"force[- ]?push|push\s+--force|--force\b|--delete-unmerged|--delete-remote|--abandon",
-    r"(?:delete|drop|wipe|truncate)\s+(?:the\s+)?(?:branch|database|table|data|bucket)",
-    r"(?:add|create|rotate|new|generate|paste|use)\s+(?:a\s+|an\s+|the\s+)?(?:new\s+)?(?:api[- ]?key|secret key|access token|credential)",
-    r"(?:switch|change)\s+(?:the\s+)?(?:model|provider)",
-    r"(?:buy|purchase|pay for|subscribe to|upgrade (?:the )?plan)",
-    r"billing account|payment halt|toolsmith")), re.I)
+NEVER_WORDS = fc_decide.NEVER_WORDS  # the one never-set, shared with `compose decide --ruling`
+never_hits = fc_decide.never_hits
 ASK = ("Answer this question the team lead raised while building an approved ticket, as the product owner would from what is written here; "
        "read the code you need. If answering needs anything in the never-set above, or needs the product owner to plan something new, "
        'set never_set and answer nothing. Reply with only JSON: {"never_set": bool, "why_wait": str, "answer": str, "reasoning": str, '
@@ -136,9 +131,6 @@ def parse_reply(reply) -> dict | None:
             objs.append(v)
     stop = next((o for o in objs if o["never_set"]), None)
     return stop or next((o for o in reversed(objs) if "answer" in o), None)
-
-def never_hits(*texts) -> list[str]:
-    return sorted({m.group(0).lower() for t in texts for m in NEVER_WORDS.finditer(t)})
 
 def run_answer(repo, slug, at, nth=0) -> dict:
     """The worker: answer one question, record it on the issue and in the lead, and return the record. Nothing is written once the night it
