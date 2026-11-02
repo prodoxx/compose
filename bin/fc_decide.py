@@ -329,8 +329,7 @@ def cmd_decide(a):
         print("note: the new form is " + NEW_FORM.format(slug=proj.name))
     print(open_left(ident, new_body))
     lead = fc_herdr.agent_name(proj.name, "orchestrator")
-    note = (f"recorded on {ident}: {', '.join(l.split(':')[0] for l in lines)}; read Decisions so far. While shaping, wait for `shaped <id>`; "
-            "a `stories <id> approved` line is the planner's go (tell the planner, or the change architect, if live)")
+    note = f"recorded on {ident}: {', '.join(l.split(':')[0] for l in lines)}; read Decisions so far (tell the planner, or the change architect, if live)"
     if fc_herdr.herdr_env() and fc_herdr.herdr("agent", "prompt", lead, note) is not None:
         print(f"told {lead}")
     else:

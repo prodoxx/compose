@@ -49,10 +49,6 @@ def gates(chain):
     def add(item, issue, question):
         out.append({"item": item, "issue": issue, "question": question})
 
-    if feature:
-        fid = feature["identifier"]
-        if not any(f"the design on {fid} is approved" in l for l in fc_change.decision_lines(feature.get("description"))):
-            add("design", fid, f"{fid}'s design is not approved yet: shape it with the product owner first (0b).")
     held = [i for i in (story, feature) if i]
     for i in held:
         if any(l.strip().rstrip(".").lower() != "none" for l in fc_change.map_section(i.get("description"), "Not yet specified").splitlines() if l.strip()):

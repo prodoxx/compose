@@ -68,11 +68,11 @@ class Gates(unittest.TestCase):
         g = fc_readiness.gates(fc_readiness.story_chain(tree(story=many)))
         self.assertIn("6 acceptance criteria (at most 5)", g[0]["question"])
 
-    def test_an_unapproved_or_struck_design_blocks(self):
+    def test_an_unapproved_or_struck_design_never_blocks(self):
         for feature in ("## Intent\n\nA shop.\n",
                         "## Decisions so far\n\n- ~~D1: the design on ENG-1 is approved (po, 2026-10-20; said: \"yes\")~~ (C1)\n"):
             g = fc_readiness.gates(fc_readiness.story_chain(tree(feature=feature)))
-            self.assertEqual([(x["item"], x["issue"]) for x in g], [("design", "ENG-1")])
+            self.assertEqual([(x["item"], x["issue"]) for x in g], [])
 
 
 
@@ -319,7 +319,7 @@ class StoryReadiness(unittest.TestCase):
         self.tree = tree(story="## Intent\n\nPay.\n", feature="## Intent\n\nA shop.\n")
         r = fc_readiness.story_readiness(self.repo, "ENG-7")
         self.judge.assert_not_called()
-        self.assertEqual([m["item"] for m in r["missing"]], ["design", "criteria"])
+        self.assertEqual([m["item"] for m in r["missing"]], ["criteria"])
         body = self.updates[0]["in"]["description"]
         self.assertIn("no acceptance criteria (readiness check,", body)
         self.assertNotIn("design is not approved", body)
@@ -328,7 +328,7 @@ class StoryReadiness(unittest.TestCase):
         story = STORY + "\n## Not yet specified\n\n- Which flow?\n\n## Open questions\n\n- Which card brands?\n"
         self.tree = tree(story=story, feature="## Intent\n\nA shop.\n")
         r = fc_readiness.story_readiness(self.repo, "ENG-7")
-        self.assertEqual({m["item"] for m in r["missing"]}, {"design", "questions", "open questions"})
+        self.assertEqual({m["item"] for m in r["missing"]}, {"questions", "open questions"})
         self.assertEqual(self.updates, [])
 
     def test_a_multi_line_question_is_one_tagged_line(self):
