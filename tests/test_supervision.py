@@ -1569,6 +1569,7 @@ class RestoredTeammate(unittest.TestCase):
         (self.proj / "results" / "crew").mkdir(parents=True)
         (self.proj / "results" / "crew" / "hw-orchestrator.json").write_text(json.dumps({"name": "hw-orchestrator", "role": "orchestrator", "pane": self.PANE}))
         (self.proj / "results" / "crew" / "hw-tests-001.json").write_text(json.dumps({"name": "hw-tests-001", "role": "tests-001", "pane": "w10:pT"}))
+        (self.proj / "results" / "crew" / "hw-planner.json").write_text(json.dumps({"name": "hw-planner", "role": "planner", "pane": "w10:pP"}))
 
     def restore(self, pane, env=None):
         env = {"HERDR_PANE_ID": pane} | (env or {})
@@ -1590,7 +1591,7 @@ class RestoredTeammate(unittest.TestCase):
     def test_a_role_already_set_is_kept(self):
         self.assertEqual(self.restore(self.PANE, {"COMPOSE_ROLE": "crew"})["COMPOSE_ROLE"], "crew")
 
-    def test_the_edit_guard_finds_the_role_of_a_restored_team_lead_from_the_pane(self):
+    def test_the_edit_guard_finds_the_role_of_a_restored_planner_from_the_pane(self):
         repo = self.proj.parent
         (repo / ".compose").mkdir()
         self.proj.rename(repo / ".compose" / "hw")
@@ -1601,8 +1602,8 @@ class RestoredTeammate(unittest.TestCase):
                     mock.patch.object(fc.fc_core, "checkout", return_value=fc.fc_core.Checkout((repo, repo / ".git", repo / ".git"))):  # the repo is a checkout
                 fc.fc_hooks.cmd_guard(None)
             return out.getvalue()
-        self.assertIn("never edit code", guard(self.PANE))
-        self.assertEqual((guard("w10:pT"), guard("w1Z:p1")), ("", ""))  # a crew teammate and the engineering manager
+        self.assertIn("never edit code", guard("w10:pP"))
+        self.assertEqual((guard(self.PANE), guard("w10:pT"), guard("w1Z:p1")), ("", "", ""))  # the team lead, a crew teammate and the engineering manager
 
     def test_a_restored_team_lead_gets_its_watch_at_a_turn_end_and_other_panes_get_none(self):
         repo = self.proj.parent

@@ -1067,7 +1067,7 @@ class CodexGuard(unittest.TestCase):
             cmd(None)
         return out.getvalue()
 
-    def denied(self, tool, ti, role="orchestrator"):
+    def denied(self, tool, ti, role="planner"):
         out = self.run_hook(fc.fc_hooks.cmd_guard, {"tool_name": tool, "cwd": str(self.repo), "tool_input": ti}, role)
         return json.loads(out)["hookSpecificOutput"]["permissionDecisionReason"] if out else None
 
@@ -1075,7 +1075,7 @@ class CodexGuard(unittest.TestCase):
         return {"command": "*** Begin Patch\n" + "\n".join(lines) + "\n*** End Patch"}
 
     def test_apply_patch_headers_are_denied_when_relative_paths_land_in_the_repo(self):
-        self.assertEqual(self.denied("apply_patch", self.patch("*** Add File: a.go", "+x")), fc.fc_hooks.guard_decision("Write", str(self.repo / "a.go"), "orchestrator"))
+        self.assertEqual(self.denied("apply_patch", self.patch("*** Add File: a.go", "+x"), "planner"), fc.fc_hooks.guard_decision("Write", str(self.repo / "a.go"), "planner"))
         for head in ("*** Update File: src/a.go", "*** Delete File: src/a.go", "*** Update File: .compose/shop/scratch/a\n*** Move to: src/b.go",
                      "*** Add File: .compose/shop/scratch/a\n+x\n*** Update File: src/a.go\n@@"):
             self.assertIn("never edit code", self.denied("apply_patch", self.patch(head)) or "", head)
@@ -1520,7 +1520,7 @@ class GuardRedirects(unittest.TestCase):
         self.repo = Path(tempfile.mkdtemp())
         in_repo(self, self.repo)
 
-    def denied(self, cmd, role="orchestrator"):
+    def denied(self, cmd, role="planner"):
         ev, out = {"tool_name": "Bash", "cwd": str(self.repo), "tool_input": {"command": cmd}}, io.StringIO()
         with mock.patch.dict(os.environ, {"COMPOSE_ROLE": role}), mock.patch.object(sys, "stdin", io.StringIO(json.dumps(ev))), mock.patch.object(sys, "stdout", out):
             fc.fc_hooks.cmd_guard(None)
@@ -1711,7 +1711,8 @@ class GuardCorpus(unittest.TestCase):
             self.assertIsNone(self.decision(cmd, "planner"), cmd)
 
     def test_a_cd_moves_the_targets_that_follow_it(self):
-        self.assertIn("never edit code", self.decision("cd src && echo x > a.py", "orchestrator") or "")
+        self.assertIn("never edit code", self.decision("cd src && echo x > a.py", "planner") or "")
+        self.assertIsNone(self.decision("cd src && echo x > a.py", "orchestrator"))
         self.assertIsNone(self.decision("cd .compose/shop/scratch; echo x > a.md", "orchestrator"))
         self.assertIsNone(self.decision("cd .compose/shop/scratch\necho x > a.md", "orchestrator"))
         self.assertIsNone(self.decision("(cd .compose/shop/scratch && echo x > a.md)", "orchestrator"))

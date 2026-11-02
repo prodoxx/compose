@@ -2,15 +2,16 @@ import hashlib, json, os, re, shlex, sys
 from pathlib import Path
 import fc_core, fc_config, fc_harness, fc_worktree
 
-# ---------- Claude Code hooks: `guard` keeps the team lead and planner out of code, `skillcheck` names changed skill files ----------
+# ---------- Claude Code hooks: `guard` keeps the planner out of code, `skillcheck` names changed skill files ----------
 
 GUARDED_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch", "Bash")
-GUARDED_ROLES = ("orchestrator", "planner")
+LEAD_ROLES = ("orchestrator", "planner")  # the roles whose COMPOSE_ROLE is their own name; every other teammate is `crew`
+GUARDED_ROLES = ("planner",)  # the team lead may make a small fix itself (SKILL.md Rules); the planner writes Linear only
 CLI_FILE = re.compile(r"/\.compose/(linear\.json|[^/]+/(linear|verify)\.json|[^/]+/(?:scratch|lavish)/.+|[^/]+/pr/[^/]+\.md)$")  # the team lead's own: the CLI's config, the layers' PR text, and the Lavish question pages
 
 def env_role(role):
-    """The COMPOSE_ROLE of a teammate's tab. `guard` keeps the team lead and every planner, `planner-<ticket>` too, off the code."""
-    return role if role in GUARDED_ROLES else "planner" if role.startswith("planner-") else "crew"
+    """The COMPOSE_ROLE of a teammate's tab. `guard` keeps every planner, `planner-<ticket>` too, off the code."""
+    return role if role in LEAD_ROLES else "planner" if role.startswith("planner-") else "crew"
 
 def restore_crew_env(proj):
     """A teammate's session that comes back without the env its tab was created with (herdr rebuilds the pane after a computer
@@ -37,8 +38,8 @@ def restore_pane_env(cwd):
                 break
 
 def guard_decision(tool, path, role):
-    """None to allow, else why not. The team lead writes Linear, the CLI's JSON, and the layers' PR text; code, tests, and docs
-    are teammate work. The toolsmith edits nothing in the compose repo, in any checkout or worktree of it: it files issues, it does not fix."""
+    """None to allow, else why not. The planner writes Linear and the CLI's JSON; code, tests, and docs are the implementers' and the
+    team lead's (a small fix, SKILL.md Rules). The toolsmith edits nothing in the compose repo, in any checkout or worktree of it: it files issues, it does not fix."""
     if role not in (*GUARDED_ROLES, "toolsmith") or tool not in GUARDED_TOOLS or not path:
         return None
     p = Path(path).expanduser().resolve()
@@ -52,8 +53,8 @@ def guard_decision(tool, path, role):
         return None
     if not fc_core.checkout(d):
         return None  # scratch outside any repository, e.g. a brief in /tmp
-    return (f"The team lead and the planner never edit code, tests, config, or docs ({p.name}). Hand it to a teammate: "
-            f"`compose crew start --role <job> --brief -`, or put it in a task issue for `run`.")
+    return (f"Planners never edit code, tests, config, or docs ({p.name}). Put it in a task issue for `run`, "
+            f"or hand it to a teammate: `compose crew start --role <job> --brief -`.")
 
 def toplevel(path):
     """The worktree root `path` is in, or None."""

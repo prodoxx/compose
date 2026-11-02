@@ -654,7 +654,7 @@ class Attention(unittest.TestCase):
 
 
 class Guard(unittest.TestCase):
-    """The team lead writes Linear and the CLI's JSON; code, tests, and docs are teammate work."""
+    """The planner writes Linear and the CLI's JSON; the team lead may edit the repo (a small fix); code is otherwise the implementers'."""
     def setUp(self):
         self.repo, self.other = Path(tempfile.mkdtemp()).resolve(), Path(tempfile.mkdtemp()).resolve()
         (self.repo / ".compose" / "shop").mkdir(parents=True)
@@ -664,40 +664,42 @@ class Guard(unittest.TestCase):
             return fc.fc_core.Checkout((root, root / ".git", root / ".git")) if root else None
         p = mock.patch.object(fc.fc_core, "checkout", checkout); p.start(); self.addCleanup(p.stop)  # the edit guard asks fc_core.checkout, never git
 
-    def test_team_lead_cannot_edit_repo_files(self):
+    def test_the_planner_cannot_edit_repo_files_and_the_team_lead_may(self):
         for f in ("src/app.go", "tests/app_test.go", "README.md", "package.json", ".compose/shop/notes.md"):
-            self.assertIsNotNone(fc.fc_hooks.guard_decision("Edit", str(self.repo / f), "orchestrator"), f)
+            self.assertIsNotNone(fc.fc_hooks.guard_decision("Edit", str(self.repo / f), "planner"), f)
+            self.assertIsNone(fc.fc_hooks.guard_decision("Edit", str(self.repo / f), "orchestrator"), f)
 
     def test_the_edit_guard_asks_git_nothing_and_lets_a_folder_outside_every_checkout_through(self):
         with mock.patch.object(fc.fc_core, "sh", side_effect=AssertionError("git asked")), mock.patch.object(fc.fc_core, "checkout", wraps=fc.fc_core.checkout) as asked:
-            for role in ("orchestrator", "planner"):
+            for role in ("planner", "planner"):
                 self.assertIsNotNone(fc.fc_hooks.guard_decision("Write", str(self.repo / "src" / "new" / "app.go"), role), role)  # a folder not made yet: its nearest parent is the checkout
                 self.assertIsNotNone(fc.fc_hooks.guard_decision("Write", str(self.other / "app.go"), role), role)
                 self.assertIsNone(fc.fc_hooks.guard_decision("Write", "/nonexistent-dir/brief.txt", role), role)
             self.assertEqual(asked.call_count, 6)
 
-    def test_team_lead_keeps_its_own_files(self):
+    def test_the_planner_keeps_the_clis_own_files(self):
         for f in (".compose/shop/linear.json", ".compose/shop/verify.json", ".compose/linear.json", ".compose/shop/pr/001-002.md"):
-            self.assertIsNone(fc.fc_hooks.guard_decision("Write", str(self.repo / f), "orchestrator"), f)
+            self.assertIsNone(fc.fc_hooks.guard_decision("Write", str(self.repo / f), "planner"), f)
         for role in ("orchestrator", "planner"):
             self.assertIsNone(fc.fc_hooks.guard_decision("Write", str(self.repo / ".compose/shop/lavish/shape.html"), role), role)
             self.assertIsNone(fc.fc_hooks.guard_decision("Write", str(self.repo / ".compose/shop/scratch/sync.json"), role), role)
         self.assertIsNotNone(fc.fc_hooks.guard_decision("Write", str(self.repo / ".compose/shop/scratch.md"), "planner"))
-        self.assertIsNone(fc.fc_hooks.guard_decision("Write", str(Path(tempfile.mkdtemp()) / "brief.txt"), "orchestrator"))  # scratch outside a repo
+        self.assertIsNone(fc.fc_hooks.guard_decision("Write", str(Path(tempfile.mkdtemp()) / "brief.txt"), "planner"))  # scratch outside a repo
 
-    def test_crew_and_unmarked_sessions_are_untouched(self):
-        for role in ("crew", None, ""):
+    def test_crew_lead_and_unmarked_sessions_are_untouched(self):
+        for role in ("crew", "orchestrator", None, ""):
             self.assertIsNone(fc.fc_hooks.guard_decision("Edit", str(self.repo / "src/app.go"), role))
-        self.assertIsNone(fc.fc_hooks.guard_decision("Read", str(self.repo / "src/app.go"), "orchestrator"))
+        self.assertIsNone(fc.fc_hooks.guard_decision("Read", str(self.repo / "src/app.go"), "planner"))
 
-    def test_planner_is_guarded_like_the_team_lead(self):
-        self.assertEqual(fc.fc_hooks.GUARDED_ROLES, ("orchestrator", "planner"))
+    def test_only_the_planner_is_guarded_and_the_lead_keeps_its_role_name(self):
+        self.assertEqual(fc.fc_hooks.GUARDED_ROLES, ("planner",))
+        self.assertEqual(fc.fc_hooks.LEAD_ROLES, ("orchestrator", "planner"))
+        self.assertEqual((fc.fc_hooks.env_role("orchestrator"), fc.fc_hooks.env_role("planner-eng-9"), fc.fc_hooks.env_role("explore")), ("orchestrator", "planner", "crew"))
         self.assertEqual(fc.fc_config.PLANNING_ROLES, ("architect",))  # the guard change does not touch who gets `planner`
         for tool in fc.fc_hooks.GUARDED_TOOLS:
-            for role in fc.fc_hooks.GUARDED_ROLES:
-                why = fc.fc_hooks.guard_decision(tool, str(self.repo / "src/app.go"), role) or ""
-                self.assertIn("team lead", why, (tool, role))
-                self.assertIn("planner", why.lower(), (tool, role))
+            why = fc.fc_hooks.guard_decision(tool, str(self.repo / "src/app.go"), "planner") or ""
+            self.assertIn("planner", why.lower(), tool)
+            self.assertNotIn("team lead", why, tool)
         for f in (".compose/shop/linear.json", ".compose/shop/verify.json", ".compose/linear.json"):
             self.assertIsNone(fc.fc_hooks.guard_decision("Write", str(self.repo / f), "planner"), f)
         self.assertIsNone(fc.fc_hooks.guard_decision("Read", str(self.repo / "src/app.go"), "planner"))
@@ -723,7 +725,7 @@ class Guard(unittest.TestCase):
 
     def test_hook_output_denies(self):
         ev = json.dumps({"tool_name": "Write", "tool_input": {"file_path": str(self.repo / "x.go")}})
-        for role, denied in (("orchestrator", True), ("planner", True), ("architect", False)):
+        for role, denied in (("orchestrator", False), ("planner", True), ("architect", False)):
             out = io.StringIO()
             with mock.patch.dict(os.environ, {"COMPOSE_ROLE": role}), mock.patch.object(sys, "stdin", io.StringIO(ev)), \
                     mock.patch.object(sys, "stdout", out):
