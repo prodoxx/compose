@@ -15,7 +15,7 @@ The roles are adapted from [firstmate](https://github.com/kunchenguid/firstmate)
 | Role | Who | Where |
 |---|---|---|
 | engineering manager | the session you started; creates the project, then only relays | the pane you started it in |
-| team lead | runs the project from the approved design to a verified stack | tab `orchestrator`, agent `<slug>-orchestrator` |
+| team lead | runs the project from the feature's Intent to a verified stack | tab `orchestrator`, agent `<slug>-orchestrator` |
 | designer | continues design work in Figma from where it stopped | tab `designer`, agent `<slug>-designer` |
 | design-NNN | one builder per design task, Claude only | tab `design NNN` |
 | design-review | one screenshot per story, findings confirmed by quoting nodes | tab `design-review` |

@@ -73,8 +73,8 @@ Three more rules apply to the block and the issue around it:
 - A task that removes or replaces tests has no test to write, so it leaves `protected:` empty.
   It lists the files it removes under `delete:` (and the replacement test under `files:`), and its `test:` is the command that proves the result.
   `run` removes the `delete:` paths even when `test:` passes before the change, so the task never ends `already_green` with nothing removed.
-  A task pinned `route: check-only` (`compose quick`) may also leave `protected:` empty: its check is the proof.
-  Any other code task with an empty `protected:` fails `spec-check`.
+  A task routed `route: check-only`, the default the planner writes (`compose quick` pins it on older tasks), leaves `protected:` empty: its check is the proof.
+  A code task with neither `route: check-only` nor a `protected:` test fails `spec-check`.
 - Only an issue with the block counts as a task.
   Stories, for example, have none.
 

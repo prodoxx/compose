@@ -56,14 +56,10 @@ A provider that runs out of credit halts the run, and [workspaces.md](workspaces
 In a repo that already has code, an explore teammate maps it through trail first and adds a short codebase brief to the feature.
 Questions and planning both wait for that brief.
 
-The engineering manager shapes each feature with you in one conversation, one question at a time, and writes the design to the feature issue.
-It starts with one open question about a real moment, and every message after it ends with one question that follows from your last answer.
-As each part is understood it plays that part back, with its guesses marked, and you correct it.
-A choice it makes for you is written under "My calls", never as something you agreed to.
-Every decision you make is recorded at once with your words through `compose decide`, as a numbered line under the feature issue's "Decisions so far", so no decision is recorded that you did not make.
-A builder check reads the design before you do.
-It reports once, and the engineering manager brings you the few questions only you can answer in one message.
-The design is approved only when you say so, and the plan starts after that.
+By default the team lead writes the feature's Intent, Constraints and My calls to the feature issue from your brief and the codebase brief, in one pass, and the planner starts at once; you steer from its first report.
+Every choice it made for you is listed under "My calls" so you can check it while reading, and every decision you make is recorded with your words through `compose decide`, as a numbered line under the feature issue's "Decisions so far".
+The shaping conversation runs only when you ask for it, when the ticket carries the `needs-shaping` label, when a verification policy names the files the feature touches, or when the Intent would need a guess that is not easily reversible.
+Then the engineering manager shapes the feature with you in one conversation, one question at a time, playing each part back with its guesses marked, a builder check reads the design before you do, and the plan starts once you approve it.
 
 A story or epic that needs a technical deep dive carries the Linear label `deep-dive`, which you can add or remove.
 The engineering manager runs that deep dive with you the same way, and writes it as a Linear document titled `<issue id>: tech doc`, which a builder check reads like any design.
@@ -95,8 +91,8 @@ If Frame0 does not answer `frame0 save` or `down`, a dialog is open in its windo
 
 ## Planning
 
-Once you approve the design, the team lead starts a planner teammate in its own tab instead of writing the plan itself.
-The planner reads the feature's design and its Decisions so far, plus `DESIGN.md`, a PRD, or whatever the repo already had.
+Once the Intent is on the issue (or, after a shaping conversation, once you approve the design), the team lead starts a planner teammate in its own tab instead of writing the plan itself.
+The planner reads the feature's Intent, My calls and Decisions so far, plus `DESIGN.md`, a PRD, or whatever the repo already had.
 It writes the plan as a `## Plan` section in the feature issue's description, never as a file, and does not reopen a settled decision.
 When the feature has no stories, it first proposes them as one list for you, one per user-visible slice with acceptance criteria, and creates them on your go.
 Then it cuts the task issues under each story, and the team lead reviews that cut before anything is dispatched.

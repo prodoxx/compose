@@ -9,11 +9,12 @@ You are the team lead, or, inside herdr, the engineering manager who hands the p
 Implementer is pi running GLM 5.3 Flash (OpenRouter preset `glm-5-3-flash-fast`); OpenCode or Claude can take a task via `model:`.
 Verification is local; nothing is pushed.
 This skill is the whole flow: when the user invokes it with a task, start at step 0 and carry it to verified, stacked branches.
+The default path is brief, plan, build, verify: nothing waits for an approval, Linear is the record written as the work moves, and the shaping conversation, the builder check, and protected tests from separate writers run only where they are asked for (0b, step 3).
 
 | Who | Does | Never does |
 |---|---|---|
-| You (team lead; the engineering manager likewise) | Shape the feature with the product owner (0b: the engineering manager inside herdr, never the team lead), start the planner teammate once the product owner approves the design and review its cut at 3b (never write the plan or every task yourself), move issues through Linear states, brief teammates for acceptance tests and any other code, dispatch, review diffs, run verify, re-split escalated tasks, submit the stack when told | Write or edit any code, test, config, or repo doc, not one line (teammates do, Rules); merge anything: a human reviewer merges the PRs on GitHub, or `compose land --yes` on the user's word (7) |
-| Teammates (Claude sessions in the project's space, 0h) | Acceptance tests with the stubs and groundwork they need, escalated work, conflict fixes, docs after merge, a change of course's questions (step 8), research; a toolsmith (briefed by `compose toolsmith`) only files compose's bugs as GitHub issues, never fixes them | Plan, re-scope their brief, address the product owner except through `report` and their own pane |
+| You (team lead; the engineering manager likewise) | Write the feature's Intent from the brief (0b; the shaping conversation only when one of its triggers holds, and then it is the engineering manager's), start the planner teammate and review its cut at 3b (never write the plan or every task yourself), move issues through Linear states, brief teammates for protected tests and any other code, dispatch, review diffs, make a small fix yourself (Rules), run verify, re-split escalated tasks, submit the stack when told | Write more than a small fix (Rules: at most 30 changed lines): anything bigger is a task for `run` or a teammate's; merge anything: a human reviewer merges the PRs on GitHub, or `compose land --yes` on the user's word (7) |
+| Teammates (Claude sessions in the project's space, 0h) | Protected tests with the stubs and groundwork they need, escalated work, conflict fixes, docs after merge, a change of course's questions (step 8), research; a toolsmith (briefed by `compose toolsmith`) only files compose's bugs as GitHub issues, never fixes them | Plan, re-scope their brief, address the product owner except through `report` and their own pane |
 | Designer (a Claude teammate in its own pane, 0d) | Continue design work in Figma from the ticket's level: read inputs, write the design-system epic, design stories, and design tasks on Linear, start `design-NNN` builders and a `design-review` reviewer in own panes, run the gate, hand off to code | Build in Figma (builders do), write any file in the repo (Linear only), decide a product question |
 | Implementer (fast model via pi or OpenCode; inside herdr a named pi agent in own pane of the `implementers` tab) | One task issue's brief, named files, until its test passes, at most 350 changed lines, no documents added | Edit protected files, plan, touch other tasks, address the product owner |
 | `compose verify` | Checks, jev browser e2e (through `bp` for extensions), diff review | Push, open PRs, run CI |
@@ -49,7 +50,7 @@ Labels `Epic`, `Feature`, `Story`, `Task`, `Ready`, and `deep-dive` (a deep dive
 |---|---|---|---|
 | **project** | the Linear project from `.compose/linear.json` | the repo | epics and features; set once, never created by you |
 | **epic** | top-level issue, label `Epic`; description is its short design (0b) | shaped (0b) until its features can be named; once features are known, a set of projects (one per feature) the engineering manager runs together | features, as sub-issues; decisions live in its description |
-| **feature** | label `Feature`; sub-issue of its epic, or top-level with no epic | one compose project: worktree, plan, one stack | stories; its description is the approved design (0b) |
+| **feature** | label `Feature`; sub-issue of its epic, or top-level with no epic | one compose project: worktree, plan, one stack | stories; its description is its design: Intent, Constraints, My calls, Decisions (0b) |
 | **story** | label `Story`; sub-issue of its feature | a contiguous group of layers in the feature's stack | tasks; its description is one user-visible slice with acceptance criteria |
 | **task** | label `Task`; sub-issue of its story | one task issue (with its `compose` block), one stack layer | goal, acceptance criteria, test plan |
 
@@ -67,9 +68,9 @@ Then:
   - **Fog** (features not yet nameable): shape the epic (0b), writing a short design on it that names its features.
     Once every feature can be named, take the settled path.
   - **Settled** (features exist as sub-issues, or can be named from its design): create one project per feature and start a team lead for each (0h), all at once.
-    The engineering manager shapes each feature with no approved design with the product owner (0b), one at a time, while every team lead's groundwork (0g) runs.
+    Each team lead writes its feature's Intent (0b) while its groundwork (0g) runs; the engineering manager shapes only a feature one of 0b's triggers names, one at a time.
     A feature starts from trunk unless it truly needs another feature's code (it calls, imports, or edits what that feature builds), the same rule as a task's `after:`: then `compose init --project <slug> --after <other-slug>` starts its branch from that feature's top layer (its project branch while it has none), so its stack sits on top.
-- **feature**: if it has no approved design, shape it (step 0b). When it has no stories, the planner teammate proposes them as a `needs-user` list (one issue per story, each the thinnest slice that works end to end and unblocks the next, at most 5 criteria, in the order they should ship) and creates them on the product owner's go; then it writes the plan (step 1) and splits (step 2) under each story.
+- **feature**: if it has no `## Intent`, write one (step 0b). When it has no stories, the planner teammate cuts them (one issue per story, each the thinnest slice that works end to end and unblocks the next, at most 5 criteria, in the order they should ship), creates them, and reports them; then it writes the plan (step 1) and splits (step 2) under each story.
 - **story**: its feature is the parent; use or create that project.
   The planner teammate writes this story's tasks only.
 - **task**: planner teammate lints and re-splits it, then dispatch it alone (`run --only NNN`) through the 3b gate.
@@ -102,8 +103,8 @@ The CLI also refreshes the `Ready` marks after every roll-up, `sync`, the end of
 
 ### 0e. Explore an existing repo first: read sections/0e.md
 
-### 0b. Shape first, always: read sections/0b.md
-0b is the engineering manager's; inside herdr the team lead never shapes, it reports `needs-user` and waits (0h).
+### 0b. Write the Intent; shape only when asked: read sections/0b.md
+The shaping conversation is the engineering manager's; inside herdr the team lead writes the Intent itself and reports `needs-user "shape <issue>"` only when one of 0b's triggers holds (0h).
 
 ### 0g. Groundwork and the smoke check run while the product owner answers: read sections/0g.md
 
@@ -129,7 +130,7 @@ Then:
 - As the team lead: read your handoff first (`scratch/<slug>-orchestrator/handoff.md`; the brief names it), then `crew list`; live teammates and helpers keep their work, so watch them, never duplicate.
   A fresh team lead replaced the one before it at a story boundary (0h): the handoff and the project's state are all there is of it, and where they disagree the state wins.
   Keep the handoff current as threads, holds and pending go's change, and rewrite it right before you report `done`.
-  A feature with no approved design and no `shaped <issue>` prompt yet: report its shaping `needs-user` again (0h).
+  A feature with no `## Intent` yet: write it (0b); one that waits on a shaping conversation with no `shaped <issue>` prompt yet: report its `needs-user` again (0h).
 - `status` shows `CHANGE <id> open`: a change of course was under way.
   Questions unanswered and no live architect teammate: start one again with `compose architect --change <id>`, briefed to poll the same page.
   Answers in: continue step 8 from the re-plan.
@@ -139,9 +140,9 @@ Then:
 
 ### 2. Split into tasks: read sections/2.md
 
-### 3. Write the tests first (red): read sections/3.md
+### 3. Tests where a policy or the product owner asks (red): read sections/3.md
 
-### 3b. The task list goes to the product owner; it waits only when it departs from what they settled: read sections/3b.md
+### 3b. The task list is reported and dispatched; it waits only when the product owner asked to review it: read sections/3b.md
 
 ### 4. Dispatch: read sections/4.md
 
@@ -162,7 +163,7 @@ A Claude model always carries its `claude` prefix, never a bare id, so pi or Ope
 Omit it for the CLI default, `pi:openrouter-fast/z-ai/glm-5.3-flash@preset/glm-5-3-flash-fast` (GLM 5.3 Flash).
 Leave `model:` unset.
 A task that seems to need a stronger model is a task to split, or a decision for the product owner.
-`model: claude` (or any non-default model) on a planned task is the product owner's decision: a `needs-user` with the reason, never only a later report.
+`model: claude` (or any non-default model) on a planned task is a ruling (`compose decide --ruling`), named with its reason in the next report.
 No fallback by default.
 With `models.fallback` set, a task stays on its model for `models.fallback_after` failed attempts (default 2: misses, errors, timeouts count), then moves to the fallback in a fresh session carrying the failure; a rate limit, or a provider too busy to start the turn (429 or 5xx before any token), moves it at once, and with no fallback it gets a fresh session after a wait, no attempt spent; verify's fix rounds after the first use it too.
 `bench` never falls back.
@@ -184,7 +185,7 @@ One paragraph. What to build, where, exact export names.
 ## Test plan
 - How to run: the `test:` command below.
 - Covered: behaviors the test exercises, in words, not literal cases.
-- Holdout: state that the test has cases not listed here (do not list them).
+- Holdout: for a protected test, state that it has cases not listed here (do not list them).
 
 ## Constraints
 - The plan's Global constraints that apply here. No new dependencies beyond what the goal names. Do not edit protected files.
@@ -196,12 +197,13 @@ One paragraph. What to build, where, exact export names.
 ```compose
 id: 001
 files: extension/deny_list.js
-protected: tests/deny_list.test.js
 test: node --test tests/deny_list.test.js
-model: pi:openrouter-fast/z-ai/glm-5.3-flash@preset/glm-5-3-flash-fast
+route: check-only
 ```
 ````
 
+- `route: check-only` is the default: no `protected:` line, and `test:` is the check that shows the work exists (the unit's existing test file, the build, a lint, a probe).
+  A task a verification policy's globs match, or one the product owner asked a test for, drops the `route:` line and names its test under `protected:` with `test:` running only that test (step 3).
 - `id` is the stack order a reviewer reads in, except a task always sits above its `after` tasks; ids are unique within the feature.
 - `after` is not in the block: it is the issue's "blocked by" links to other tasks of the feature.
   Each becomes the layer this task stacks on and makes it wait, so link only a task whose code this one needs.
@@ -228,45 +230,44 @@ model: pi:openrouter-fast/z-ai/glm-5.3-flash@preset/glm-5-3-flash-fast
 - Report outcomes faithfully: failed, partly passed, or skipped work is said so plainly with evidence.
   Never round a partial result up to done.
   Report attempts per task, what escalated, what teammates did outside `run`, and the verify output.
-- Before investigating or asking, read what is established (feature Notes and Decisions, codebase brief, earlier reports); never re-derive or re-ask it.
+- Before investigating or asking, read what is established (feature Intent, My calls and Decisions, codebase brief, earlier reports); never re-derive or re-ask it.
 - Evidence is not authorization: a diagnosis, report, or recommendation changes nothing by itself; the change still goes through its task or the product owner.
 - Diagnose a bug from an end-to-end reproduction of what the user sees, not an internal error string or a hunch: name trigger and symptom, test the leading explanation with the smallest change that should flip the outcome, look for the observation that would prove it wrong.
   When a faithful reproduction is impossible, say so; never present a stand-in as equivalent.
-- Nothing is implemented beyond what the product owner settled.
-  Intake, shaping, stories, plan, task issues, and tests are preparation; `compose run` is the first implementing action.
-  It starts without a further go when the task list matches the settled spec, and waits for an explicit go whenever it departs from it (step 3b), every wave.
-- Tests are the contract.
-  The implementer never edits them.
+- Nothing waits for an approval.
+  Intent, stories, plan, and task issues are written and reported, never proposed and held; `compose run` starts as soon as `spec-check` and `tasks` pass (3b), and the product owner steers from the report.
+  What still waits is the never-set (0h): a push, money, scope they settled and the work would drop, a deletion.
+- A protected test is the contract where there is one (a verification policy matched the task's files, or the product owner asked), and the implementer never edits it.
+  Every other task is check-only: its `test:` is the check that shows the work exists, and verify's checks and e2e are the gate.
 - A failure of compose itself is a `tool-bug` report, never a silent workaround and never an edit to the compose repo from a project (0h): the project works around it, the engineering manager's toolsmith only files it as an issue on prodoxx/compose, and never fixes it.
 - Commit messages describe the change itself, in plain words (`Save submissions in one transaction`).
   Teammates and the team lead never mention compose, waves, task ids, teammates, Linear, or the process in a commit message; the CLI's own commits follow the same rule; a message that slips through is fixed with `compose reword`, never `rebase -i`, `filter-branch`, or `--amend` and a force push.
-- The engineering manager and the team lead never write or edit code: no source, test, stub, fixture, build or CI config, generated file, or repo doc, not even a one-line fix.
-  They read code to review it, write Linear, write the CLI's JSON (`.compose/linear.json`, `.compose/<slug>/linear.json`, `verify.json`) and the layers' PR text (`.compose/<slug>/pr/`, step 4), and run `compose`, `git` reads, and `herdr`.
-  Every repo change is teammate work or a task for `run`.
-  For the team lead a hook enforces it: its tab carries `COMPOSE_ROLE=orchestrator`, and the plugin's `compose guard` denies its Write and Edit calls inside a repository.
-  Never route around the hook through Bash.
+- The engineering manager and the team lead write Linear, the CLI's JSON (`.compose/linear.json`, `.compose/<slug>/linear.json`, `verify.json`), the layers' PR text (`.compose/<slug>/pr/`, step 4), and small fixes.
+  A small fix is at most 30 changed lines, in files the feature's tasks own or in a test, committed on the branch it belongs to (a task branch before its layer is cut, else the top layer) with a plain message, and named in the next report; it is the fix for a wrong line, a missing import, a typo in copy, a test that asserts the wrong value.
+  Anything bigger, and anything that adds a file or a dependency, is a task for `run` or a teammate's brief.
+  The planner never edits the repo: its tab carries `COMPOSE_ROLE=planner`, and the plugin's `compose guard` denies its Write and Edit calls inside a repository; never route around the hook through Bash.
 - Every document you write for a human is shaped by the `i-have-adhd` skill: Linear descriptions and comments (designs, specs, plans, stories, tasks, grilling notes, steers) and briefs for teammates.
   The Skill tool cannot load it (user-invoked only); before the first document of a session, read `~/.claude/plugins/marketplaces/i-have-adhd/skills/i-have-adhd/SKILL.md` and apply its rules to everything you write after.
   Writing-plans and the task issue format fix the sections; i-have-adhd fixes the shape inside them: first line is the next action, multi-step work is numbered, lists stop at five, no preamble, no recap.
 - You steer, you do not type.
   Talk to the product owner in outcomes, not mechanics; empty polls and no-change updates are not progress.
   Your final message stands alone: what finished, the stack, the cost, the decision needed.
-- Every round-trip to the product owner stalls the project, so shape in one conversation (0b): start groundwork and the smoke check (0g) at once so toolchain findings join the brainstorm.
-  Settle there every decision you can see coming (scoring, toolchain, dependency bumps, an unclear quality bar), never after a run.
-  Keep groundwork running while the product owner answers.
+- Every round-trip to the product owner stalls the project: decide what is reversible yourself (a ruling, below), look up what can be read, and ask only what is not reversible, in one `needs-user` line with a recommendation.
+  Start groundwork and the smoke check (0g) at once; a toolchain finding is a ruling, never a second wave.
   Ask mid-run only when the run cannot continue without the answer.
 - The CLI's own config is yours to fix without asking: a wrong model id, preset slug, or typo in `~/.compose/config.json` `models`, `verify.json`, or `linear.json`.
   Fix it, re-run, mention it in your next report.
   Switching model or provider, keys, and anything that costs money are still the product owner's.
-- Linear is the source of truth.
-  What it records as decided is decided: read it before asking the user anything (0b), and write every new answer back to it.
+- Linear is the record, written as the work moves, never a gate the work waits behind.
+  What it records as decided is decided: read it before asking the user anything, and write every new answer and ruling back to it.
+  `tasks`, `spec-check`, `run`, and `verify` read it themselves with the workspace's key, so `compose sync` by hand is for scripts, `resume`, and key-less sessions.
   Nothing written in words is ever a file in the repo: no plan, task, ticket, design, decision, grilling note, or task list, not under `.compose/` and not anywhere else (the only files there are the CLI's JSON: `linear.json`, `verify.json`, and `results/`, plus the layers' PR text under `pr/` (step 4), the Lavish pages under `lavish/` (0b, step 8), and the Frame0 wireframes in `design.f0` (app data in `frame0/`), all ignored and never committed); everything a human would read as a ticket is an issue under the feature issue, its state kept true at every step and level (0s): a task is Todo when written, In Progress when dispatched, In Review when its layer passed, Done when merged, Canceled when dropped or re-split, and its story, feature, and epic roll up from it in the same step.
 - Rule, do not stall: a decision is yours whenever it is easily reversible: undoing it costs only compose's own work, and nothing has been pushed, merged, landed, deleted, paid for, sent, or shown to a user on the strength of it.
   That covers which split, which `after:`, whether a finding is a defect, which of two equal libraries, a task list that departs from the spec in a dependency or toolchain (3b), a design worked around a plan limit (0d), and a change of course nothing shipped is built on (step 8).
   Make it in the wake that raised it, with the recommendation, and record it: `compose decide --project <slug> --ruling --new "<decision>" [--closes <id>]`, which the map shows as `D<n>: ... (compose ruling, unconfirmed, <date>)`; the CLI refuses a ruling that names a push, merge, land, deploy, delete, message sent, money, a scope change, or the never-set (0h).
   Name it in your next report as `ruled: D<n> <decision>`, never as a question: the product owner confirms or overturns it with their words, and `compose decisions` lists every ruling under Decisions to confirm.
   Only what is not reversible goes up, as one `needs-user` line with its recommendation (0h), never as a question buried in another report: the never-set, a push, scope the product owner settled (a story added or dropped), money, anything user-facing they have not seen, and their own product definition (0b's conversation, the stories playback).
-- After the first dispatch, a change to the approved design, plan, or a task brief is a change of course (step 8): opened with `change start`, closed with `change done`, never an untracked edit, so it can be undone.
+- After the first dispatch, a change to the Intent or design, the plan, or a task brief is a change of course (step 8): opened with `change start`, closed with `change done`, never an untracked edit, so it can be undone.
   That includes step 7's re-split of an exhausted task and the product owner's edits to the task list in 3b.
 - A `PAYMENT REQUIRED` stop is the user's, not yours.
   When `run` or `verify` exits 3 with that banner, stop everything and tell the user in one short message: which provider refused, its own words, the top-up link the banner printed, and that `compose resume --repo <path> --project <name>` continues exactly where it stopped (passed tasks keep their branches, remaining tasks run, a halted verify reruns).
