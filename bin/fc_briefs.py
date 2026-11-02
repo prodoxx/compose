@@ -63,8 +63,10 @@ TOOLSMITH_BRIEF = """You are toolsmith for project {project}: compose failed the
 {reporter} at {at}, compose {cli_commit} in {cli_repo}:
   {message}
 Read that repo's SKILL.md first; no other skill file.
-1. Reproduce bug in your worktree, find root cause.
-2. Write body file: line 1 `# <command>: <symptom>`, then sections of issue #1 (`gh issue view 1 --repo {repo}`).
+You only find and file the bug: never edit, commit, push, or fix anything in the compose repo, whoever you are on this machine.
+A fix is a later, separate job. Your one output is a GitHub issue.
+1. Reproduce bug in your worktree (read-only: look, run, never change), find root cause.
+2. Write body file outside the compose repo (e.g. under /tmp): line 1 `# <command>: <symptom>`, then sections of issue #1 (`gh issue view 1 --repo {repo}`).
 3. File: `compose tool-bug file --project {project} --entry "{at}" --body <file>`. Exit 2: open issue exists;
    `--comment <n>` if same bug, `--new` if not.
 {variant}"""
@@ -158,8 +160,8 @@ def _prd(wt):
         return None
 
 def cmd_toolsmith(a):
-    """Print the toolsmith's brief for the project's newest tool-bug entry: the maintainer's toolsmith files and fixes on a
-    branch, anyone else's only reproduces, diagnoses, and files; exits non-zero when the project has no entry."""
+    """Print the toolsmith's brief for the project's newest tool-bug entry: every toolsmith only reproduces, diagnoses, and files
+    an issue (the maintainer's posts it, anyone else's saves a draft first), never fixes; exits non-zero when the project has no entry."""
     proj = fc_core.project_dir(a)
     entry, log = None, Path(fc_crew.TOOL_BUGS)
     if log.exists():
@@ -173,18 +175,11 @@ def cmd_toolsmith(a):
     same = len(fc_toolbug.entries_at(proj.name, entry["at"]))  # several at one time: the entry is named by its number
     at = f"{entry['at']}#{same}" if same > 1 else entry["at"]
     if state == "maintainer":
-        variant = f"""4. Maintainer on {repo}: file or comment first, then fix root cause on own branch in your own worktree of compose repo,
-   with test failing without fix, passing with it; run only test files of what you changed, never whole suite.
-   Never commit on main of any checkout, in ~/.compose/src, or in project worktree: tool refuses.
-5. Commit with plain message, no `Fixes #`, then run
-   `compose tool-bug pr --project {proj.name} --entry "{at}" --worktree <your worktree>`: pushes branch, opens PR,
-   closing issue when product owner merges. You never merge.
-6. Report `done` with the PR's URL.
+        variant = f"""4. Report `done` with the issue's URL. That is the end of your job: no branch, no commit, no PR, no fix.
 """
     else:
-        variant = f"""4. Not maintainer on {repo}: reproduce, diagnose, file only; never edit or commit; this
-   overrides worktree line `crew start` puts first.
-5. Without `--approved` filing saves draft: report `needs-user` with saved path, diagnosis; wait. On the go, run the same filing command with `--approved`, then report `done` with issue's URL.
+        variant = f"""4. Not maintainer on {repo}: without `--approved` filing saves draft: report `needs-user` with saved path, diagnosis; wait.
+   On the go, run the same filing command with `--approved`, then report `done` with issue's URL. Never edit or commit.
 """
         if state == "no-gh":
             variant += "   gh fails here: if filing prints `gh auth login` hint, put it in needs-user line too.\n"
@@ -215,11 +210,15 @@ def test_brief(meta, contract, budget=None, conv=None, rebuilt=False):
             "a count, a layout) is not asserted either.\n"
             "Find elements by role and accessible name or by the text the brief or design gives, never by a label or class you "
             "guessed; await what renders after a fetch or an effect before asserting on it.\n"
-            "Cover the brief's acceptance criteria plus holdout cases it does not list. One file; "
+            "Write the fewest cases that fail if the behavior the brief names breaks: one per acceptance criterion, plus at most two holdout cases "
+            "for a real edge it does not list (empty, boundary, error); one case may loop over several inputs. One file; "
             "test behavior through the interface the brief names, one behavior per case, each named for the behavior it checks, "
             "expected and actual in every failure; never mock what the task owns, and never assert an implementation detail "
-            "(a private helper, call order, a log line) the brief does not state; "
-            "never a test that asserts dependency lists, lint or tool configuration, or config file contents.\n" +
+            "(a private helper, call order, a log line) the brief does not state.\n"
+            "Never test: styling, CSS values, layout, or copy the brief does not give; constants, enums, types, or what the compiler or type checker already "
+            "guarantees; dependency lists, lint or tool configuration, or config file contents; glue that only forwards to a library or framework; "
+            "a library's or framework's own behavior; a second case for a behavior another case already checks. "
+            "If nothing the brief asks for is left after that, report `blocked` naming why; never write a test to fill the budget.\n" +
             ("The TASK BRIEF's `scenarios` block gives one scenario per criterion: write a case per scenario and per negative_case, then holdouts none lists, within the budget.\n" if fc_tasks.scenarios_block(meta.get("body")) else "") +
             f"Budget: at most {budget} lines, holdouts included.\n"
             "You work in your own worktree and branch; the CLI collects every teammate's commits onto the project branch. "
@@ -456,6 +455,8 @@ def collect_tests_locked(proj, wt, only, force):
             fc_core.say(not_ready_line(tid, last))
             continue
         if fc_testred.gate(proj, by_id[tid], writer):  # a test that cannot load goes back to its writer once
+            continue
+        if fc_testred.oversize(proj, by_id[tid], writer, fc_testred.added_lines(wt, branch, by_id[tid].get("protected") or [])):  # so does one far over its budget
             continue
         # a commit already on the branch is skipped: the same patch, or picked by hand (a cherry-pick keeps the author, the author
         # date, and the subject through a conflict resolution and any later edit, where no patch or content check would match)

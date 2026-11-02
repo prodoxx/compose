@@ -81,3 +81,39 @@ def gate(proj, meta, writer):
     sent_back(proj, {tid: reports})
     fc_core.say(f"tests-{tid} sent back to its writer: {line}")
     return True
+
+
+OVER = 1.5  # a test may run this far over the budget its brief gave before its writer is sent back to cut it
+
+def told_budget(proj, writer):
+    """The line budget the writer's brief gave it (results/crew/<writer>.brief.md), or None when the brief is gone or names none."""
+    f = Path(proj) / "results" / "crew" / f"{writer}.brief.md"
+    hit = re.search(r"^Budget: at most (\d+) lines", f.read_text(), re.M) if f.exists() else None
+    return int(hit.group(1)) if hit else None
+
+def added_lines(wt, branch, paths):
+    """Lines the writer's `branch` adds to `paths` past where it left the project branch checked out in `wt`."""
+    out = fc_core.sh(["git", "diff", "--numstat", f"HEAD...{branch}", "--", *paths], wt, check=False).stdout
+    return sum(int(n) for n, *_ in (l.split("\t") for l in out.splitlines()) if n.isdigit())
+
+def oversize(proj, meta, writer, added):
+    """Whether the collect of a writer whose test adds `added` lines waits. A test more than OVER times its budget goes back to its
+    writer once, to cut the cases that guard no behavior the brief names; it then waits like a test sent back for not loading.
+    A test already sent back once, or whose writer cannot be reached, is collected with a warning."""
+    tid, budget = meta["id"], told_budget(proj, writer)
+    if not budget or added <= budget * OVER:
+        return False
+    live = writer in {a.get("name") for a in fc_herdr.live_agents()}
+    if sent_back(proj).get(tid) is not None or not live:
+        fc_core.say(f"tests-{tid} collected although its test adds {added} lines, over its budget of {budget}: " + ("it was sent back once already" if live else "its writer is not running"))
+        return False
+    text = "\n".join([f"Your test for task {tid} adds {added} lines; the budget is {budget}.",
+                      "Cut it to the cases that fail if the behavior the TASK BRIEF names breaks: one per criterion, at most two holdouts for a real edge (empty, boundary, error).",
+                      "Drop every case on styling, copy the brief does not give, constants, types, configuration, glue that only forwards to a library, and a second case for the same behavior.",
+                      "Make a plain new commit, check the test still fails on the stubs for the missing behavior, and report test ready again."])
+    if fc_herdr.herdr("agent", "prompt", writer, text) is None:
+        fc_core.say(f"tests-{tid} collected although its test adds {added} lines, over its budget of {budget}: herdr could not reach its writer")
+        return False
+    sent_back(proj, {tid: len(fc_crew.crew_reports(proj, writer))})
+    fc_core.say(f"tests-{tid} sent back to its writer: {added} lines, budget {budget}")
+    return True

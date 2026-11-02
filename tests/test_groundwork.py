@@ -682,6 +682,23 @@ class DesignCrewsWait(unittest.TestCase):
         self.assert_waits_once(out)
 
 
+class TestWriterBrief(unittest.TestCase):
+    """A test writer is briefed for the fewest cases that guard the behavior, and told what never to test."""
+    META = {"id": "001", "title": "deny list", "test": "node --test tests/d.test.js", "protected": ["tests/d.test.js"], "files": ["d.js"], "body": "b"}
+
+    def test_it_asks_for_one_case_per_criterion_and_at_most_two_holdouts(self):
+        out = fc.fc_briefs.test_brief(self.META, "")
+        self.assertIn("fewest cases", out); self.assertIn("at most two holdout cases", out)
+        self.assertIn("Budget: at most 60 lines, holdouts included.", out)
+        self.assertNotIn("plus holdout cases it does not list", out)
+
+    def test_it_names_what_is_never_tested_and_lets_the_writer_report_blocked_instead_of_filling_the_budget(self):
+        out = fc.fc_briefs.test_brief(self.META, "")
+        for part in ("styling", "constants", "dependency lists", "glue that only forwards", "framework's own behavior", "second case for a behavior",
+                     "report `blocked` naming why; never write a test to fill the budget"):
+            self.assertIn(part, out)
+
+
 class ToolsmithBrief(unittest.TestCase):
     def setUp(self):
         self.home = Path(tempfile.mkdtemp()).resolve()
@@ -712,11 +729,19 @@ class ToolsmithBrief(unittest.TestCase):
         for state in ("maintainer", "reporter", "no-gh"):
             out = self.brief(state)
             self.assertEqual(out.count('compose tool-bug file --project shop --entry "2026-10-16 21:45:07"'), 1, state)
-            self.assertEqual(out.count('--entry "2026-10-16 21:45:07"'), 2 if state == "maintainer" else 1, state)
+            self.assertEqual(out.count('--entry "2026-10-16 21:45:07"'), 1, state)
             self.assertNotIn("--entry 2026", out, state)
             for s in ("08:00:00", "09:00:00", "23:00:00"):
                 self.assertNotIn(s, out, state)
         self.assertIn("run the same filing command with `--approved`", self.brief("reporter"))
+
+    def test_no_toolsmith_is_briefed_to_fix_anything(self):
+        self.entry("shop", "boom")
+        for state in ("maintainer", "reporter", "no-gh"):
+            out = self.brief(state)
+            self.assertIn("never edit, commit, push, or fix", out, state)
+            for word in ("tool-bug pr", "open PR", "--worktree", "Fixes #", "own branch"):
+                self.assertNotIn(word, out, state)
 
     def test_no_entry_for_the_project_exits_naming_it(self):
         for setup in (lambda: None, lambda: self.entry("other", "not ours")):

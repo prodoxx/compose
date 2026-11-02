@@ -163,8 +163,8 @@ def find_entry_time(project, at):
             return found[0][0], found[0][1], f"{at} matched the entry of {found[0][0]} at {found[0][1]}"
     return project, at, None
 
-def record_issue(project, url, at, field="issue"):
-    """Set `field` (`issue`, or `pr`) on the project's last tool-bugs.jsonl entry whose `at` is `at`, only when it has none yet; the URL
+def record_issue(project, url, at):
+    """Set `issue` on the project's last tool-bugs.jsonl entry whose `at` is `at`, only when it has none yet; the URL
     that entry holds afterwards (the new one or the kept one), None when no entry of the project has that `at`."""
     import json
     log = fc_crew.TOOL_BUGS
@@ -175,79 +175,21 @@ def record_issue(project, url, at, field="issue"):
     if not same or (n is not None and not 1 <= n <= len(same)):
         return None
     i, e = same[-1 if n is None else n - 1]
-    if field in e:
-        return e[field]
-    e[field] = url
+    if "issue" in e:
+        return e["issue"]
+    e["issue"] = url
     lines = log.read_text().splitlines(keepends=True)
     lines[i] = json.dumps(e) + "\n"
     log.write_text("".join(lines))
     return url
 
-def cmd_tool_bug_pr(a):
-    """`tool-bug pr --worktree <path>`: push the toolsmith's branch from its own worktree of the compose repo and open a PR on REPO that
-    fixes `--issue`, else the entry's issue, recorded on the entry as `pr`. Refused off the maintainer's machine, for a worktree that is the installed
-    copy, a main checkout, or on main or master, and for a branch with nothing to propose; never merges."""
-    import json, subprocess, sys
-    wt = Path(a.worktree).resolve()
-    state, login = gh_status()
-    if state != "maintainer":
-        sys.exit(f"this gh login cannot open a pull request on {REPO}: file the issue with `compose tool-bug file` instead")
-    if fc_worktree.common_dir(wt) is None or fc_worktree.common_dir(wt) != fc_worktree.common_dir(fc_crew.CLI_REPO):
-        sys.exit(f"{wt} is no worktree of the compose repo {fc_crew.CLI_REPO}: the fix belongs in your own worktree of it")
-    if (why := fc_worktree.shared_checkout(wt, fc_crew.CLI_REPO)):
-        sys.exit(f"{why}: a toolsmith never commits there. Fix on a branch in your own worktree of the compose repo, then run this again from it")
-    if fc_core.sh(["git", "status", "--porcelain"], wt, check=False).stdout.strip():
-        sys.exit(f"{wt} has uncommitted changes: commit them on your branch first")
-    base = fc_worktree.default_branch(wt) or "main"
-    if fc_core.sh(["git", "fetch", "-q", "origin"], wt, check=False).returncode:
-        sys.exit("git fetch origin failed: this machine cannot reach the compose repo's remote, so no branch can be pushed")
-    subjects = fc_core.sh(["git", "log", "--reverse", "--format=%s", f"origin/{base}..HEAD"], wt, check=False).stdout.splitlines()
-    if not subjects:
-        sys.exit(f"{wt} has no commit past origin/{base}: commit the fix on your branch first")
-    branch = fc_core.sh(["git", "branch", "--show-current"], wt).stdout.strip()
-    project, at, note = a.project, a.entry, None
-    if at is not None:
-        try:
-            project, at, note = find_entry(project, at)
-        except ValueError as e:
-            sys.exit(str(e))
-    log, entry = Path(fc_crew.TOOL_BUGS), {}
-    for line in log.read_text().splitlines() if log.exists() else []:
-        try:
-            d = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(d, dict) and d.get("project") == project and (at is None or split_ordinal(at)[0] == d.get("at")):
-            entry = d
-    if at is not None and (same := entries_at(project, split_ordinal(at)[0])):
-        entry = same[-1 if split_ordinal(at)[1] is None else split_ordinal(at)[1] - 1][1]
-    n = a.issue or (m.group(1) if (m := re.search(r"/issues/(\d+)$", entry.get("issue", ""))) else None)  # an entry keeps the first issue filed on it: --issue names the one this fix closes
-    pushed = fc_core.sh(["git", "push", "-q", "-u", "origin", branch], wt, check=False)
-    if pushed.returncode:
-        sys.exit(f"git push of {branch} failed: {' '.join((pushed.stdout + pushed.stderr).split())}")
-    title, body = scrub(a.title or subjects[0], login), scrub("\n".join(f"- {s}" for s in subjects) + (f"\n\nFixes #{n}" if n else ""), login)
-    p = subprocess.run(["gh", "pr", "create", "--repo", REPO, "--base", base, "--head", branch, "--title", title, "--body", body],
-                       capture_output=True, text=True, stdin=subprocess.DEVNULL)
-    out = [l.strip() for l in p.stdout.splitlines() if l.strip()]
-    if p.returncode or not out:
-        sys.exit(f"{branch} is pushed but gh could not open the PR: {' '.join((p.stdout + p.stderr).split())}")
-    print(out[-1])
-    if note:
-        print(note)
-    if entry and record_issue(project, out[-1], at or entry["at"], "pr") != out[-1]:
-        print(f"{out[-1]} not recorded: {entry['at']} already links another PR")
-    elif a.entry and not entry:
-        print(f"{out[-1]} not recorded: no tool-bugs.jsonl entry has at {a.entry}, or within 2 seconds of it")
-
 def cmd_tool_bug(a):
     """`tool-bug file --body <file> [--comment N | --new] [--approved]`: scrub, then post on the maintainer's machine or with
     --approved, else save a draft under fc_config.CONFIG_PATH.parent / "tool-bugs"; search before every create, and record the URL.
-    `tool-bug pr --worktree <path>` opens the fix's PR (cmd_tool_bug_pr). A toolsmith's filing from a main checkout of the compose
-    repo or from the installed copy is refused."""
+    A toolsmith only files: there is no fix or PR command. Its filing from a main checkout of the compose repo or from the
+    installed copy is refused."""
     import os, sys, time
 
-    if a.action == "pr":
-        return cmd_tool_bug_pr(a)
     if os.environ.get("COMPOSE_ROLE") == "toolsmith" and (why := fc_worktree.shared_checkout(Path.cwd(), fc_crew.CLI_REPO)):
         sys.exit(f"{why}: a toolsmith works in its own worktree of the compose repo, never in a shared checkout. Run this from your worktree")
     raw = Path(a.body).read_text()

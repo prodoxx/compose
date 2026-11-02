@@ -256,7 +256,7 @@ class BriefDecisions(unittest.TestCase):
         self.assertTrue(line.startswith("tests-002: abcdef0 conflicts with the project branch; its branch compose/p-tests-002 is kept.\n"))
         self.assertTrue(line.endswith("CONFLICT")); self.assertLess(len(line), 700)
 
-    def collect(self, states, pick_fail=(), wrote=None):
+    def collect(self, states, pick_fail=(), wrote=None, oversize=()):
         proj = Path(tempfile.mkdtemp()) / "p"; proj.mkdir()
         picks = []
         def sh(args, *a, **k):
@@ -272,6 +272,7 @@ class BriefDecisions(unittest.TestCase):
         with mock.patch.object(fc.fc_briefs.fc_core, "sh", sh), mock.patch.object(fc.fc_briefs.fc_tasks, "load_tasks", return_value=tasks), \
              mock.patch.object(fc.fc_briefs, "test_open", return_value=True), mock.patch.object(fc.fc_briefs.fc_crew, "crew_reports", reports), \
              mock.patch.object(fc.fc_briefs.fc_testred, "gate", return_value=False), mock.patch.object(fc.fc_briefs.fc_herdr, "project_worktree", return_value=proj), \
+             mock.patch.object(fc.fc_briefs.fc_testred, "oversize", lambda p, m, w, added: m["id"] in oversize), \
              mock.patch.object(fc.fc_briefs.fc_worktree, "slots", return_value={}), mock.patch.object(fc.fc_briefs.fc_worktree, "use_treehouse", return_value=False), \
              mock.patch.object(fc.fc_briefs.fc_crew, "write_report"), mock.patch.object(fc.fc_briefs.fc_crew, "close_collected", lambda p, w: closed.append(w)), \
              mock.patch.object(fc.fc_briefs.fc_core, "say", say.append), mock.patch.object(fc.fc_briefs, "test_branch", lambda p, t: f"b-{t}"):
@@ -289,6 +290,12 @@ class BriefDecisions(unittest.TestCase):
         self.assertTrue(any(l.startswith("tests-002 skipped") for l in say))
         self.assertEqual(len(closed), 2)
         self.assertIsNone(err)
+
+    def test_a_writer_sent_back_for_an_oversized_test_is_not_collected_until_it_reports_again(self):
+        ready = {"state": "done"}
+        picks, say, closed, err = self.collect({"001": ready, "002": ready, "003": ready}, oversize=("002",))
+        self.assertEqual([c.rsplit("b-", 1)[1] for c in picks], ["001", "003"])
+        self.assertEqual(len(closed), 2)
 
     def test_a_conflict_is_named_at_the_end_while_the_rest_are_collected(self):
         ready = {"state": "done"}

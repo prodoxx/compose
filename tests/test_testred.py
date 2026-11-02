@@ -123,5 +123,61 @@ class Gate(unittest.TestCase):
         self.assertEqual(self.sent, [])
 
 
+
+class Oversize(unittest.TestCase):
+    """A test far over the budget its brief gave goes back to its writer once to be cut; everything else is collected."""
+    def setUp(self):
+        self.proj = Path(tempfile.mkdtemp()).resolve() / "p"
+        (self.proj / "results" / "crew").mkdir(parents=True)
+        self.brief = self.proj / "results" / "crew" / f"{WRITER}.brief.md"
+        self.brief.write_text("Write the acceptance test.\nBudget: at most 60 lines, holdouts included.\nYou work in your own worktree.\n")
+        self.reports = [{"state": "working", "message": "test ready: abc"}]
+        self.sent, self.says, self.live = [], io.StringIO(), [{"name": WRITER}]
+        for p in (mock.patch.object(fc.fc_crew, "crew_reports", lambda proj, name: self.reports), mock.patch.object(fc.fc_herdr, "live_agents", lambda: self.live),
+                  mock.patch.object(fc.fc_herdr, "herdr", lambda *a, **kw: self.sent.append(a) or {"ok": 1}), mock.patch.object(fc.fc_core, "say", lambda m: self.says.write(m + "\n"))):
+            p.start(); self.addCleanup(p.stop)
+
+    def test_the_budget_is_the_one_the_writers_brief_gave_it(self):
+        self.assertEqual(tr.told_budget(self.proj, WRITER), 60)
+        self.assertIsNone(tr.told_budget(self.proj, "p-tests-002"))
+        self.brief.write_text("no budget here\n")
+        self.assertIsNone(tr.told_budget(self.proj, WRITER))
+
+    def test_a_test_within_half_again_of_its_budget_is_collected(self):
+        for added in (0, 60, 90):
+            self.assertFalse(tr.oversize(self.proj, {"id": "001"}, WRITER, added))
+        self.assertEqual(self.sent, [])
+
+    def test_a_test_past_that_goes_back_once_with_its_size_then_is_collected_with_a_warning(self):
+        self.assertTrue(tr.oversize(self.proj, {"id": "001"}, WRITER, 91))
+        (_, _, name, text), = self.sent
+        self.assertEqual(name, WRITER)
+        for part in ("adds 91 lines", "budget is 60", "at most two holdouts", "styling"):
+            self.assertIn(part, text)
+        self.assertEqual(tr.sent_back(self.proj), {"001": 1})
+        self.assertFalse(tr.oversize(self.proj, {"id": "001"}, WRITER, 200))
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn("sent back once already", self.says.getvalue())
+
+    def test_no_budget_or_no_writer_to_reach_sends_nothing(self):
+        self.brief.unlink()
+        self.assertFalse(tr.oversize(self.proj, {"id": "001"}, WRITER, 500))
+        self.brief.write_text("Budget: at most 60 lines, holdouts included.\n")
+        self.live = []
+        self.assertFalse(tr.oversize(self.proj, {"id": "001"}, WRITER, 500))
+        self.assertIn("is not running", self.says.getvalue())
+        self.assertEqual(self.sent, [])
+
+    def test_lines_added_to_the_protected_files_are_counted_from_where_the_branch_left_the_project(self):
+        import subprocess
+        asked = []
+        def sh(argv, cwd=None, *a, **kw):
+            asked.append(argv)
+            return subprocess.CompletedProcess(argv, 0, "5\t0\ttests/t.py\n9\t2\ttests/u.py\n-\t-\tlogo.png\n", "")
+        with mock.patch.object(fc.fc_core, "sh", sh):
+            self.assertEqual(tr.added_lines(Path("/w"), "p-tests-001", ["tests/t.py", "tests/u.py"]), 14)  # a binary file counts none
+        self.assertEqual(asked, [["git", "diff", "--numstat", "HEAD...p-tests-001", "--", "tests/t.py", "tests/u.py"]])
+
+
 if __name__ == "__main__":
     unittest.main()

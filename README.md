@@ -24,7 +24,7 @@ you, the product owner
       │    └── ...
       ├── planner                started on a ticket with /compose:planner
       ├── designer               started on a ticket with /compose:designer
-      └── toolsmith              files compose bugs on GitHub; fixes them on its own branch only for the maintainer
+      └── toolsmith              only files compose bugs as GitHub issues; never fixes them
 ```
 
 The engineering manager takes your request and hands each feature to its own team lead, so the features of one epic move forward at the same time.

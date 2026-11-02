@@ -294,27 +294,19 @@ class FileCommand(unittest.TestCase):
 
 
 class OwnWorktree(unittest.TestCase):
-    """The toolsmith fixes on its own branch in its own worktree of the compose repo: never a main checkout, never the installed copy.
-    Git's answers are faked: where each checkout lives (fc_core.checkout), its branch, its changes, its commits past origin."""
-    URL, PR = "https://github.com/prodoxx/compose/issues/2", "https://github.com/prodoxx/compose/pull/5"
+    """The toolsmith only files issues: it edits nothing in the compose repo, whichever checkout or worktree of it, and files from its own
+    worktree, never a main checkout or the installed copy. Git's answers are faked: where each checkout lives (fc_core.checkout), its branch."""
+    URL = "https://github.com/prodoxx/compose/issues/2"
     AT = "2026-10-17 15:30:00"
-
-    def commit(self, repo, name):
-        self.subjects = [f"Fix {name}"]
 
     def where(self, path):
         here = Path(path).resolve()
         return next((self.sites[d] for d in (here, *here.parents) if d in self.sites), None)
 
     def sh(self, argv, cwd=None, *a, **kw):
-        """Git as `pr` and `shared_checkout` ask it, answered by subcommand: the branch, the changes, the fetch, the log, the push."""
-        sub, out, code = argv[1], "", 0
-        if sub == "branch": out = self.branches.get(self.where(cwd)[0], "") + "\n"
-        elif sub == "status": out = "M x\n" if self.dirty else ""
-        elif sub == "fetch": code = self.fetch_code
-        elif sub == "log": out = "\n".join(self.subjects)
-        elif sub == "push": self.pushed.append(argv[-1])
-        return subprocess.CompletedProcess(argv, code, out, "")
+        """Git as `shared_checkout` asks it: the branch of a checkout."""
+        out = self.branches.get(self.where(cwd)[0], "") + "\n" if argv[1] == "branch" else ""
+        return subprocess.CompletedProcess(argv, 0, out, "")
 
     def setUp(self):
         t = tempfile.TemporaryDirectory(); self.addCleanup(t.cleanup); self.root = root = Path(os.path.realpath(t.name))
@@ -326,35 +318,12 @@ class OwnWorktree(unittest.TestCase):
                       for d in (self.main, self.wt, self.other, self.src, self.side)}
         self.branches = {self.main: "main", self.wt: "toolsmith-fix", self.other: "master", self.src: "feature", self.side: "side"}
         self.branches = {self.sites[d][0]: b for d, b in self.branches.items()}
-        self.dirty, self.fetch_code, self.subjects, self.pushed = False, 0, [], []
         self.log = root / ".compose" / "tool-bugs.jsonl"; self.log.parent.mkdir()
         self.log.write_text(json.dumps({"at": self.AT, "project": "shop", "message": "boom", "issue": self.URL}) + "\n")
         for p in (mock.patch.dict(os.environ, {"HOME": str(self.home)}), mock.patch.object(fc.fc_crew, "CLI_REPO", self.main), mock.patch.object(fc.fc_core, "CLI_CHECKOUT", self.main),
                   mock.patch.object(fc.fc_crew, "TOOL_BUGS", self.log), mock.patch.object(fc.fc_config, "CONFIG_PATH", root / ".compose" / "config.json"),
-                  mock.patch.object(fc.fc_core, "checkout", self.where), mock.patch.object(fc.fc_core, "sh", self.sh),
-                  mock.patch.object(fc.fc_worktree, "default_branch", return_value="main")):
+                  mock.patch.object(fc.fc_core, "checkout", self.where), mock.patch.object(fc.fc_core, "sh", self.sh)):
             p.start(); self.addCleanup(p.stop)
-        self.gh_calls = []
-
-    def gh(self, state="maintainer", code=0):
-        """gh_status says `state`; `gh pr create` prints the PR URL (or fails with `code`)."""
-        real = subprocess.run
-        def run(cmd, *a, **kw):
-            if cmd and cmd[0] == "gh":
-                self.gh_calls.append(cmd)
-                return subprocess.CompletedProcess(cmd, code, self.PR + "\n" if not code else "", "boom" if code else "")
-            return real(cmd, *a, **kw)
-        for p in (mock.patch.object(fc.fc_toolbug, "gh_status", return_value=(state, None if state == "no-gh" else "alice9")),
-                  mock.patch("subprocess.run", run)):
-            p.start(); self.addCleanup(p.stop)
-
-    def pr(self, worktree=None, **kw):
-        a = SimpleNamespace(**{**dict(project="shop", action="pr", worktree=str(worktree or self.wt), entry=None, title=None, issue=None), **kw})
-        out = io.StringIO()
-        with mock.patch("sys.stdout", out):
-            try: fc.fc_toolbug.cmd_tool_bug(a); status = 0
-            except SystemExit as e: status = 1 if isinstance(e.code, str) else e.code; out.write(str(e.code))
-        return status, out.getvalue()
 
     def test_shared_checkout_names_the_installed_copy_main_checkouts_and_main_worktrees(self):
         sc = lambda p: fc.fc_worktree.shared_checkout(p, self.main)
@@ -369,21 +338,23 @@ class OwnWorktree(unittest.TestCase):
         for p in (self.src, self.src / "bin"):
             self.assertIn("the installed copy of compose", sc(p))
 
-    def test_the_edit_guard_lets_a_toolsmith_edit_only_its_own_worktree(self):
+    def test_the_edit_guard_denies_a_toolsmith_every_edit_in_the_compose_repo_and_lets_it_write_elsewhere(self):
         gd = fc.fc_hooks.guard_decision
         why = gd("Edit", str(self.main / "bin" / "new" / "x.py"), "toolsmith")  # the directory does not exist yet
-        self.assertIn("toolsmith", why); self.assertIn("own worktree", why)
+        self.assertIn("toolsmith", why); self.assertIn("only files an issue", why)
         for tool in fc.fc_hooks.GUARDED_TOOLS:
-            self.assertIsNone(gd(tool, str(self.wt / "x.py"), "toolsmith"), tool); self.assertIsNotNone(gd(tool, str(self.main / "x.py"), "toolsmith"), tool)
+            for where in (self.main, self.wt, self.other):  # a main checkout, its own worktree, a worktree on master
+                self.assertIsNotNone(gd(tool, str(where / "x.py"), "toolsmith"), f"{tool} {where.name}")
+            self.assertIsNone(gd(tool, str(self.side / "x.py"), "toolsmith"), tool)  # a repo that is not the compose repo
         self.assertIsNone(gd("Read", str(self.main / "a"), "toolsmith"))
-        self.assertIsNone(gd("Write", str(self.root / "elsewhere" / "brief.md"), "toolsmith"))
+        self.assertIsNone(gd("Write", str(self.root / "elsewhere" / "brief.md"), "toolsmith"))  # the issue body, outside the repo
         self.assertIsNone(gd("Edit", str(self.main / "a"), "crew"))  # other roles are not this guard's business
         self.assertIn("installed copy", gd("Write", str(self.src / "bin" / "compose.py"), "toolsmith"))
 
     def test_tool_bug_file_from_a_toolsmith_is_refused_in_a_shared_checkout_and_goes_through_in_its_own_worktree(self):
         (self.root / "b.md").write_text("# crew start: hangs\n## Summary\n\nIt hangs.\n")
         a = SimpleNamespace(project="shop", action="file", body=str(self.root / "b.md"), comment=None, new=False, approved=False, entry=None)
-        self.gh("no-gh")
+        mock.patch.object(fc.fc_toolbug, "gh_status", return_value=("no-gh", None)).start()
         mock.patch.object(fc.fc_toolbug, "environment", return_value="- OS: test").start(); self.addCleanup(mock.patch.stopall)
         for cwd, refused in ((self.main, True), (self.wt, False)):
             with self.subTest(cwd=cwd.name), mock.patch.dict(os.environ, {"COMPOSE_ROLE": "toolsmith"}), \
@@ -395,68 +366,6 @@ class OwnWorktree(unittest.TestCase):
                     fc.fc_toolbug.cmd_tool_bug(a); self.assertIn("saved", out.getvalue())
         with mock.patch.object(Path, "cwd", return_value=self.main), mock.patch("sys.stdout", io.StringIO()) as out:
             fc.fc_toolbug.cmd_tool_bug(a); self.assertIn("saved", out.getvalue())  # any other role files from anywhere
-
-    def test_pr_pushes_the_branch_opens_the_pr_fixing_the_issue_and_records_it(self):
-        self.commit(self.wt, "fix.py"); self.gh()
-        status, out = self.pr()
-        self.assertEqual((status, out.strip()), (0, self.PR))
-        self.assertEqual(self.pushed, ["toolsmith-fix"])
-        [call] = self.gh_calls
-        self.assertEqual(call[:3], ["gh", "pr", "create"]); self.assertEqual(call[call.index("--repo") + 1], "prodoxx/compose")
-        self.assertEqual(call[call.index("--head") + 1], "toolsmith-fix"); self.assertEqual(call[call.index("--base") + 1], "main")
-        self.assertEqual(call[call.index("--title") + 1], "Fix fix.py"); self.assertIn("Fixes #2", call[call.index("--body") + 1])
-        self.assertEqual(json.loads(self.log.read_text())["pr"], self.PR)
-        status, out = self.pr(title="Better title"); self.assertEqual(status, 0)
-        self.assertEqual(json.loads(self.log.read_text())["pr"], self.PR); self.assertEqual(self.gh_calls[-1][self.gh_calls[-1].index("--title") + 1], "Better title")
-
-    def test_pr_fixes_the_issue_it_is_given_not_the_first_one_the_entry_links(self):
-        self.commit(self.wt, "fix.py"); self.gh()
-        status, out = self.pr(issue=9); self.assertEqual(status, 0)
-        body = self.gh_calls[-1][self.gh_calls[-1].index("--body") + 1]
-        self.assertIn("Fixes #9", body); self.assertNotIn("Fixes #2", body)
-        self.assertEqual(json.loads(self.log.read_text())["issue"], self.URL)
-
-    def test_pr_fixes_the_numbered_entrys_issue_when_several_share_one_time(self):
-        self.commit(self.wt, "fix.py"); self.gh()
-        other = {"at": self.AT, "project": "shop", "message": "second", "issue": "https://github.com/prodoxx/compose/issues/7"}
-        self.log.write_text(self.log.read_text() + json.dumps(other) + "\n")
-        status, out = self.pr(entry=self.AT); self.assertEqual(status, 1); self.assertIn(f"{self.AT}#1", out); self.assertEqual(self.gh_calls, [])
-        status, out = self.pr(entry=f"{self.AT}#1"); self.assertEqual(status, 0)
-        self.assertIn("Fixes #2", self.gh_calls[-1][self.gh_calls[-1].index("--body") + 1])
-        first, second = map(json.loads, self.log.read_text().splitlines())
-        self.assertEqual((first.get("pr"), second.get("pr")), (self.PR, None))
-        status, out = self.pr(entry=f"{self.AT}#2"); self.assertEqual(status, 0)
-        self.assertIn("Fixes #7", self.gh_calls[-1][self.gh_calls[-1].index("--body") + 1])
-        self.assertEqual(json.loads(self.log.read_text().splitlines()[1])["pr"], self.PR)
-
-    def test_pr_records_on_another_projects_entry_a_second_off_and_refuses_several_before_pushing(self):
-        self.commit(self.wt, "fix.py"); self.gh()
-        other = {"at": "2026-10-17 15:30:02", "project": "blog", "message": "x"}
-        self.log.write_text(self.log.read_text() + json.dumps(other) + "\n")
-        status, out = self.pr(project="toolsmith", entry="2026-10-17 15:30:01")  # shop and blog are a second away each
-        self.assertEqual(status, 1); self.assertIn("shop at 2026-10-17 15:30:00", out); self.assertIn("blog at 2026-10-17 15:30:02", out)
-        self.assertEqual(self.gh_calls, []); self.assertEqual(self.pushed, [])
-        self.log.write_text(json.dumps({"at": "2026-10-17 15:30:00", "project": "evidence", "message": "m"}) + "\n")
-        status, out = self.pr(project="toolsmith", entry="2026-10-17 15:30:01"); self.assertEqual(status, 0)
-        self.assertEqual(out.splitlines()[0], self.PR); self.assertIn("evidence at 2026-10-17 15:30:00", out); self.assertNotIn("not recorded", out)
-        self.assertEqual(json.loads(self.log.read_text())["pr"], self.PR)
-
-    def test_pr_refuses_what_a_toolsmith_may_not_do_and_pushes_nothing(self):
-        self.commit(self.wt, "fix.py"); self.gh()
-        status, out = self.pr(self.main); self.assertEqual(status, 1); self.assertIn("a main checkout of the compose repo", out)
-        status, out = self.pr(self.root / "elsewhere"); self.assertEqual(status, 1); self.assertIn("no worktree of the compose repo", out)
-        self.dirty = True; status, out = self.pr(); self.assertEqual(status, 1); self.assertIn("uncommitted", out)
-        self.dirty, self.subjects = False, []; status, out = self.pr(); self.assertEqual(status, 1); self.assertIn("no commit past origin/main", out)
-        self.fetch_code = 1; self.commit(self.wt, "fix.py"); status, out = self.pr(); self.assertEqual(status, 1); self.assertIn("cannot reach", out)
-        self.assertEqual(self.pushed, []); self.assertEqual(self.gh_calls, [])
-
-    def test_pr_needs_a_maintainer_and_says_when_gh_cannot_open_it(self):
-        self.commit(self.wt, "fix.py")
-        for state in ("reporter", "no-gh"):
-            self.gh(state); status, out = self.pr()
-            self.assertEqual(status, 1); self.assertIn("tool-bug file", out); self.assertEqual(self.gh_calls, [])
-        self.gh(code=1); status, out = self.pr()
-        self.assertEqual(status, 1); self.assertIn("is pushed but gh could not open the PR", out); self.assertNotIn("pr", json.loads(self.log.read_text()))
 
 
 class Cli(unittest.TestCase):
@@ -480,7 +389,7 @@ class Cli(unittest.TestCase):
     def test_tool_bug_usage_errors(self):
         self.run_main("tool-bug", "file", "--project", "shop", "--body", "b.md")[0].assert_called_once()
         for args in (["file", "--body", "b.md", "--comment", "3", "--new"], ["file"], ["post", "--body", "b.md"], ["file", "--body", "b.md", "--comment", "x"],
-                     ["pr"], ["pr", "--body", "b.md"]):
+                     ["pr", "--worktree", "w"], ["pr", "--body", "b.md"]):
             with self.subTest(args), self.assertRaises(SystemExit) as cm:
                 self.run_main("tool-bug", "--project", "shop", *args)
             self.assertEqual(cm.exception.code, 2)

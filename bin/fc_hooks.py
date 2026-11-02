@@ -38,13 +38,16 @@ def restore_pane_env(cwd):
 
 def guard_decision(tool, path, role):
     """None to allow, else why not. The team lead writes Linear, the CLI's JSON, and the layers' PR text; code, tests, and docs
-    are teammate work. The toolsmith edits in its own worktree of the compose repo, never in a shared checkout of it."""
+    are teammate work. The toolsmith edits nothing in the compose repo, in any checkout or worktree of it: it files issues, it does not fix."""
     if role not in (*GUARDED_ROLES, "toolsmith") or tool not in GUARDED_TOOLS or not path:
         return None
     p = Path(path).expanduser().resolve()
     d = next((x for x in [p.parent, *p.parents] if x.exists()), Path("/"))
     if role == "toolsmith":
-        return f"A toolsmith never edits {why}: fix on a branch in your own worktree of the compose repo." if (why := fc_worktree.shared_checkout(d, fc_core.CLI_CHECKOUT)) else None
+        theirs = fc_worktree.common_dir(d)
+        if (why := fc_worktree.shared_checkout(d, fc_core.CLI_CHECKOUT)) or (theirs is not None and theirs == fc_worktree.common_dir(fc_core.CLI_CHECKOUT)):
+            return f"A toolsmith never edits {why or 'the compose repo'}: it only files an issue, and a later job fixes it. Keep scratch files (the issue body) outside the compose repo."
+        return None
     if CLI_FILE.search(str(p)):
         return None
     if not fc_core.checkout(d):

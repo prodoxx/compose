@@ -51,7 +51,8 @@ The team lead starts the planner once you approve the design, or you start it wi
 You talk to the engineering manager, and you can also type into any teammate's tab directly.
 Teammates report up with `compose report` and pick a state from `working`, `needs-user`, `blocked`, `done`, `tool-bug`, and `contradiction`.
 `compose toolsmith` only prints the toolsmith's brief.
-The toolsmith it briefs files the tool-bug as an issue on prodoxx/compose with `compose tool-bug file`, which needs gh logged in to post, and on the maintainer's machine opens its fix from its own worktree as a PR with `compose tool-bug pr`; it never commits on main or in the installed copy.
+The toolsmith it briefs files the tool-bug as an issue on prodoxx/compose with `compose tool-bug file`, which needs gh logged in to post.
+It never fixes: it edits and commits nothing in the compose repo, so it never interrupts the project it was started from.
 
 A `contradiction` report always wakes the team lead as a teammate event.
 It also screens the feature's decisions with Jev, which adds a `reflect=` event when it flags a decision line.
