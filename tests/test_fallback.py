@@ -353,7 +353,7 @@ class FixScope(unittest.TestCase):
         self.assertEqual((code, res["rejected_fixes"], fix_tasks(res)), (1, [{"round": 1, "files": ["b.go"]}], ["absent"]))
         code, _, res = self.verify({}, tasks=tasks)
         self.assertEqual((code, fix_tasks(res)), (1, ["absent"]))  # the fixer changed nothing
-        self.assertEqual(sorted(res), ["cost", "passed", "rejected_fixes", "rounds", "seconds"])  # nothing else in verify.json changed
+        self.assertEqual(sorted(res), ["cost", "head", "passed", "rejected_fixes", "rounds", "seconds"])  # nothing else in verify.json changed
 
     def test_fix_tests_cover_every_changed_file_or_fall_back_to_the_full_checks(self):
         tasks = [{"id": "001", "files": ["a.go"], "protected": ["a_test.go"], "test": "ta"},

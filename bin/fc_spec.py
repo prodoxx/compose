@@ -1,6 +1,6 @@
 import ast, json, re, sys
 from pathlib import Path
-import fc_core, fc_routerec, fc_tasks, fc_worktree, fc_change, fc_status
+import fc_core, fc_routerec, fc_tasks, fc_linear, fc_worktree, fc_change, fc_status
 
 
 def ordered(tasks, a, b):
@@ -170,6 +170,7 @@ def missing_after_text(found):
 def cmd_tasks(a):
     """The task list as the user should review it before dispatch: id, title, files it owns, what it builds on, its test."""
     proj = fc_core.project_dir(a); repo = Path(a.repo).resolve()
+    fc_linear.refresh_tasks(proj, say_stale=False)  # an edit made on Linear is what the list shows; a key-less session keeps its sync
     tasks = fc_tasks.load_tasks(proj, required=True)
     if not tasks:
         sys.exit("no tasks on Linear under this feature carry a compose block")
@@ -357,6 +358,7 @@ def cmd_spec_check(a):
         checks, base = [], "HEAD"
     else:
         proj = fc_core.project_dir(a)
+        fc_linear.refresh_tasks(proj, say_stale=False)
         fc_tasks.load_tasks(proj, required=True)
         cache = fc_tasks.linear_cache(proj)
         d = {"feature": cache.get("feature") or {},

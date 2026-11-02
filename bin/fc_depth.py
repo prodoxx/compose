@@ -1,13 +1,34 @@
-"""Verify at the stack's depth: its deepest route, the verify settings for it, and the stages it skips on the ledger."""
+"""Verify at the stack's depth: the deepest route among the tasks the last passed verify did not cover, the verify settings for it,
+and the stages it skips on the ledger."""
 
 
-def stack_depth(proj, tasks):
-    """(depth, task id) of the stack's deepest code task; ("STANDARD", None) with none."""
+def verified_tasks(proj, repo, tasks):
+    """The ids of the code tasks whose branch is already in the head of the last passed verify (`results/verify.json`), so their depth
+    was paid then; empty without that file, its `head`, or a pass."""
+    import json
+    import fc_core
+    import fc_tasks
+    import fc_worktree
+    f = proj / "results" / "verify.json"
+    try:
+        last = json.loads(f.read_text())
+    except (OSError, ValueError):
+        return set()
+    head = last.get("head")
+    if not last.get("passed") or not head:
+        return set()
+    prefix = fc_worktree.task_prefix(repo, proj)
+    return {m["id"] for m in fc_tasks.runnable(tasks)
+            if fc_core.sh(["git", "merge-base", "--is-ancestor", prefix + m["id"], head], repo, check=False).returncode == 0}
+
+
+def stack_depth(proj, tasks, skip=()):
+    """(depth, task id) of the stack's deepest code task outside `skip`; ("STANDARD", None) with none."""
     import fc_routerec
     import fc_tasks
     issues = fc_tasks.linear_cache(proj).get("issues") or {}
     best, best_id = "STANDARD", None
-    for i, m in enumerate(fc_tasks.runnable(tasks)):
+    for i, m in enumerate(t for t in fc_tasks.runnable(tasks) if t["id"] not in skip):
         route = fc_routerec.parse_route((issues.get(m.get("linear")) or {}).get("description") or "")
         depth = route.get("depth") if route else None
         if depth not in fc_tasks.DEPTHS:
@@ -17,11 +38,11 @@ def stack_depth(proj, tasks):
     return best, best_id
 
 
-def depth_config(cfg, proj, tasks):
-    """(new cfg, depth, task id): the verify cfg at the stack's depth, `cfg` left unchanged."""
+def depth_config(cfg, proj, tasks, skip=()):
+    """(new cfg, depth, task id): the verify cfg at the stack's depth, the tasks in `skip` not counted, `cfg` left unchanged."""
     import fc_routerec
     import fc_tasks
-    depth, task_id = stack_depth(proj, tasks)
+    depth, task_id = stack_depth(proj, tasks, skip)
     issues = fc_tasks.linear_cache(proj).get("issues") or {}
     code = fc_tasks.code_tasks(tasks)
     reqs = []

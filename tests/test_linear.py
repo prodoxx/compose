@@ -154,6 +154,18 @@ class RefreshBeforeRun(unittest.TestCase):
         self.assertIn("Old goal.", fc.fc_tasks.load_tasks(self.proj)[0]["body"])
         self.assertIn("no Linear key: run uses the tasks synced at", out)
 
+    def test_tasks_spec_check_and_verify_refresh_too_and_say_nothing_about_a_missing_key(self):
+        with mock.patch.object(fc.fc_config, "LINEAR_KEY", None), mock.patch("sys.stdout", io.StringIO()) as out:
+            fc.fc_linear.refresh_tasks(self.proj, say_stale=False)
+        self.assertEqual(out.getvalue(), "")
+        for mod, cmd, args in ((fc.fc_spec, "cmd_tasks", SimpleNamespace(repo=str(self.proj), project="feat")), (fc.fc_spec, "cmd_spec_check", SimpleNamespace(repo=str(self.proj), project="feat", stdin=False)),
+                               (fc.fc_verify, "cmd_verify", SimpleNamespace(repo=str(self.proj), project="feat", skip_review=False, skip_e2e=True, fix=0, review_only=False))):
+            with self.subTest(cmd), mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), mock.patch.object(fc.fc_linear, "refresh_tasks", side_effect=SystemExit("refreshed")) as refresh, \
+                    mock.patch.object(fc.fc_update, "refuse_while_building"), mock.patch.object(fc.fc_init, "start_checks"), mock.patch.object(fc.fc_proc, "keep_awake"), self.assertRaises(SystemExit) as e:
+                getattr(mod, cmd)(args)
+            self.assertEqual(str(e.exception), "refreshed")
+            refresh.assert_called_once_with(self.proj, say_stale=False)
+
     def test_a_project_with_no_feature_keeps_its_stored_tasks_and_reads_nothing(self):
         (self.proj / "linear.json").write_text("{}")
         read, out = self.refresh()

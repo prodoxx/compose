@@ -50,6 +50,42 @@ class StackDepth(unittest.TestCase):
         self.assertEqual(fc_depth.stack_depth(proj, []), ("STANDARD", None))
         self.assertEqual(fc_depth.stack_depth(proj, [dict(metas[1], kind="hand")]), ("STANDARD", None))  # a hand task has no route to count
 
+    def test_a_task_in_skip_does_not_count(self):
+        proj, metas = self.stack(("061", "## Route\n\n* depth: DEEP\n", "code"), ("062", "## Route\n\n* depth: FAST\n", "code"))
+        self.assertEqual(fc_depth.stack_depth(proj, metas, skip={"061"}), ("FAST", "062"))
+        self.assertEqual(fc_depth.stack_depth(proj, metas, skip={"061", "062"}), ("STANDARD", None))
+        self.assertEqual(fc_depth.depth_config({"checks": []}, proj, metas, {"061"})[1:], ("FAST", "062"))
+
+
+class VerifiedTasks(unittest.TestCase):
+    """The tasks whose branch the last passed verify's head already holds are not counted toward the depth."""
+    def setUp(self):
+        self.repo = Path(tempfile.mkdtemp()).resolve(); self.proj = self.repo / ".compose" / "p"; (self.proj / "results").mkdir(parents=True)
+        self.metas = [{"id": i, "kind": "code"} for i in ("061", "062")] + [{"id": "063", "kind": "design"}]
+        self.calls = []
+        def sh(cmd, cwd, check=True):
+            self.calls.append((cmd, cwd))
+            return subprocess.CompletedProcess(cmd, 0 if cmd[-2] == "compose/p-061" else 1, "", "")
+        mock.patch.object(fc.fc_core, "sh", side_effect=sh).start(); mock.patch.object(fc.fc_worktree, "task_prefix", return_value="compose/p-").start(); self.addCleanup(mock.patch.stopall)
+
+    def last(self, passed=True, head="h" * 40):
+        (self.proj / "results" / "verify.json").write_text(json.dumps({"passed": passed, **({"head": head} if head else {})}))
+
+    def test_the_tasks_whose_branch_is_in_the_last_passed_head(self):
+        self.last()
+        self.assertEqual(fc_depth.verified_tasks(self.proj, self.repo, self.metas), {"061"})
+        self.assertEqual(self.calls, [(["git", "merge-base", "--is-ancestor", f"compose/p-{i}", "h" * 40], self.repo) for i in ("061", "062")])
+
+    def test_no_file_no_head_or_a_failed_verify_counts_nothing_and_asks_git_nothing(self):
+        self.assertEqual(fc_depth.verified_tasks(self.proj, self.repo, self.metas), set())
+        self.last(passed=False)
+        self.assertEqual(fc_depth.verified_tasks(self.proj, self.repo, self.metas), set())
+        self.last(head=None)
+        self.assertEqual(fc_depth.verified_tasks(self.proj, self.repo, self.metas), set())
+        (self.proj / "results" / "verify.json").write_text("{")
+        self.assertEqual(fc_depth.verified_tasks(self.proj, self.repo, self.metas), set())
+        self.assertEqual(self.calls, [])
+
 
 class DepthConfig(unittest.TestCase):
     """The verify settings at the stack's depth."""
@@ -148,6 +184,12 @@ class VerifyDepth(unittest.TestCase):
         said, _, rounds, _, _ = self.verify(("061", "FAST", "code"), ("062", "FAST", "code"))
         self.assertIn("verify depth FAST (deepest task 061)", said)
         self.assertEqual((rounds[0]["checks"], rounds[0]["review"], rounds[0]["depth"]), (["c1", "t061", "t062"], False, "FAST"))
+
+    def test_a_task_the_last_passed_verify_covered_does_not_set_the_depth_and_is_said(self):
+        with mock.patch.object(fc_depth, "verified_tasks", return_value={"061"}):
+            said, _, rounds, _, _ = self.verify(("061", "DEEP", "code"), ("062", "FAST", "code"))
+        self.assertIn("verify depth FAST (deepest task 062); 1 task(s) the last passed verify covered not counted", said)
+        self.assertEqual((rounds[0]["review"], rounds[0]["depth"]), (False, "FAST"))
 
     def test_record_depth_runs_once_before_the_first_round_with_the_root_and_both_cfgs(self):
         _, rec, rounds, repo, first = self.verify(("061", "FAST", "code"))

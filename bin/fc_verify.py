@@ -353,14 +353,14 @@ def cmd_verify(a):
     if review_only:
         a.fix = 0  # it only reports: the fix loop belongs to the full verify
     t0 = time.time()
-    # Review, acceptance, and a fixer read the plan, the criteria, and the protected files from the Linear sync; checks and
-    # e2e read only verify.json, so groundwork proves them before planning with --skip-review --fix 0.
+    # Review, acceptance, and a fixer read the plan, the criteria, and the protected files from Linear, read again here; checks and e2e read only verify.json, so groundwork proves them before planning with --skip-review --fix 0.
+    fc_linear.refresh_tasks(proj, say_stale=False)
     tasks = fc_tasks.load_tasks(proj, required=not a.skip_review or a.fix > 0,
                                 hint=f"; checks and e2e alone run without one: `compose verify --project {proj.name} --skip-review --fix 0`")
     import fc_depth
     base_cfg = cfg
-    cfg, depth, deep = fc_depth.depth_config(cfg, proj, tasks)
-    fc_core.say(f"verify depth {depth}" + (f" (deepest task {deep})" if deep and depth != "STANDARD" else ""))
+    cfg, depth, deep = fc_depth.depth_config(cfg, proj, tasks, covered := fc_depth.verified_tasks(proj, repo, tasks))
+    fc_core.say(f"verify depth {depth}" + (f" (deepest task {deep})" if deep and depth != "STANDARD" else "") + (f"; {len(covered)} task(s) the last passed verify covered not counted" if covered else ""))
     left_out = (["tasks"] if not tasks else []) + (["review"] if a.skip_review else []) + (["e2e"] if a.skip_e2e and not review_only else []) + (["checks", "e2e"] if review_only else [])
     fc_core.say(f"verify start project={proj.name} fix_rounds={a.fix}")
     rounds = []
@@ -565,7 +565,8 @@ def verify_rounds(repo, proj, cfg, a, rounds, t0, left_out=()):
                 break
         else:
             break
-    final = {"rounds": rounds, "passed": ok, "rejected_fixes": rejected, "seconds": round(time.time() - t0, 1), "cost": fc_core.LEDGER.snapshot()}
+    final = {"rounds": rounds, "passed": ok, "rejected_fixes": rejected, "seconds": round(time.time() - t0, 1), "cost": fc_core.LEDGER.snapshot(),
+             "head": (sha := fc_core.sh(["git", "rev-parse", "HEAD"], repo, check=False).stdout.strip())}
     if left_out:
         final["left_out"] = left_out
     (proj / "results").mkdir(exist_ok=True)
@@ -575,7 +576,6 @@ def verify_rounds(repo, proj, cfg, a, rounds, t0, left_out=()):
     if results.name == "verify.json":
         path = proj / "linear.json"
         feature = json.loads(path.read_text()).get("feature") if path.exists() else None
-        sha = fc_core.sh(["git", "rev-parse", "HEAD"], repo, check=False).stdout.strip()
         fc_ledger.record(feature, fc_costevent.verify_events(proj, fc_tasks.load_tasks(proj), ok, final["cost"]["total"], "", sha))
     for issue in list(dict.fromkeys(i for i, _ in fc_ledger.UNSAVED)):
         fc_ledger.add_row(issue, [])
