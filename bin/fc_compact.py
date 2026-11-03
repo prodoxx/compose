@@ -29,9 +29,11 @@ QUESTIONS = {
 
 # floors are [usage, floor] points: strict while the window is mostly empty, loose when compaction is imminent anyway.
 # coordinationWeight is how much a finished coordinating unit is discounted against a finished hands-on one.
+# start is the usage below which the judge is not asked at all: every engineering manager turn ends handed to the product owner, which
+# the judge counts as finished, so without it the manager compacted at the first quiet moment past the minimum, mid-conversation.
 PROFILES = {
-    "manager": {"version": 1, "coordinationWeight": 0.0, "floors": [[0.1, 0.9], [0.9, 0.5]]},
-    "lead": {"version": 1, "coordinationWeight": 0.5, "floors": [[0.1, 0.9], [0.9, 0.5]]},
+    "manager": {"version": 1, "coordinationWeight": 0.0, "floors": [[0.1, 0.9], [0.9, 0.5]], "start": 0.65},
+    "lead": {"version": 1, "coordinationWeight": 0.5, "floors": [[0.1, 0.9], [0.9, 0.5]], "start": 0.0},
 }
 
 
@@ -217,6 +219,8 @@ def consider(pane, role, transcript, now=None, rows=None):
             return done("off")
         if tokens is None or tokens < cfg["minimum"]:
             return done("below-minimum")
+        if tokens / cfg["budget"] < PROFILES.get(role, {}).get("start", 0):
+            return done("below-start")
         state = fc_compactlog.pane_state(pane)
         if reason := cooldown_reason(state, tokens, exchanges, now):
             return done("cooldown", reason)

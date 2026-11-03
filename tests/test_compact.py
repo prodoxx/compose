@@ -472,11 +472,19 @@ class Consider(unittest.TestCase):
         self.assertEqual((v["decision"], j.call_count), ("below-minimum", 0))
 
     def test_a_qualifying_verdict_for_the_manager_ignores_hands_on(self):
-        v, j = self.consider(90000)
+        v, j = self.consider(100000)
         self.assertEqual(v["decision"], "qualifies")
-        self.assertEqual((v["score"], v["floor"], v["usage"]), (0.9, 0.65, 0.6))
+        self.assertEqual((v["score"], v["floor"], v["usage"]), (0.9, 0.617, 0.667))
         self.assertEqual(j.call_args.kwargs["timeout"], 2)
         self.assertEqual(fc.fc_compactlog.read()[-1]["decision"], "qualifies")
+
+    def test_the_manager_is_not_judged_below_its_start_but_the_lead_is(self):
+        v, j = self.consider(40000, role="lead")
+        self.assertEqual((v["decision"], j.call_count), ("below-floor", 1))
+        v, j = self.consider(97499)  # under 65% of the budget: every manager turn ends handed to the product owner and would count as finished
+        self.assertEqual((v["decision"], j.call_count), ("below-start", 0))
+        v, j = self.consider(97500, now=2000.0)
+        self.assertEqual((v["decision"], j.call_count), ("qualifies", 1))
 
     def test_the_lead_profile_weighs_hands_on(self):
         v, _ = self.consider(90000, role="lead")
@@ -511,26 +519,26 @@ class Consider(unittest.TestCase):
         self.assertEqual(fc.fc_compact._request_bytes(state), len(sent[0]))
 
     def test_an_error_backs_off_and_a_second_turn_waits(self):
-        v, _ = self.consider(90000, ask=mock.Mock(side_effect=RuntimeError("typesafe: HTTP 500 boom")))
+        v, _ = self.consider(100000, ask=mock.Mock(side_effect=RuntimeError("typesafe: HTTP 500 boom")))
         self.assertEqual((v["decision"], v["reason"]), ("error", "server"))
         self.assertEqual(fc.fc_compactlog.pane_state("w1:p2")["failures"], 1)
-        v, j = self.consider(96000, now=1003.0)
+        v, j = self.consider(106000, now=1003.0)
         self.assertEqual((v["decision"], v["reason"], j.call_count), ("cooldown", "TypeSafe backoff", 0))
 
     def test_an_oversized_request_is_never_sent(self):
         ROWS.clear()
         rec("user", message={"role": "user", "content": "x" * 40000}, origin={"kind": "human"})
         with mock.patch.object(fc.fc_compact, "MAX_REQUEST_BYTES", 2000):
-            v, j = self.consider(90000)
+            v, j = self.consider(100000)
         self.assertEqual((v["decision"], v["reason"], j.call_count), ("error", "input", 0))
 
     def test_a_second_ask_within_two_minutes_waits(self):
-        self.consider(90000)
-        v, j = self.consider(96000, now=1060.0)
+        self.consider(100000)
+        v, j = self.consider(106000, now=1060.0)
         self.assertEqual((v["decision"], v["reason"], j.call_count), ("cooldown", "Asked recently", 0))
 
     def test_failures_are_classified_and_a_success_clears_the_backoff(self):
-        v, _ = self.consider(90000, ask=mock.Mock(side_effect=fc.fc_models.PaymentRequired("typesafe", "no credit")))
+        v, _ = self.consider(100000, ask=mock.Mock(side_effect=fc.fc_models.PaymentRequired("typesafe", "no credit")))
         self.assertEqual(v["reason"], "billing")
         v, _ = self.consider(120000, now=2000.0, ask=mock.Mock(return_value={"nope": 1}))
         self.assertEqual((v["decision"], v["reason"]), ("error", "response"))
@@ -542,11 +550,11 @@ class Consider(unittest.TestCase):
     def test_a_missing_key_or_a_bad_config_is_a_configuration_error(self):
         def broken(**k): raise SystemExit("bad config")
         with mock.patch.object(fc.fc_config, "apply_config", broken):
-            v, j = self.consider(90000)
+            v, j = self.consider(100000)
         self.assertEqual((v["decision"], v["reason"], j.call_count), ("error", "configuration", 0))
         def nokey(env, what): raise RuntimeError("needs a key")
         with mock.patch.object(fc.fc_config, "typesafe_key", nokey):
-            v, j = self.consider(90000, now=5000.0)
+            v, j = self.consider(100000, now=5000.0)
         self.assertEqual((v["decision"], v["reason"], j.call_count), ("error", "configuration", 0))
 
     def test_the_judge_sees_only_the_context_since_the_last_compaction(self):
@@ -555,22 +563,22 @@ class Consider(unittest.TestCase):
         rec("system", subtype="compact_boundary", compactMetadata={"trigger": "manual", "preTokens": 100000, "postTokens": 5000})
         rec("user", message={"role": "user", "content": "new topic"}, origin={"kind": "human"})
         seen = []
-        v, _ = self.consider(90000, ask=lambda env, cfg, state, *a, **k: seen.append(json.dumps(state)) or self.reply)
+        v, _ = self.consider(100000, ask=lambda env, cfg, state, *a, **k: seen.append(json.dumps(state)) or self.reply)
         self.assertEqual(v["decision"], "qualifies")
         self.assertIn("new topic", seen[0])
         self.assertNotIn("zebras", seen[0])
 
     def test_rows_the_hook_already_read_are_not_read_again(self):
-        path = self.turn(90000)
+        path = self.turn(100000)
         rows = fc.fc_transcript.records(path)
         with mock.patch.object(fc.fc_transcript, "records", side_effect=AssertionError("read again")), \
                 mock.patch.object(fc.fc_models, "jev_ask", return_value=self.reply):
             v = fc.fc_compact.consider("w1:p2", "manager", path, now=1000.0, rows=rows)
-        self.assertEqual((v["decision"], v["tokens"]), ("qualifies", 90000))
+        self.assertEqual((v["decision"], v["tokens"]), ("qualifies", 100000))
 
     def test_the_judged_switch_off_asks_nothing(self):
         fc.fc_config.COMPACT["judged"] = False
-        v, j = self.consider(90000)
+        v, j = self.consider(100000)
         self.assertEqual((v["decision"], j.call_count), ("off", 0))
 
     def test_a_bad_config_still_lets_the_ceiling_stand_but_blocks_the_ask(self):
@@ -578,13 +586,13 @@ class Consider(unittest.TestCase):
         with mock.patch.object(fc.fc_config, "apply_config", broken):
             v, j = self.consider(150000)
             self.assertEqual((v["decision"], j.call_count), ("ceiling", 0))
-            v, j = self.consider(90000, now=2000.0)
+            v, j = self.consider(100000, now=2000.0)
         self.assertEqual((v["decision"], v["reason"], j.call_count), ("error", "configuration", 0))
 
     def test_a_broken_compact_section_is_a_configuration_error_not_a_crash(self):
         broken = mock.Mock(side_effect=SystemExit(2))
         with mock.patch.object(fc.fc_config, "apply_config", broken), mock.patch.object(fc.fc_config, "COMPACT", {**fc.fc_config.COMPACT_DEFAULTS, "budget": 0}):
-            v, j = self.consider(90000)
+            v, j = self.consider(100000)
         self.assertEqual((v["decision"], v["reason"], j.call_count), ("error", "configuration", 0))
         self.assertEqual(fc.fc_compactlog.pane_state("w1:p2")["failures"], 1)
 
@@ -601,7 +609,7 @@ class Consider(unittest.TestCase):
         rec("user", message={"role": "user", "content": f"deploy with key {secret} please"}, origin={"kind": "human"})
         seen = []
         with mock.patch.object(fc.fc_core, "SECRET_VALUES", {secret}):
-            v, _ = self.consider(90000, ask=lambda env, cfg, state, *a, **k: seen.append(json.dumps(state)) or self.reply)
+            v, _ = self.consider(100000, ask=lambda env, cfg, state, *a, **k: seen.append(json.dumps(state)) or self.reply)
         self.assertEqual(v["decision"], "qualifies")
         self.assertIn("deploy with key", seen[0])
         self.assertNotIn(secret, seen[0])

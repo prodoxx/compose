@@ -80,6 +80,42 @@ class SkillCheck(unittest.TestCase):
         self.assertEqual(self.prompt("s2"), "")  # s2 first saw v2
         self.assertTrue(self.prompt("s1"))
 
+    def transcript(self, *rows):
+        path = Path(tempfile.mkdtemp()) / "t.jsonl"
+        path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        return str(path)
+
+    def owner(self, text, at):
+        return {"type": "user", "timestamp": at, "uuid": text, "message": {"role": "user", "content": text}, "origin": {"kind": "human"}}
+
+    def back(self, transcript, text="back", role=None):
+        self.prompt(text="/compose", role=role)  # enrolled: a session without a role that loaded the skill is the one the product owner prompts
+        return self.hook({"hook_event_name": "UserPromptSubmit", "session_id": "s1", "prompt": text, "transcript_path": transcript}, role)
+
+    def test_the_owners_prompt_after_a_while_away_opens_with_what_happened(self):
+        note = self.context(self.back(self.transcript(self.owner("earlier", "2026-01-01T10:00:00.000Z"), self.owner("back", "2026-01-01T13:30:00.000Z"))))
+        self.assertIn("The product owner's previous prompt was ", note)
+        self.assertIn("Open with what happened while they were away and what waits on them", note)
+        self.assertNotIn("compacted", note)  # the prompt being submitted, already in the transcript, is not the previous one
+
+    def test_a_compaction_since_their_last_prompt_is_said_even_when_it_was_a_moment_ago(self):
+        recent = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() - 60))
+        self.assertEqual(self.back(self.transcript(self.owner("earlier", recent))), "")
+        boundary = {"type": "system", "subtype": "compact_boundary", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
+                    "compactMetadata": {"trigger": "manual", "preTokens": 90000, "postTokens": 30000}}
+        note = self.context(self.back(self.transcript(self.owner("earlier", recent), boundary)))
+        self.assertIn("compacted 1 time(s) since", note)
+
+    def test_a_prompt_compose_typed_into_the_pane_is_not_the_owners(self):
+        recent = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() - 60))
+        with mock.patch.dict(os.environ, {"HERDR_PANE_ID": "w1:p9"}):
+            fc.fc_compactlog.typed("w1:p9", "compose: bring your handoff up to date")
+            note = self.context(self.back(self.transcript(self.owner("earlier", "2026-01-01T10:00:00.000Z"), self.owner("compose: bring your handoff up to date", recent))))
+        self.assertIn("previous prompt was ", note)
+
+    def test_a_teammate_with_a_role_never_gets_the_return_note(self):
+        self.assertEqual(self.back(self.transcript(self.owner("earlier", "2026-01-01T10:00:00.000Z")), role="orchestrator"), "")
+
     def test_a_session_without_a_role_that_never_loaded_the_skill_is_left_alone(self):
         self.assertEqual(self.prompt(role=None), "")
         (self.skill / "SKILL.md").write_text("v2\n")

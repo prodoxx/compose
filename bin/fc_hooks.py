@@ -1,6 +1,7 @@
-import hashlib, json, os, re, shlex, sys
+import hashlib, json, os, re, shlex, sys, time
+from datetime import datetime
 from pathlib import Path
-import fc_core, fc_config, fc_harness, fc_worktree
+import fc_core, fc_config, fc_harness, fc_transcript, fc_compactlog, fc_worktree
 
 # ---------- Claude Code hooks: `guard` keeps the planner out of code, `skillcheck` names changed skill files ----------
 
@@ -204,9 +205,44 @@ def skill_notice(session):
         return None
     return f"compose's skill changed since you read it: {', '.join(changed)}. Re-read only those files before acting; nothing else changed."
 
+AWAY_SECONDS = 1800  # the product owner's prompt after this long a silence, or after a compaction, opens with what happened meanwhile
+
+def _stamp(at):
+    try:
+        return datetime.fromisoformat(at.replace("Z", "+00:00")).timestamp()
+    except (AttributeError, ValueError):
+        return None
+
+def return_note(ev, now=None):
+    """For a session the product owner prompts (one without a role): the note that makes their first prompt after AWAY_SECONDS of silence,
+    or after a compaction, open with what happened meanwhile and what waits on them; None otherwise, and on any failure. The silence is
+    measured from their previous prompt in the transcript, not counting what compose typed into the pane (the handoff and compact prompts)."""
+    try:
+        if os.environ.get("COMPOSE_ROLE") or not ev.get("transcript_path"):
+            return None
+        rows = fc_transcript.records(Path(ev["transcript_path"]))
+        prompts = [p for p in fc_transcript.owner_prompts(rows) if _stamp(p["at"]) is not None]
+        if prompts and prompts[-1]["text"] == ev.get("prompt", ""):
+            prompts.pop()  # the prompt being submitted, when the transcript already holds it
+        pane = fc_core.session_id()
+        last = next((p for p in reversed(prompts) if not (pane and fc_compactlog.was_typed(pane, p["text"], None))), None)
+        if last is None:
+            return None
+        gap = (time.time() if now is None else now) - _stamp(last["at"])
+        compacted = sum(1 for c in fc_transcript.compactions(rows) if isinstance(c["at"], str) and c["at"] > last["at"])
+        if gap < AWAY_SECONDS and not compacted:
+            return None
+        ago = f"{int(gap // 3600)}h {int(gap % 3600 // 60)}m" if gap >= 3600 else f"{int(gap // 60)}m"
+        return (f"The product owner's previous prompt was {ago} ago" + (f", and your context compacted {compacted} time(s) since" if compacted else "")
+                + ". Open with what happened while they were away and what waits on them, in a few lines from your handoff, `compose status` and "
+                "`compose decisions`; then answer this prompt.")
+    except Exception:
+        return None
+
 def cmd_skillcheck(a):
     """Claude Code UserPromptSubmit and PostToolUse(Skill) hook: a session with a role, or one that loaded the compose skill
-    (the Skill tool, or a typed /compose command), hears once when the skill's files changed. Any error prints nothing."""
+    (the Skill tool, or a typed /compose command), hears once when the skill's files changed, and a session the product owner prompts
+    hears when that prompt comes after a while away (return_note). Any error prints nothing."""
     try:
         ev = json.load(sys.stdin)
         session = re.sub(r"[^\w-]", "", ev.get("session_id") or "")
@@ -217,7 +253,7 @@ def cmd_skillcheck(a):
         if re.match(rf"/compose(:|\s|$)|(?:{sigils or '(?!)'})compose(-|\s|$)", loads):
             skill_notice(session)  # the version it loads now is the one it read
         elif os.environ.get("COMPOSE_ROLE") or (SKILL_SEEN / f"{session}.json").exists():
-            if ev.get("hook_event_name") == "UserPromptSubmit" and (note := skill_notice(session)):
-                print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": note}}))
+            if ev.get("hook_event_name") == "UserPromptSubmit" and (notes := [n for n in (skill_notice(session), return_note(ev)) if n]):
+                print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "\n".join(notes)}}))
     except Exception:
         pass

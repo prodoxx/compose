@@ -39,6 +39,7 @@ An explicit `zstyle ':omz:update' mode prompt` in `~/.zshenv`, `~/.zprofile`, `~
 The engineering manager is the session you started, so compose sets neither its model nor a compaction window.
 It relays and supervises while planning goes to the planner on the strongest model, so Sonnet serves it well.
 Leave its window at the model's default and set no `CLAUDE_CODE_AUTO_COMPACT_WINDOW` of your own, because compose judges when the engineering manager's context is at a finished moment and compacts it then, after asking it to write its handoff.
+It is judged only past 65% of the budget: every manager turn ends handed to the product owner, which counts as finished, so judging it earlier compacted the conversation several times a day.
 compose forces one at the `compact.ceiling` tokens in `~/.compose/config.json` (150k by default), and `compose compactions` shows the week's compactions by trigger.
 
 The engineering manager and the team lead write no code.

@@ -564,7 +564,8 @@ def manager_reentry():
     return [f"Your context was just compacted; you are the engineering manager for {names} in {main}.", read,
             *(f"Run `compose status --repo {p.parent.parent} --project {p.name}` and `compose watch --repo {p.parent.parent} --project {p.name} --now`" for p in projects),
             "Never start a compose watch or compose factory watch yourself: the Stop hook parks one after each of your turns and its event wakes you.",
-            "Re-read the product owner's open questions in the handoff before acting; say where you are in one line only when they ask."]
+            "Re-read the product owner's open questions in the handoff before acting; say where you are only when they ask, or when their "
+            "prompt comes after a while away: the prompt hook says so, and you open with what happened and what waits on them."]
 
 def cmd_reenter(a):
     """Claude Code SessionStart hook (matcher compact): after a compaction the session continues from its brief and handoff, not from scratch.
