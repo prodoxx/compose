@@ -1,10 +1,31 @@
 import hashlib, json, os, threading
 from concurrent.futures import ThreadPoolExecutor
-import fc_core, fc_config, fc_tasks, fc_evidence, fc_ledger, fc_models
+import fc_core, fc_config, fc_tasks, fc_evidence, fc_ledger, fc_models, fc_worktree
 
 
 # TypeSafe answers HTTP 400 max_tokens_exceeded for a state of about 35k characters of dense text (30k passes, 40k fails); the old 150k cap never fit.
 JEV_CODE_CAP = 30000
+CUT_MARK = "\n==== CUT HERE BY THE TOOL (not a finding) ===="
+NO_CODE = "none of its files is in the diff or the repo: no code to judge"
+
+def capped(code):
+    """The code as the judge reads it: whole, or cut at the last line that fits JEV_CODE_CAP with a mark saying the tool cut it,
+    so the judge never reads a line cut in two as the code's own."""
+    if len(code) <= JEV_CODE_CAP:
+        return code
+    room = JEV_CODE_CAP - len(CUT_MARK)
+    end = code.rfind("\n", 0, room)
+    return code[:end if end > 0 else room] + CUT_MARK
+
+def task_code(hunks, files, repo):
+    """(the code a task's criteria are judged on, whether it is its files as they are): its own hunks of the diff, else, when
+    none of its files changed (a check-only task, or a verify on the base itself), those files as they are in the repo. Never
+    another task's code; "" when there is none. A lockfile or other generated file is noise, not code, and is left out."""
+    files = [f for f in files if not fc_worktree.GENERATED_RE.search(f)]
+    code = "\n".join("\n".join(lines) for path, lines in hunks if path in files)
+    if code.strip() or not repo:
+        return code, False
+    return "\n\n".join(f"==== {f} (no change in this diff) ====\n{(repo / f).read_text(errors='replace')}" for f in files if (repo / f).is_file()), True
 
 def verdict_file(proj, tid):
     """Where the task's last acceptance verdict is kept (results/acceptance/<id>.json), with the key of what jev judged."""
@@ -53,8 +74,10 @@ def mark_sufficiency(proj, tid):
 
 def jev_acceptance(cfg, proj, diff, repo=None, fresh=False):
     """Ask Jev (TypeSafe) one choice question per acceptance criterion: MET, NOT_MET, or UNCLEAR, with probabilities.
-    One request per task, whose state is that task's own files plus its test, so the judge sees exactly the code the
-    criteria are about. A task whose title, criteria, hunks, and files are as they were at its last verify keeps that verdict
+    One request per task, whose state is that task's own files plus its test (task_code), so the judge sees exactly the code the
+    criteria are about; `diff` is the whole project diff, never a pack cut for the reviewers, or a task late in path order loses
+    its hunks. A task with no code at all is not asked: its criteria are UNCLEAR with NO_CODE as the note, and only its passing
+    test proves them. A task whose title, criteria, hunks, and files are as they were at its last verify keeps that verdict
     (its rows come back marked `reused`) unless `fresh`; with a `repo`, each verdict judged now is kept for the next verify.
     Returns findings for NOT_MET above the threshold."""
     env = {**fc_core.load_env(cfg.get("env_file", fc_config.ENV_FILE)), **os.environ}
@@ -64,7 +87,7 @@ def jev_acceptance(cfg, proj, diff, repo=None, fresh=False):
     choices = {"MET": "The code satisfies this criterion.", "NOT_MET": "The code violates or omits this criterion.",
                "UNCLEAR": "Cannot be decided from the code shown."}
     threshold = cfg.get("acceptance_threshold", 0.6)
-    rows, model, states, keys, reused = [], None, {}, {}, []
+    rows, model, states, keys, reused, asis = [], None, {}, {}, [], []
     hunks, cur = [], None
     for line in diff.split("\n"):
         if line.startswith("diff --git "):
@@ -77,10 +100,13 @@ def jev_acceptance(cfg, proj, diff, repo=None, fresh=False):
         if not crits:
             continue
         files = meta["files"] + meta["protected"]
-        code = "\n".join("\n".join(lines) for path, lines in hunks if path in files)
+        code, as_is = task_code(hunks, files, repo)
         if not code.strip():
-            code = diff
-        code = code[:JEV_CODE_CAP]
+            rows += [{"task": meta["id"], "criterion": text, "choice": "UNCLEAR", "p_met": 0, "p_not_met": 0, "confidence": None, "note": NO_CODE}
+                     for text in crits]
+            continue
+        asis += [meta["id"]] if as_is else []
+        code = capped(code)
         key = verdict_key(meta, crits, code)
         kept = same_verdict(proj, repo, meta, key) if repo and not fresh else None
         if kept is not None:
@@ -101,9 +127,13 @@ def jev_acceptance(cfg, proj, diff, repo=None, fresh=False):
                          "p_not_met": round(probs.get("NOT_MET", 0), 3), "confidence": a.get("confidence")})
     if reused:
         fc_core.say(f"jev    acceptance {len(reused)} of {len(reused) + len(states)} tasks unchanged since their last verify, not rejudged")
+    if asis:
+        fc_core.say(f"jev    acceptance {len(asis)} task(s) changed none of their files, judged on those files as they are: {', '.join(asis)}")
+    if nocode := sorted({r["task"] for r in rows if r.get("note") == NO_CODE}):
+        fc_core.say(f"jev    acceptance {len(nocode)} task(s) have no code to judge (none of their files in the diff or the repo): {', '.join(nocode)}")
     if not rows:
         return {"pass": False, "criteria": [], "failed": [], "unclear": [], "note": "no acceptance criteria to judge"}
-    judged = [r for r in rows if not r.get("reused")]  # a reused row was confirmed, re-asked, and matched to its test last time
+    judged = [r for r in rows if not r.get("reused") and r["task"] in states]  # a reused row was confirmed, re-asked, and matched to its test last time
     suspects = [r for r in rows if r["p_not_met"] >= threshold]
     # Jev is a fast classifier; long compound criteria produce false NOT_MET. A second model must quote the violation.
     budget, budget_lock = {}, threading.Lock()

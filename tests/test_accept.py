@@ -164,9 +164,11 @@ class AcceptanceReuse(unittest.TestCase):
         self.proj = Path(tempfile.mkdtemp()) / "feat"; (self.proj / "results").mkdir(parents=True)
         (self.proj / "linear.json").write_text('{"feature": "ENG-1"}')
         self.repo, self.head, self.changed = Path(tempfile.mkdtemp()), "a" * 40, set()
-        self.asked, self.said = [], []
+        self.asked, self.said, self.codes = [], [], {}
         def ask(env, cfg, state, questions, label):
             self.asked.append((label, next(iter(questions.values()))["instructions"]["task"]))
+            if label == "Jev acceptance":
+                self.codes[self.asked[-1][1]] = state["code"]
             return {"model": "m", "answers": {k: {"choice": "MET", "probabilities": {"MET": 0.9}} if q["type"] == "choice" else {"noul": 1} for k, q in questions.items()}}
         def sh(argv, cwd, check=True):  # rev-parse answers HEAD; diff --quiet says whether a path of the task moved since the judged commit
             if argv[1] == "diff":
@@ -253,3 +255,41 @@ class AcceptanceReuse(unittest.TestCase):
         out, asked = self.sufficiency(acc)
         self.assertEqual((asked, [e["task_ids"] for e in out]), (["031", "032"], [["031"], ["032"]]))
         self.assertEqual([s for s in self.said if "not rejudged" in s], [])
+
+
+class AcceptanceCode(unittest.TestCase):
+    """#455: each task is judged on its own code - its hunks, else its files as they are - and never on another task's."""
+    setUp, tasks, diff, judge, acceptance_asked = (AcceptanceReuse.setUp, AcceptanceReuse.tasks, staticmethod(AcceptanceReuse.diff),
+                                                   AcceptanceReuse.judge, AcceptanceReuse.acceptance_asked)
+
+    def test_a_task_that_changed_none_of_its_files_is_judged_on_them_as_they_are(self):
+        (self.repo / "b.go").write_text("package b\nfunc B() {}\n")
+        self.judge("diff --git a/a.go b/a.go\n+a\n")
+        self.assertEqual(self.acceptance_asked(), ["031", "032"])
+        self.assertEqual(self.codes["032"], "==== b.go (no change in this diff) ====\npackage b\nfunc B() {}\n")
+        self.assertIn("jev    acceptance 1 task(s) changed none of their files, judged on those files as they are: 032", self.said)
+
+    def test_a_task_with_no_code_is_not_asked_and_its_criteria_are_unclear_with_the_reason(self):
+        acc = self.judge("diff --git a/a.go b/a.go\n+a\n")
+        self.assertEqual(self.acceptance_asked(), ["031"])
+        self.assertNotIn("+a", "".join(c for t, c in self.codes.items() if t != "031"))
+        self.assertEqual([(r["task"], r["choice"], r.get("note")) for r in acc["criteria"]],
+                         [("031", "MET", None), ("032", "UNCLEAR", fc_accept.NO_CODE)])
+        self.assertIn("jev    acceptance 1 task(s) have no code to judge (none of their files in the diff or the repo): 032", self.said)
+        self.assertFalse((self.proj / "results" / "acceptance" / "032.json").exists())  # nothing judged, so no verdict kept to reuse
+
+    def test_a_lockfile_is_left_out_of_the_code(self):
+        (self.repo / "b.go").write_text("package b\n")
+        (self.repo / "go.sum").write_text("sum\n")
+        body = "## Goal\ng\n\n## Acceptance criteria\n* beta\n"
+        (self.proj / "results" / "tasks.json").write_text(json.dumps({"tasks": [
+            {"id": "032", "title": "two", "linear": "ENG-5", "kind": "code", "files": ["go.sum", "b.go"], "protected": [], "test": "t2", "body": body}]}))
+        self.judge("diff --git a/go.sum b/go.sum\n+sum2\n")
+        self.assertEqual(self.codes["032"], "==== b.go (no change in this diff) ====\npackage b\n")
+
+    def test_code_over_the_cap_is_cut_at_a_whole_line_and_marked_as_cut_by_the_tool(self):
+        self.assertEqual(fc_accept.capped("a\nb"), "a\nb")
+        out = fc_accept.capped(("l" * 99 + "\n") * 400)
+        self.assertLessEqual(len(out), fc_accept.JEV_CODE_CAP)
+        self.assertTrue(out.endswith(fc_accept.CUT_MARK))
+        self.assertEqual({len(line) for line in out[:-len(fc_accept.CUT_MARK)].split("\n")}, {99})

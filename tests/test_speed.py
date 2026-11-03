@@ -86,6 +86,7 @@ class E2EBesideReview(unittest.TestCase):
         args = type("A", (), {"skip_e2e": False, "skip_review": False})()
         with mock.patch.object(fc.fc_herdr, "herdr_verify_panes", return_value={}), mock.patch.object(fc.fc_herdr, "herdr_space", return_value=None), \
                 mock.patch.object(fc.fc_verify, "review_inputs", return_value=("", "", "", [])), \
+                mock.patch.object(fc.fc_verify.fc_worktree, "project_diff", return_value=""), \
                 mock.patch.object(fc.fc_jev, "jev_e2e", slow("e2e", {"exit": 0, "stdout": "", "stderr": ""})), \
                 mock.patch.object(fc.fc_verify.fc_review, "llm_review", slow("review", {"pass": True, "issues": [], "confirmed": []})), \
                 mock.patch.object(fc.fc_accept, "jev_acceptance", lambda *a, **k: {"pass": True, "criteria": [], "failed": []}):
@@ -131,15 +132,17 @@ class AcceptanceJudge(unittest.TestCase):
                 mock.patch.object(fc.fc_core, "sh", return_value=subprocess.CompletedProcess([], 0, "", "")):  # keep_verdict asks git for the tip
             res = fc.fc_accept.jev_acceptance({}, proj, diff, repo=repo)
         states = {c.args[2]["task"]: c.args[2] for c in ask.call_args_list if c.args[4] == "Jev acceptance"}
-        a, b, c = states["002"], states["003"], states["004"]
+        a, b = states["002"], states["003"]
         self.assertEqual(a["files"], ["a.py", "tests/test_a.py"])
         self.assertLess(a["code"].index("A_OWN"), a["code"].index("T_OWN"))
         self.assertNotIn("NOT_MINE", a["code"])  # lib/a.py is another path, not a.py
         self.assertNotIn("B" * 10, a["code"])
         self.assertNotIn("R" * 10, a["code"] + b["code"])  # the state never reads the repo
         self.assertTrue(b["code"].startswith("diff --git a/b.py b/b.py"))
-        self.assertEqual(len(b["code"]), fc.fc_accept.JEV_CODE_CAP)
-        self.assertEqual(c["code"], diff[:fc.fc_accept.JEV_CODE_CAP])  # no hunk of its own: the whole diff, capped
+        self.assertLessEqual(len(b["code"]), fc.fc_accept.JEV_CODE_CAP)
+        self.assertTrue(b["code"].endswith(fc.fc_accept.CUT_MARK))  # the tool says it cut, so the judge does not read the cut as the code's
+        self.assertNotIn("004", states)  # no hunk and no file of its own: never judged on the other tasks' code (#455)
+        self.assertEqual([(r["choice"], r["note"]) for r in res["criteria"] if r["task"] == "004"], [("UNCLEAR", fc.fc_accept.NO_CODE)])
         for prefix in ("a", "b"):
             calls = [code for crit, code in sent if crit.startswith(prefix)]
             self.assertEqual(len(calls), 2, prefix)  # the second call gets the rest of the budget, the third none
@@ -173,9 +176,10 @@ class AcceptanceJudge(unittest.TestCase):
         a = sorted((code for crit, code in sent if crit.startswith("a")), key=len)
         self.assertEqual(a, [whole[:60000 - len(whole)], whole])  # the directories cost nothing; the second call gets the rest
         self.assertNotIn("INNER", "".join(code for _, code in sent))
-        self.assertEqual([code for crit, code in sent if crit == "b1"], [""])  # only directories: still sent, with budget left
+        self.assertNotIn("b1", [crit for crit, _ in sent])  # only a directory: no code, so it is never judged or confirmed
+        self.assertEqual([(r["choice"], r["note"]) for r in res["criteria"] if r["task"] == "003"], [("UNCLEAR", fc.fc_accept.NO_CODE)])
         self.assertEqual([r["evidence"] for r in res["suspects"] if not r["confirmed"]], ["confirm budget spent"])
-        self.assertEqual(len(res["failed"]), 3)  # suspects are judged as before
+        self.assertEqual(len(res["failed"]), 2)  # a1 and a2: confirmed suspects are judged as before
 
 
 class PrettierOptIn(unittest.TestCase):

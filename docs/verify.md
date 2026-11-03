@@ -68,6 +68,12 @@ A start stops while a target differs from the record or an env file sets one the
    The reply is read from the first object that holds the verdict, whatever prose or fence surrounds it, and asked once more when it has none.
    A claim whose reply is still unusable is shown as `unjudged` and dropped, and it does not fail the stage.
 3. **jev** asks one MET / NOT_MET / UNCLEAR question per acceptance criterion.
+   Each task is judged on its own hunks of the project's whole diff, never the reviewers' pack, which is cut at 150,000 characters.
+   A task that changed none of its files is judged on those files as they are; lockfiles and other generated files are left out.
+   A task with no code at all is not asked: its criteria are `unclear` with the note `none of its files is in the diff or the repo`, and only its passing test proves them.
+   It is never judged on another task's code.
+   Code over 30,000 characters is cut at a whole line and ends with a mark that says the tool cut it.
+   A busy provider (HTTP 429, 502, 503 or 504) is asked again after 2, 5, 10 and 20 seconds, or after its `Retry-After` up to 60, before the call counts as an error.
    Failures above the threshold become findings.
    Each task's verdict is kept in `results/acceptance/<id>.json` with the commit it judged, keyed by the task's title, criteria, and the hunks of its files.
    The next verify reuses it, and asks jev nothing for that task, while the key matches and `git diff` shows the task's `files` and `protected` unchanged since that commit; it prints `jev    acceptance N of M tasks unchanged since their last verify, not rejudged`.

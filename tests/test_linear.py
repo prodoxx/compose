@@ -229,6 +229,9 @@ class HandTasks(unittest.TestCase):
         self.assertEqual(json.loads((self.proj / "results" / "001.json").read_text())["status"], "hand_done")
 
 
+A_GO_DIFF = "diff --git a/a.go b/a.go\n+package a\n"  # task 002's own hunk: a task is judged on its code, never on the whole diff
+
+
 class DesignTasks(unittest.TestCase):
     """A `kind: design` task is built in Figma: it never clones, stacks, or is judged from files."""
     def setUp(self):
@@ -263,7 +266,7 @@ class DesignTasks(unittest.TestCase):
             self.assertEqual(fc.fc_worktree.stack_order(Path("."), self.proj), ["compose/p-002"])
         reply = {"model": "m", "answers": {"c0": {"choice": "MET", "probabilities": {"MET": 0.9}}}}
         with mock.patch.object(fc.fc_config, "ENV_FILE", self.proj / "none.env"), mock.patch.object(fc.fc_models, "jev_ask", return_value=reply) as ask:
-            fc.fc_accept.jev_acceptance({}, self.proj, "diff")
+            fc.fc_accept.jev_acceptance({}, self.proj, A_GO_DIFF)
         self.assertEqual([c.args[3]["c0"]["instructions"]["task"] for c in ask.call_args_list], ["002"])
 
     def test_acceptance_passes_only_when_every_criterion_is_met(self):
@@ -271,7 +274,7 @@ class DesignTasks(unittest.TestCase):
             reply = {"model": "m", "answers": {"c0": {"choice": choice, "probabilities": {choice: 0.1}}}}
             with mock.patch.object(fc.fc_config, "ENV_FILE", self.proj / "none.env"), mock.patch.object(fc.fc_models, "jev_ask", return_value=reply), \
                     mock.patch.object(fc.fc_models, "fast_json", return_value={"confirmed": False, "evidence": ""}):
-                self.assertEqual(fc.fc_accept.jev_acceptance({}, self.proj, "diff")["pass"], ok, choice)
+                self.assertEqual(fc.fc_accept.jev_acceptance({}, self.proj, A_GO_DIFF)["pass"], ok, choice)
 
     def test_acceptance_counts_a_criterion_the_tasks_passing_test_proves_unless_a_violation_is_confirmed(self):
         """Jev's UNCLEAR or unconfirmed NOT_MET alone is a note when the task's test passed at the tip and is on the ledger."""
@@ -288,7 +291,7 @@ class DesignTasks(unittest.TestCase):
             with mock.patch.object(fc.fc_config, "ENV_FILE", self.proj / "none.env"), mock.patch.object(fc.fc_models, "jev_ask", return_value=reply), \
                     mock.patch.object(fc.fc_models, "fast_json", return_value={"confirmed": confirmed, "evidence": "x"}), \
                     mock.patch.object(fc_evidence, "task_rows", return_value=rows), mock.patch.object(fc_ledger, "counted", side_effect=lambda *a: a[-1]):
-                res = fc.fc_accept.jev_acceptance({}, self.proj, "diff")
+                res = fc.fc_accept.jev_acceptance({}, self.proj, A_GO_DIFF)
             self.assertEqual((res["pass"], res["criteria"][0].get("proven_by"), len(res["unclear"]), len(res["failed"])), (ok, by, 0 if ok or confirmed else 1, int(confirmed)), name)
 
     def test_acceptance_re_asks_a_refuted_not_met_once_and_a_confirm_error_never(self):
@@ -298,7 +301,7 @@ class DesignTasks(unittest.TestCase):
                                            ("MET", "nope", False, 1)):
             with mock.patch.object(fc.fc_config, "ENV_FILE", self.proj / "none.env"), mock.patch.object(fc.fc_models, "jev_ask", side_effect=[first, again(second)]) as ask, \
                     mock.patch.object(fc.fc_models, "fast_json", return_value=confirm):
-                res = fc.fc_accept.jev_acceptance({}, self.proj, "diff")
+                res = fc.fc_accept.jev_acceptance({}, self.proj, A_GO_DIFF)
             self.assertEqual((res["pass"], ask.call_count), (ok, calls), (second, confirm))
         self.assertEqual((res["criteria"][0]["choice"]), "NOT_MET")
 
@@ -309,7 +312,7 @@ class DesignTasks(unittest.TestCase):
         (repo / "a.go").write_text("package a\n" * 6000)
         (repo / "b.go").write_text("package b\n")
         fc.fc_tasks.sync_tasks(self.proj, {"feature": {"id": "ENG-1", "title": "F", "description": ""}, "issues": [
-            issue("ENG-2", "Store", block(id="002", files="a.go, bun.lock", protected="b.go", test="go test"))]})
+            issue("ENG-2", "Store", block(id="002", files="bun.lock, a.go", protected="b.go", test="go test"))]})
         reply = {"model": "m", "answers": {"c0": {"choice": "MET", "probabilities": {"MET": 0.9}}}}
         with mock.patch.object(fc.fc_config, "ENV_FILE", self.proj / "none.env"), mock.patch.object(fc.fc_models, "jev_ask", return_value=reply) as ask:
             fc.fc_accept.jev_acceptance({}, self.proj, "diff", repo=repo)
@@ -346,7 +349,7 @@ class DesignTasks(unittest.TestCase):
     def test_acceptance_with_no_criteria_fails_rather_than_passes(self):
         fc.fc_tasks.sync_tasks(self.proj, {"feature": {"id": "ENG-1", "title": "F", "description": ""}, "issues": [issue("ENG-2", "Store", "```compose\nid: 002\nfiles: a.go\ntest: go test\n```\n")]})
         with mock.patch.object(fc.fc_config, "ENV_FILE", self.proj / "none.env"), mock.patch.object(fc.fc_models, "jev_ask") as ask:
-            res = fc.fc_accept.jev_acceptance({}, self.proj, "diff")
+            res = fc.fc_accept.jev_acceptance({}, self.proj, A_GO_DIFF)
         self.assertEqual((res["pass"], res["note"], ask.called), (False, "no acceptance criteria to judge", False))
 
     def test_acceptance_confirm_unwraps_a_list_and_reports_a_failed_confirm_as_an_error(self):
@@ -354,7 +357,7 @@ class DesignTasks(unittest.TestCase):
         for confirm, failed, error in (([{"confirmed": True, "evidence": "x"}], 1, None), ("nope", 0, True)):
             with mock.patch.object(fc.fc_config, "ENV_FILE", self.proj / "none.env"), mock.patch.object(fc.fc_models, "jev_ask", return_value=reply), \
                     mock.patch.object(fc.fc_models, "fast_json", return_value=confirm):
-                res = fc.fc_accept.jev_acceptance({}, self.proj, "diff")
+                res = fc.fc_accept.jev_acceptance({}, self.proj, A_GO_DIFF)
             self.assertEqual((len(res["failed"]), "confirm call failed" in res.get("error", "") if error else "error" not in res, res["pass"]), (failed, True, False))
 
     def test_tasks_lists_nodes_and_warns_once_per_shared_open_page(self):

@@ -204,10 +204,11 @@ class VerifyDepth(unittest.TestCase):
             self.assertIn("verify depth STANDARD", said)
             self.assertEqual(({k: rounds[0][k] for k in self.cfg}, rounds[0]["depth"]), (self.cfg, "STANDARD"))
 
-    def stages(self, cfg):
-        """run_stages with the review and Jev calls patched; the Jev acceptance mock."""
+    def stages(self, cfg, diff="d"):
+        """run_stages with the review and Jev calls patched, the project's diff being `diff`; the Jev acceptance mock."""
         proj = Path(tempfile.mkdtemp()) / "p"; (proj / "results").mkdir(parents=True)
         with mock.patch.object(fc.fc_accept, "jev_acceptance", return_value={"pass": True, "criteria": []}) as jev, mock.patch.object(fc.fc_verify, "review_inputs", return_value=("d", "p", "", [])), \
+                mock.patch.object(fc.fc_verify.fc_worktree, "project_diff", return_value=diff), \
                 mock.patch.object(fc.fc_verify.fc_review, "llm_review", return_value={"pass": True, "confirmed": [], "issues": []}) as rv, mock.patch.object(fc.fc_core, "say"):
             ok, report, _ = fc.fc_verify.run_stages(proj, proj, cfg, type("A", (), {"skip_e2e": True, "skip_review": False}))
         return jev, rv, report, ok
@@ -217,11 +218,18 @@ class VerifyDepth(unittest.TestCase):
         proj = Path(tempfile.mkdtemp()) / "p"; (proj / "results").mkdir(parents=True)
         out = io.StringIO()
         with mock.patch.object(fc.fc_accept, "jev_acceptance", return_value={"pass": True, "criteria": [row], "unclear": [], "failed": []}), mock.patch.object(fc.fc_verify, "review_inputs", return_value=("d", "p", "", [])), \
+                mock.patch.object(fc.fc_verify.fc_worktree, "project_diff", return_value="d"), \
                 mock.patch.object(fc.fc_verify.fc_review, "llm_review", return_value={"pass": True, "confirmed": [], "issues": []}), mock.patch.object(fc.fc_core, "say") as say, contextlib.redirect_stdout(out):
             ok, _, findings = fc.fc_verify.run_stages(proj, proj, {"depth": "DEEP", "acceptance_gate": True, "jev_acceptance": True}, type("A", (), {"skip_e2e": True, "skip_review": False}))
         self.assertEqual((ok, findings), (True, ""))
         self.assertIn("0 unproven, 1 proven by their task's test", say.call_args.args[0])
         self.assertIn("unclear  p_met=0.20 p_not=0.30 [061] c  (note: the task's test passed, ledger event f1)", out.getvalue())
+
+    def test_the_jev_acceptance_reads_the_whole_diff_not_the_reviewers_cut_pack(self):
+        """#455: the reviewers' pack is cut at 150,000 characters, so a task whose files sort late lost its hunks."""
+        whole = "".join(f"diff --git a/{c}.go b/{c}.go\n" + "+x\n" * 20000 for c in "abcz")
+        jev, *_ = self.stages({"depth": "STANDARD", "jev_acceptance": True}, diff=whole)
+        self.assertEqual(jev.call_args.args[2], whole)
 
     def test_fast_leaves_the_jev_acceptance_out_and_other_depths_run_it(self):
         jev, rv, report, ok = self.stages({"depth": "FAST", "review": False, "jev_acceptance": True})

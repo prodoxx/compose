@@ -24,9 +24,7 @@ def verify_failed(proj, rounds, findings):
 def review_inputs(repo, proj, cfg, tasks=None, diff=None):
     """(diff, plan, docs, protected) the reviewers read. `tasks` and `diff` default to every task and the project's diff against
     its base; `compose review` passes one task's (or a range's) own."""
-    if diff is None:
-        base = fc_worktree.review_base(repo, cfg) or "main"
-        diff = fc_core.sh(["git", "diff", f"{base}...HEAD"], repo, check=False).stdout
+    diff = fc_worktree.project_diff(repo, cfg) if diff is None else diff
     tasks = fc_tasks.load_tasks(proj) if tasks is None else tasks
     named = sorted({f for t in tasks for f in t["files"] + t["protected"]})
     if not diff.strip():
@@ -263,7 +261,7 @@ def run_stages(repo, proj, cfg, a, tests=None):
     if not a.skip_review and cfg.get("jev_acceptance", True) and cfg.get("depth") != "FAST":
         t1 = time.time()
         fc_herdr.herdr_stage(panes, "jev", "working")
-        diff, _, _, _ = review_inputs(repo, proj, cfg)
+        diff = fc_worktree.project_diff(repo, cfg)  # whole: each task's hunks are picked from it, so the reviewers' cut pack would drop late files
         try:
             acc = fc_accept.jev_acceptance(cfg, proj, diff, repo=repo, fresh=getattr(a, "fresh", False))
         except Exception as e:  # noqa: BLE001
@@ -284,7 +282,7 @@ def run_stages(repo, proj, cfg, a, tests=None):
             if r["choice"] != "MET":
                 flag = "NOT MET " if r in acc.get("failed", []) else ("unproven" if r in acc.get("suspects", []) else "unclear ")
                 print(f"           {flag} p_met={r['p_met']:.2f} p_not={r['p_not_met']:.2f} [{r['task']}] {r['criterion'][:110]}"
-                      + (f"  (note: the task's test passed, ledger event {r['proven_by']})" if r.get("proven_by") else ""))
+                      + (f"  (note: the task's test passed, ledger event {r['proven_by']})" if r.get("proven_by") else f"  (note: {r['note']})" if r.get("note") else ""))
         for r in acc.get("failed", []):
             if gate:
                 findings.append(f"[high] acceptance criterion not met (task {r['task']}, p={r['p_not_met']}): {r['criterion']}")

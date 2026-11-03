@@ -279,6 +279,10 @@ def review_base(repo, cfg):
         return base
     return default_branch(repo)
 
+def project_diff(repo, cfg):
+    """The project's whole diff against its review base, uncut: what verify's reviewers and its acceptance judge start from."""
+    return fc_core.sh(["git", "diff", f"{review_base(repo, cfg) or 'main'}...HEAD"], repo, check=False).stdout
+
 def release_slot(repo, path, own=None):
     """Hand a slot back to the pool with its installs intact, and say whether treehouse took it: `return` fails while a live
     process keeps respawning in the slot, and the slot stays leased. compose's own leftovers go first: `return` keeps ignored

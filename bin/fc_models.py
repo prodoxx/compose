@@ -187,20 +187,41 @@ def payment_check(provider, text, status=None):
     if status == 402 or (text and PAY_RE.search(str(text))):
         raise PaymentRequired(provider, str(text)[:300].strip() or f"HTTP {status}")
 
-def http_json(req, provider, timeout=90):
-    """urlopen that turns a 402 (or a 200 carrying a billing error) into PaymentRequired instead of a stack trace."""
+BUSY = (429, 502, 503, 504)  # the provider is busy now, not refusing the request: asked again after a wait
+BUSY_WAITS = (2, 5, 10, 20)  # seconds before each ask again; a provider still busy after the last fails the call
+
+def busy_wait(wait, retry_after):
+    """How long to wait before asking a busy provider again: its Retry-After seconds, up to a minute, else `wait`."""
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            out = json.load(r)
-    except urllib.error.HTTPError as e:
-        body = e.read().decode(errors="replace")[:500]
-        e.close()
-        payment_check(provider, body, e.code)
-        raise RuntimeError(f"{provider}: HTTP {e.code} {e.reason}: {body.strip()}") from e
-    err = out.get("error") if isinstance(out, dict) else None
-    if err:
-        payment_check(provider, json.dumps(err), (err.get("code") if isinstance(err, dict) else None))
-    return out
+        return min(max(int(retry_after), 0), 60)
+    except (TypeError, ValueError):
+        return wait
+
+def http_json(req, provider, timeout=90):
+    """urlopen that turns a 402 (or a 200 carrying a billing error) into PaymentRequired instead of a stack trace. A busy answer
+    (BUSY, as the HTTP status or as the code of a 200's error) is asked again after each of BUSY_WAITS, so one 429 from a shared
+    pool never fails a judge; any other refusal raises at once."""
+    for wait in (*BUSY_WAITS, None):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                out = json.load(r)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode(errors="replace")[:500]
+            retry_after = e.headers.get("Retry-After") if e.headers else None
+            e.close()
+            payment_check(provider, body, e.code)
+            if e.code in BUSY and wait is not None:
+                time.sleep(busy_wait(wait, retry_after))
+                continue
+            raise RuntimeError(f"{provider}: HTTP {e.code} {e.reason}: {body.strip()}") from e
+        err = out.get("error") if isinstance(out, dict) else None
+        if err:
+            payment_check(provider, json.dumps(err), (err.get("code") if isinstance(err, dict) else None))
+            if isinstance(err, dict) and err.get("code") in BUSY and wait is not None:
+                time.sleep(wait)
+                continue
+        return out
+    raise AssertionError("unreachable: the last ask returns or raises")
 
 class RateLimited(Exception):
     """The provider turned the turn away for a reason that passes: `run` waits and starts a fresh session without spending an attempt."""
