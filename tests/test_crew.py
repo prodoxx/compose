@@ -1171,8 +1171,8 @@ class RestrictedStart(unittest.TestCase):
                 self.assertIn("mcp__frame0__*", self.patterns(args))  # a `frame0` server someone registered is denied like any other
                 self.assertEqual(args[-3:], ["--allowedTools", "Bash(npx -y lavish-axi:*)", "Bash(compose frame0:*)"])  # the commands run with no prompt
 
-    def test_only_design_roles_keep_skills(self):
-        for role, off in [("orchestrator", True), ("planner", True), ("architect", True), ("explore", True), ("toolsmith", True),
+    def test_only_design_roles_and_the_team_lead_keep_skills_and_commands(self):  # the compactor types `/compact` into the lead; the flag would hide it
+        for role, off in [("orchestrator", False), ("planner", True), ("architect", True), ("explore", True), ("toolsmith", True),
                           ("designer", False), ("design-003", False), ("design-review", False)]:
             with self.subTest(role=role):
                 self.assertEqual("--disable-slash-commands" in self.start(role), off)

@@ -298,7 +298,7 @@ def cmd_crew(a):
                   *(["--model", fc_claude.claude_id(model)] if fc_claude.claude_id(model) else []), *(["--effort", effort] if effort else []),
                   "--no-chrome", "--append-system-prompt", TRUST_PROMPT, "--settings", fc_claude.crew_settings(a.role, cwd),
                   *( ["--disallowedTools", *deny] if (deny := fc_mcp.disallowed(a.role, fc_mcp.installed_servers(cwd))) else []),  # no --mcp-config: a `frame0` server would start with the session and idle; `compose frame0` reaches the app without one
-                  *( [] if fc_mcp.keeps_skills(a.role) else ["--disable-slash-commands"]),
+                  *( [] if fc_mcp.keeps_commands(a.role) else ["--disable-slash-commands"]),  # the team lead keeps `/compact` for the compactor
                   *(["--add-dir", str(work)] if work else []), "--permission-mode", "auto", "--allowedTools", "Bash(npx -y lavish-axi:*)",
                   "Bash(compose frame0:*)")  # `compose frame0 up|draw|export|pages|lint` runs with no prompt in the session that draws; the flag swallows what follows, so it stays last
     except RuntimeError as e:

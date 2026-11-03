@@ -174,6 +174,7 @@ The hook does nothing in any other session, and its watch ends with the session 
 Every Claude Code teammate but the team lead compacts at 150k tokens, since every turn re-sends the whole session and a long one pays for its size on each of them.
 The window is `CLAUDE_CODE_AUTO_COMPACT_WINDOW` in the session's `--settings` env, because that variable outranks the `--autocompact` flag and would let a value in your own settings win.
 The team lead gets no window from compose, because the Stop hook judges its turns and compacts it at a finished moment or at the ceiling, as it does the engineering manager.
+It is also the one Claude teammate besides the design roles that starts with Claude Code's skills and commands, because the compactor types `/compact` into it and `--disable-slash-commands` hides the built-in commands too.
 After a context compaction, the plugin's SessionStart hook (`compose reenter`) points any teammate back at its own brief, `results/crew/<agent>.brief.md`.
 Every teammate's tab carries its name in `COMPOSE_TEAMMATE` for that, since `COMPOSE_ROLE` is `crew` for all but the team lead and the planner.
 

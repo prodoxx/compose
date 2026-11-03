@@ -30,6 +30,12 @@ def servers_for(role):
 def keeps_skills(role):
     return reads_figma(role)
 
+def keeps_commands(role):
+    """A Claude teammate that starts with Claude Code's skills and commands: the design roles, which need the Figma skills, and the team lead,
+    into which the compactor types `/compact`. `--disable-slash-commands` hides the built-in commands too: a session started with it answers
+    `Unknown command: /compact` and reads the focus as a prompt, so the lead would never compact except by Claude's own auto-compaction."""
+    return keeps_skills(role) or role == "orchestrator"
+
 
 def installed_servers(cwd):
     try:
