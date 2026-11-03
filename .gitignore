@@ -16,4 +16,4 @@ __pycache__/
 .venv/
 docs/superpowers
 .compose/
-.trail/
+.trail/cache/
