@@ -1,7 +1,7 @@
 import argparse, fcntl, json, re, sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-import fc_core, fc_config, fc_claude, fc_tasks, fc_herdr, fc_worktree, fc_change, fc_crew, fc_crewpick, fc_toolbug, fc_testred, fc_planner_brief, fc_prd
+import fc_core, fc_config, fc_claude, fc_tasks, fc_herdr, fc_worktree, fc_change, fc_crew, fc_crewpick, fc_toolbug, fc_testred, fc_planner_brief, fc_prd, fc_retro
 
 
 # ---------- groundwork: the boilerplate brief, then one test-writing teammate per task on a shared contract ----------
@@ -69,7 +69,16 @@ A fix is a later, separate job. Your one output is a GitHub issue.
 2. Write body file outside the compose repo (e.g. under /tmp): line 1 `# <command>: <symptom>`, then sections of issue #1 (`gh issue view 1 --repo {repo}`).
 3. File: `compose tool-bug file --project {project} --entry "{at}" --body <file>`. Exit 2: open issue exists;
    `--comment <n>` if same bug, `--new` if not.
-{variant}"""
+{variant}{retros}"""
+
+def toolsmith_retros(proj):
+    """The brief's lines on the project's misses that point at compose or a provider (fc_retro): evidence of a pattern, never a second assignment."""
+    lines = fc_retro.harness_lines(proj)
+    if not lines:
+        return ""
+    return (f"Tasks of this project that ended on compose or a provider, not the code ({fc_retro.path(proj)}; `compose retro --project {proj.name} --task <id>` for one in full). "
+            "One that shows the same failure is evidence for the issue; a different failure is not your assignment, name it in one line of the body:\n"
+            + "".join(f"  {l}\n" for l in lines[-8:]))
 
 CHANGE_BRIEF = """You are architect teammate for change of course {cid} on project {slug}. Worktree: {wt}. Map is feature issue
 {feature} on Linear; its Decisions so far is the one decision record. {cid} is open because: {why}
@@ -184,7 +193,7 @@ def cmd_toolsmith(a):
         if state == "no-gh":
             variant += "   gh fails here: if filing prints `gh auth login` hint, put it in needs-user line too.\n"
     print(TOOLSMITH_BRIEF.format(project=proj.name, reporter=entry["reporter"], at=at, cli_commit=entry["cli_commit"],
-                                 cli_repo=entry["cli_repo"], message=entry["message"], repo=repo, variant=variant))
+                                 cli_repo=entry["cli_repo"], message=entry["message"], repo=repo, variant=variant, retros=toolsmith_retros(proj)))
 
 TEST_BUDGET = 60  # lines of test per task, unless the task's block sets `test_lines:`; run 5's test-writing teammates wrote 2044 lines for 727 of code
 def contract_slice(contract, tid): return "".join(p for p in re.split(r"(?m)^(?=## )", contract) if not (m := re.match(r"## task (\S+)", p)) or m.group(1) == tid)

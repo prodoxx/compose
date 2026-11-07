@@ -1355,11 +1355,11 @@ class CodexReader(unittest.TestCase):
 
     def read(self, reader):
         with mock.patch.object(fc.fc_config, "TEST_READER", reader):
-            return fc.fc_implement.read_failure("/w", self.META, "the output", "/tmp/log")
+            return fc.fc_reader.read_failure("/w", self.META, "the output", "/tmp/log")
 
     def test_a_codex_reader_runs_the_read_only_turn_in_the_clone(self):
         self.assertEqual(self.read("codex:gpt-6-sol"), ("fix a.py:3", self.USAGE))
-        self.run.assert_called_once_with(["codex", "x"], cwd="/w", env={"H": "1"}, timeout=fc.fc_implement.READER_TIMEOUT)
+        self.run.assert_called_once_with(["codex", "x"], cwd="/w", env={"H": "1"}, timeout=fc.fc_reader.READER_TIMEOUT)
         self.assertEqual(self.cmd.call_args.args[:2], ("codex:gpt-6-sol", "/w")); self.assertIs(self.cmd.call_args.kwargs["read_only"], True)
         prompt = self.cmd.call_args.args[2] if len(self.cmd.call_args.args) > 2 else self.cmd.call_args.kwargs["prompt"]
         for part in ("pytest -k thing", "the output", "/tmp/log"): self.assertIn(part, prompt)

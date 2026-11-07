@@ -10,7 +10,7 @@ import fc_config
 import fc_core
 
 FILE = "history.jsonl"
-FIELDS = ("task", "model", "attempts", "seconds", "cost", "outcome", "tasks", "passed", "round", "rounds", "parallel", "providers")  # a line keeps nothing else
+FIELDS = ("task", "model", "attempts", "seconds", "cost", "outcome", "route", "tier", "tasks", "passed", "round", "rounds", "parallel", "providers")  # a line keeps nothing else
 SHOWN = 40  # lines `status --history` prints when it is not told how many
 
 

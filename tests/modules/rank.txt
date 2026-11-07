@@ -29,6 +29,7 @@ fc_routerec
 fc_readguard
 fc_routecost
 fc_tierpin
+fc_retro
 fc_costevent
 fc_fast
 fc_claude
@@ -93,6 +94,7 @@ fc_format
 fc_trailpack
 fc_pause
 fc_attempt
+fc_reader
 fc_implement
 fc_shrink
 fc_jev

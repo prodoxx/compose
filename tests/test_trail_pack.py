@@ -21,13 +21,29 @@ class TrailPack(FakeTrail):
         (repo / graph / "INDEX.md").write_text("index")
         return repo
 
-    def assert_pack(self, pack, query):
-        self.assertEqual(pack, f'trail ask — "{query}"  (lexical)\n\n1. main · function  [symbol]\n   server/main.go:L1-L1')
+    LEARNING = ("from Reggie's learning · Oct 17 · Use @trailhq/trail-code and call `trail`, not `graft`\n"
+                "  decided     graft's npm package was renamed to `@trailhq/trail-code`.\n  .trail/learnings/2026-10-17-use-trailhq-trail-code.md")
 
-    def test_a_graph_in_trail_cache_or_old_graft_gives_a_pack_without_banners(self):
+    def assert_pack(self, pack, query):
+        code = f'trail ask — "{query}"  (lexical)\n\n1. main · function  [symbol]\n   server/main.go:L1-L1'
+        self.assertEqual(pack, code + (f"\n\n{fc.fc_implement.fc_trailpack.LEARNED}\n{self.LEARNING}" if query == "main" else ""))
+
+    def test_a_graph_in_trail_cache_or_old_graft_gives_a_pack_without_banners_and_the_learnings_after_the_code(self):
         self.assert_pack(fc.fc_implement.fc_trailpack.trail_pack(self.repo_on(".trail/cache"), "main"), "main")
         self.assert_pack(fc.fc_implement.fc_trailpack.trail_pack(self.repo_on("graft"), "entry point"), "entry point")
         self.assertTrue(self.calls()[-1].startswith("ask entry point --source -n 6 --no-refresh "))
+
+    def test_learnings_false_drops_them_and_the_cap_cuts_the_whole(self):
+        pack = fc.fc_implement.fc_trailpack.trail_pack(self.repo_on(".trail/cache"), "main", learnings=False)
+        self.assertEqual(pack, 'trail ask — "main"  (lexical)\n\n1. main · function  [symbol]\n   server/main.go:L1-L1')
+        self.assertEqual(fc.fc_implement.fc_trailpack.trail_pack(self.repo_on(".trail/cache"), "main", cap=80), fc.fc_implement.fc_trailpack.trail_pack(self.repo_on(".trail/cache"), "main")[:80])
+
+    def test_split_keeps_every_learning_block_whole_and_drops_each_banner_with_its_blank_line(self):
+        out = ("[trail] tokens saved\n\ntrail ask — \"q\"  (lexical)\n\nfrom a learning · Oct 1 · One\n  decided  a\n  watch out  b\n\n"
+               "from Ana's learning · Oct 2 · Two\n  decided  c\n\n· no learnings about this yet\n\n1. f · function\n   a.py:L1-L2\n\n2. g · function\n   b.py:L3-L4")
+        lines, learned = fc.fc_implement.fc_trailpack.split(out)
+        self.assertEqual(lines, ['trail ask — "q"  (lexical)', "", "1. f · function", "   a.py:L1-L2", "", "2. g · function", "   b.py:L3-L4"])
+        self.assertEqual(learned, ["from a learning · Oct 1 · One\n  decided  a\n  watch out  b", "from Ana's learning · Oct 2 · Two\n  decided  c"])
 
     def test_a_task_clone_gets_the_graph_rebuilt_in_trail_cache(self):
         for graph in (".trail/cache", "graft"):

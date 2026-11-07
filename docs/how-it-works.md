@@ -44,7 +44,7 @@ Eight roles split the decisions.
 | Planner (frontier teammate; Claude Code, pi or Codex) | the plan, the stories when a feature has none, and the task issues; never writes code |
 | Designer (Claude teammate) | design stories and tasks in Figma, built by its own crew; never writes repo files or decides a product question |
 | Fast implementer (GLM 5.3 Flash in pi; any model id) | makes one test green in one session; never writes or runs tests |
-| Test reader (Claude Haiku) | reads a failed test run and writes the implementer's short fix brief; never edits or runs anything |
+| Test reader (Claude Haiku) | reads a failed test run and the attempt's diff and writes the implementer's reflection (DID, WHY, NEXT); never edits or runs anything |
 | reviewer (`models.review`) | raises review findings, then confirms or drops them |
 | Jev (TypeSafe) | scores acceptance criteria, drives the browser, screens settled decisions against new evidence |
 | CLI | red check, every test run, protected-file guard, timing, cost ledger |
@@ -152,6 +152,16 @@ You can hand `compose` a link to any of these levels, and it creates the missing
 It asks for the repo's Linear project link once and keeps it in `.compose/linear.json` in the repo's main checkout, which every worktree of the repo reads.
 Each task moves to In Progress when it is dispatched, In Review when its layer passes, and Done when its PR merges.
 
+## What a miss teaches
+
+Three loops turn a failure into something the next attempt, the next task, or the next feature reads.
+
+1. **Inside a task.** The test reader reflects on each RED attempt (DID, WHY, NEXT), and the next turn carries every earlier reflection.
+2. **After a task.** A task that ends without passing gets a retrospective: each attempt, what the CLI saw, the reader's WHY, and the kind of miss (code, brief, scope, harness, environment) with what it calls for. It is the failure comment on the task's issue, `compose retro --project <slug> --task NNN` prints it, the planner reads it before a re-split, and the toolsmith's brief lists the harness misses as evidence.
+3. **Across features.** The implementer's context pack keeps the learnings trail ranks for the task under their own heading, and the planner reads them before cutting. At the end of a feature, `compose retro --learnings` drafts a trail learning from the retrospectives, which the team lead cuts to facts about the repo and saves with `trail note`, so the next run on that repo starts from them.
+
+What makes compose itself better is the report, not the loops: `compose retro --history` gives first-try and final pass rates over every run of the repository by model, route, tier and outcome. A change to a default follows that report, and stays yours.
+
 ## Cleaning up an existing project
 
 Run `/compose:reconcile <Linear project link>` on a project whose tickets have piled up.
@@ -212,7 +222,8 @@ A provider too busy to start a turn counts as a rate limit: a 429, or a 5xx such
 Without a fallback, such a turn gets a fresh session after 20 s, then 40 s, 60 s and 80 s, and spends no attempt.
 A refusal that stays, such as a wrong model id, a missing preset, or a bad key, ends the task, or moves it to the fallback.
 Implementers never run tests: an implementer waiting on a test run pays for the wait, and every later turn re-reads the output as input tokens.
-The CLI runs the test after each turn, and on a failure the test reader (`models.test_reader`, default `claude:claude-haiku-5-5`) writes the implementer's fix brief.
+The CLI runs the test after each turn, and on a failure the test reader (`models.test_reader`, default `claude:claude-haiku-5-5`) writes the implementer's fix brief as a reflection: DID (what the attempt's diff did), WHY (each failing case, expected versus got, file:line) and NEXT (the one change to try, as a hypothesis).
+The next turn gets every earlier reflection numbered above the newest, so no attempt tries what an earlier one ruled out; the test, never the reflection, decides.
 One implementer turn may take 300 s; a turn that runs past it is cut, costs one attempt, and starts again in a fresh session.
 An implementer reads only the files its context pack names, its task's files and its test, through a guard on every tool call of pi, OpenCode and Claude alike.
 The Read, Grep and Glob tools work on those files.

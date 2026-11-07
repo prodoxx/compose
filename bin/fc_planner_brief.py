@@ -30,6 +30,8 @@ Cut only this ticket's feature. Teammates you start run in own panes; never do t
    2. `### Codebase brief` in the feature's Notes; without it no file may be named.
    3. Acceptance criteria, each a testable behavior traceable to a decision line or the spec's words.
    4. Every criterion maps to a file or symbol via `trail ask` or `trail callers`; new files listed as new.
+      The learnings `trail ask` prints above the code are past sessions' notes on this repo: read them, and put a watch-out that touches a task's files in that task's brief as a fact (implementers never read trail notes).
+      A task you re-cut after a miss starts from its retrospective, `compose retro --project {slug} --task <id>`: each attempt, what it did, and why it missed; the new tasks name what the attempts missed.
    5. Test runner known (verify.json `checks`, else codebase brief) and a check per task for `test:`.
    6. No open how: every "how" stated or obvious from named files.
    7. Groundwork contract (contract.md) is for the test writers of protected tasks; implementers never see it. State in the brief test paths,

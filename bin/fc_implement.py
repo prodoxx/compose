@@ -1,6 +1,6 @@
 import json, os, re, shlex, shutil, subprocess, sys, time, uuid
 from pathlib import Path
-import fc_core, fc_pause, fc_config, fc_providers, fc_readguard, fc_tasks, fc_linear, fc_claude, fc_models, fc_proc, fc_load, fc_harness, fc_herdr, fc_worktree, fc_layers, fc_libapi, fc_green, fc_gate, fc_fast, fc_format, fc_started, fc_figma, fc_trailpack, fc_attempt
+import fc_core, fc_pause, fc_config, fc_providers, fc_readguard, fc_tasks, fc_linear, fc_claude, fc_models, fc_proc, fc_load, fc_harness, fc_herdr, fc_worktree, fc_layers, fc_libapi, fc_green, fc_gate, fc_fast, fc_format, fc_started, fc_figma, fc_trailpack, fc_attempt, fc_reader, fc_retro
 
 def implementer(cwd, model, prompt, session=None, task=None, timeout=None):
     """Route a turn to the harness named by the model id: `pi:<provider/model>` runs pi (as a named herdr agent when the run
@@ -122,30 +122,6 @@ def task_base(repo, proj, meta):
         # Base on the highest dependency, not the chain top: layers ordered after this task must stay above it in history.
         base = max(unmerged, key=chain.index)
         return base, fc_core.sh(["git", "rev-parse", base], repo).stdout.strip()
-
-READER_TIMEOUT = 120  # seconds the test reader may take before the raw tail goes back alone
-
-def read_failure(wt, meta, output, log_path):
-    """(brief, usage): the test reader's short fix brief for a failed test run, for the implementer's next attempt. The reader
-    (models.test_reader, Claude Haiku by default) runs headless in the task's clone with read-only tools, so it can point at the
-    file:line but never edit or run anything. ("", None) when no Claude reader is set, or it fails or times out: the raw tail
-    always follows, so this only ever adds."""
-    if not fc_config.TEST_READER or not (fc_claude.is_claude(fc_config.TEST_READER) or fc_harness.harness_of(fc_config.TEST_READER)):
-        return "", None
-    prompt = (f"A test run failed in this repository.\nTest command: {meta['test']}\nFull output: {log_path}\nOutput (tail):\n{output[-6000:]}\n\n"
-              f"Files the fix may change: {', '.join(meta['files']) or 'any'}. Open the test file and those files with Read when the output alone does not "
-              "show where the problem is; you cannot edit files or run commands. "
-              "Reply with at most 8 short lines and nothing else: each failing case, what it expected versus what it got, and the file:line "
-              "to look at. No advice beyond that, no code.")
-    try:
-        if fc_harness.harness_of(fc_config.TEST_READER):
-            p = fc_proc.run(fc_harness.once_command(fc_config.TEST_READER, wt, prompt, read_only=True), cwd=wt, env=fc_claude.headless_env(), timeout=READER_TIMEOUT)
-            _, reply, _, usage = fc_harness.once_result(fc_config.TEST_READER, p)
-        else:
-            _, reply, _, usage = fc_claude.claude_once(wt, prompt, timeout=READER_TIMEOUT, model=fc_claude.claude_id(fc_config.TEST_READER), tools="Read,Grep,Glob")
-    except Exception:  # noqa: BLE001 - a timeout or a refused call leaves the raw tail
-        return "", None
-    return reply.strip()[:1500], usage
 
 HANG_HINT = ("The test did not finish within {limit}s, so it hangs: most likely a deadlock (for example a query run while "
              "another query's rows are still open on a single connection) or something waiting forever. Fix the hang.")
@@ -474,7 +450,8 @@ def run_task(repo, proj, task, attempts, model=None, reset_files=False, tag=""):
             (proj / "results").mkdir(parents=True, exist_ok=True)
             log_path = proj / "results" / f"{tid}.test.log"
             log_path.write_text(output)
-            entry["summary"], reader = read_failure(wt, meta, output, log_path)
+            diff = fc_core.sh(["git", "diff", "--cached", base], wt, check=False).stdout  # the attempt's change, for the reader's DID and WHY
+            entry["summary"], reader = fc_reader.read_failure(wt, meta, output, log_path, diff=diff, earlier=fc_reader.reflections(log[:-1]))
             if reader:
                 entry["reader"] = {"model": fc_config.TEST_READER, "usage": reader}
                 cost, reference_cost = fc_attempt.tally(cost, reference_cost, reader)
@@ -505,7 +482,7 @@ def run_task(repo, proj, task, attempts, model=None, reset_files=False, tag=""):
         if broke:
             problems.append(fc_gate.advice(broke))
         status = fc_attempt.miss_status(test.returncode, over, new_docs, stray, broke, status)
-        prompt = "\n\n".join(problems) + "\nFix it without editing protected files."
+        prompt = fc_reader.retry_note(log) + "\n\n".join(problems) + "\nFix it without editing protected files."
         fresh = original_prompt + "\n\nA previous attempt left edits in the files and did not pass:\n\n" + prompt
         if cut:  # the cut-short turn already counted; its session is gone, so the next one starts from the task and what it left
             prompt = fresh
@@ -559,6 +536,8 @@ def run_task(repo, proj, task, attempts, model=None, reset_files=False, tag=""):
               "started_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(started)), "seconds": total, "cost": round(cost, 6),
               "reference_cost": round(reference_cost, 6), "branch": branch, "base": base_name, "worktree": str(wt), "diffstat": diff, "log": log}
     (proj / "results").mkdir(exist_ok=True)
+    if status not in ("passed", "unproven", "already_green") and not reset_files and not tag:  # what a miss taught, for the planner, the toolsmith and the trail
+        result["retrospective"] = fc_retro.record(proj, meta, result)
     fc_core.atomic_write(res, json.dumps(result, indent=2))
     if not reset_files and not tag:
         fc_linear.linear_event(proj, meta, status if status in ("passed", "unproven") else "failed", result)

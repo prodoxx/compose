@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fc_cost, fc_mcp  # noqa: E402
-import fc_core, fc_proc, fc_readguard, fc_libapi, fc_green, fc_gate, fc_config, fc_compact, fc_transcript, fc_snapshot, fc_compactlog, fc_tasks, fc_linear, fc_linear_cmd, fc_prd, fc_delivery, fc_factorystate, fc_factoryturn, fc_lead, fc_factory, fc_claude, fc_models, fc_route, fc_quick, fc_herdr, fc_worktree, fc_layers, fc_blockers, fc_stack, fc_change, fc_frame0, fc_f0pages, fc_ask, fc_decide, fc_hooks, fc_pin, fc_reports, fc_manager, fc_compactor, fc_crew, fc_toolbug, fc_init, fc_clean, fc_figma, fc_briefs, fc_buildercheck, fc_reconcile, fc_format, fc_implement, fc_shrink, fc_jev, fc_accept, fc_fixround, fc_detach, fc_verify, fc_taskreview, fc_ship, fc_prove, fc_run, fc_status, fc_tiers, fc_tierpin, fc_budget, fc_spec, fc_watch, fc_rewake, fc_history, fc_yolo, fc_bench, fc_setup, fc_update, fc_readiness  # noqa: E402
+import fc_core, fc_proc, fc_readguard, fc_libapi, fc_green, fc_gate, fc_config, fc_compact, fc_transcript, fc_snapshot, fc_compactlog, fc_tasks, fc_linear, fc_linear_cmd, fc_prd, fc_delivery, fc_factorystate, fc_factoryturn, fc_lead, fc_factory, fc_claude, fc_models, fc_route, fc_quick, fc_herdr, fc_worktree, fc_layers, fc_blockers, fc_stack, fc_change, fc_frame0, fc_f0pages, fc_ask, fc_decide, fc_hooks, fc_pin, fc_reports, fc_manager, fc_compactor, fc_crew, fc_toolbug, fc_init, fc_clean, fc_figma, fc_briefs, fc_buildercheck, fc_reconcile, fc_format, fc_implement, fc_shrink, fc_jev, fc_accept, fc_fixround, fc_detach, fc_verify, fc_taskreview, fc_ship, fc_prove, fc_run, fc_status, fc_tiers, fc_tierpin, fc_budget, fc_spec, fc_watch, fc_rewake, fc_history, fc_yolo, fc_bench, fc_setup, fc_update, fc_readiness, fc_retro, fc_reader  # noqa: E402
 
 DETACHED = fc_detach.DETACHED
 
@@ -126,6 +126,7 @@ def main():
                             ("away", fc_yolo.cmd_yolo, "the product owner is away until their first message: [--push] [words] enters, `decided \"<q>: <a>\"` logs an answer taken, --clear-words empties the words, `digest` prints the digest, `off` prints it and archives"),
                             ("yolo", fc_yolo.cmd_yolo, "the engineering manager answers until an explicit off, and the product owner may steer: [--push] [words] enters, `decided \"<q>: <a>\"` logs an answer taken, --clear-words empties the words, `digest` prints the digest, `off` prints it and archives"),
                             ("change", fc_change.cmd_change, "start | done | undo | keep|part|discard <task id> [--files a,b] a change of course: what changed in Linear and why, undoable; settle paused work"),
+                            ("retro", fc_retro.cmd_retro, "the project's task retrospectives (what each missed task's attempts did and why); --task NNN one in full; --learnings a trail learning drafted from them; --history the pass rates over every run of the repository by model, route and tier"),
                             ("decisions", fc_decide.cmd_decisions, "print the project's pending-decisions page: every open question with its recommendation and when it was asked, then the decisions to confirm; --issue picks another map"),
                             ("decide", fc_decide.cmd_decide, "record the product owner's decisions on the map (--new \"<decision>\" --closes Q1, --drop Q2, or --accept-all) with their words attached: --quote \"<what they said>\"; without it, under away or yolo as unconfirmed, or with --ruling as compose's own call on an easily reversible decision; it prints the open questions left"),
                             ("reconcile", fc_reconcile.cmd_reconcile, "the one-time cleanup of a messy Linear project: list | check --file | show | apply --go | notices"),
@@ -260,6 +261,10 @@ def main():
             s.add_argument("--attention", action="store_true", help="wake only for what needs attention (done, needs-user, blocked, tool-bug, a stall, payment, a crash, a sign-in screen); progress lines print in the same wake as the next one. The default for --from orchestrator")
             s.add_argument("--all", action="store_true", help="wake on every progress line too, even for --from orchestrator")
             s.add_argument("--from", dest="from_", help="only these teammates wake you (roles or agent names, comma-separated); the engineering manager passes orchestrator, its team lead's role, and gets it by default once a team lead exists")
+        if name == "retro":
+            s.add_argument("--task", metavar="NNN", help="print one task's newest retrospective in full")
+            s.add_argument("--learnings", action="store_true", help="draft a trail learning from the project's retrospectives, in `trail note` shape, for the team lead to cut down and save")
+            s.add_argument("--history", action="store_true", help="first-try and final pass rates over every task of this repository's run history (one project's with --project), by model, route, tier and outcome, then the verify runs")
         if name == "status":
             s.add_argument("--history", nargs="?", type=int, const=fc_history.SHOWN, metavar="N", help=f"the last N (default {fc_history.SHOWN}) lines of this repository's run history (runs, task results, verify rounds), kept outside the worktrees, instead of the board")
             s.add_argument("--digest", action="store_true", help="one line per project: tasks done, run, last verify and why it failed, questions waiting")

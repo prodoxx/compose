@@ -38,6 +38,8 @@ class Record(Repo):
         [e] = self.lines()
         self.assertEqual(sorted(e), ["at", "cost", "kind", "model", "outcome", "project", "repo", "task"])
         self.assertEqual((e["project"], e["repo"], e["kind"], e["task"]), ("p", str(self.repo), "task", "001"))
+        fc_history.record(self.proj, self.repo, "task", task="002", route="test-first", tier="cheap")  # what `compose retro --history` groups by
+        self.assertEqual({k: self.lines()[-1][k] for k in ("route", "tier")}, {"route": "test-first", "tier": "cheap"})
         with mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "sk-secret-value-123"}):
             fc_history.record(self.proj, self.repo, "task", task="x", model="sk-secret-value-123")
         self.assertNotIn("sk-secret-value-123", (self.cfg / "history.jsonl").read_text())

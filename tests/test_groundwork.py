@@ -331,16 +331,16 @@ class ReadFailure(unittest.TestCase):
             calls.append((model, tools, prompt))
             return None, "\nt.py::test_x expected 2, got 1; look at a.py:3\n", 2, {"cost": 0.0, "reference_cost": 0.002}
         with mock.patch.object(fc.fc_claude, "claude_once", once):
-            brief, usage = fc.fc_implement.read_failure(Path("/w"), meta, "FAIL test_x", Path("/w/001.test.log"))
+            brief, usage = fc.fc_reader.read_failure(Path("/w"), meta, "FAIL test_x", Path("/w/001.test.log"))
         self.assertEqual((brief, usage["reference_cost"]), ("t.py::test_x expected 2, got 1; look at a.py:3", 0.002))
         model, tools, prompt = calls[0]
         self.assertEqual((model, tools), ("claude-haiku-5-5", "Read,Grep,Glob"))
         for part in ("FAIL test_x", "pytest t.py", "/w/001.test.log", "a.py", "file:line"):
             self.assertIn(part, prompt)
         with mock.patch.object(fc.fc_claude, "claude_once", side_effect=subprocess.TimeoutExpired("claude", 120)):
-            self.assertEqual(fc.fc_implement.read_failure(Path("/w"), meta, "FAIL", Path("/w/l")), ("", None))
+            self.assertEqual(fc.fc_reader.read_failure(Path("/w"), meta, "FAIL", Path("/w/l")), ("", None))
         with mock.patch.object(fc.fc_config, "TEST_READER", None), mock.patch.object(fc.fc_claude, "claude_once", side_effect=AssertionError("no reader set")):
-            self.assertEqual(fc.fc_implement.read_failure(Path("/w"), meta, "FAIL", Path("/w/l")), ("", None))
+            self.assertEqual(fc.fc_reader.read_failure(Path("/w"), meta, "FAIL", Path("/w/l")), ("", None))
 
 
 class CrewWorkdir(unittest.TestCase):
@@ -742,6 +742,20 @@ class ToolsmithBrief(unittest.TestCase):
             self.assertIn("never edit, commit, push, or fix", out, state)
             for word in ("tool-bug pr", "open PR", "--worktree", "Fixes #", "own branch"):
                 self.assertNotIn(word, out, state)
+
+    def test_the_brief_carries_the_projects_misses_that_point_at_compose_as_evidence_never_as_a_second_assignment(self):
+        self.entry("shop", "boom")
+        self.assertNotIn("ended on compose", self.brief("maintainer"))
+        proj = self.home / "shop"
+        (proj / "results").mkdir(parents=True)
+        fc.fc_retro.record(proj, {"id": "004", "title": "Save it", "files": []}, {"id": "004", "status": "failed", "model": "m", "attempts": 1, "cost": 0.0, "log": [{"attempt": 1, "error": "implementer timed out"}]})
+        fc.fc_retro.record(proj, {"id": "005", "title": "Show it", "files": []}, {"id": "005", "status": "failed", "model": "m", "attempts": 1, "cost": 0.0, "log": [{"attempt": 1, "test_exit": 1}]})
+        out = self.brief("maintainer")
+        self.assertIn("Tasks of this project that ended on compose or a provider, not the code", out)
+        self.assertIn("  004 Save it: failed after 1 attempt(s); attempt 1: implementer timed out\n", out)
+        self.assertNotIn("005 Show it", out)
+        self.assertIn("a different failure is not your assignment", out)
+        self.assertIn("compose retro --project shop --task <id>", out)
 
     def test_no_entry_for_the_project_exits_naming_it(self):
         for setup in (lambda: None, lambda: self.entry("other", "not ours")):
