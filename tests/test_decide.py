@@ -138,7 +138,7 @@ class Decide(unittest.TestCase):
         self.assertIn("## Not yet specified\n\n- Q2: Which database?", body)
         self.assertIn("recorded on NEB-1: D5: Clerk", out)
         self.assertIn("open questions on NEB-1 (1):\n- Q2: Which database?", out)
-        self.assertIn("tell the team lead: herdr agent prompt shop-orchestrator", out)
+        self.assertIn("tell the team lead: compose crew prompt --project shop --role orchestrator", out)
         self.assertNotIn("\u2014", body + out)
 
     def test_one_answer_may_close_several_questions_and_the_last_leaves_none_open(self):

@@ -54,7 +54,7 @@ class Stuck(unittest.TestCase):
         self.assertEqual(len(ev), 1, ev)
         self.assertIn("stall=limit agent=hw-builder", ev[0])
         self.assertIn("Retrying in 8s (attempt 4/10) · 401", ev[0])
-        self.assertIn("herdr agent read hw-builder --lines 60", ev[0])
+        self.assertIn("compose crew read --project <slug> --agent hw-builder --lines 60", ev[0])
         self.assertEqual(self.stalls(10), [])  # once per spell
 
     def test_a_line_that_scrolls_away_ends_the_spell_and_a_later_spell_fires_again(self):

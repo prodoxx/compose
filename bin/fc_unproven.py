@@ -2,7 +2,7 @@
 import json
 from pathlib import Path
 
-import fc_herdr
+import fc_herdr, fc_fleet
 
 
 def reason(proof, saved=True):
@@ -37,12 +37,12 @@ def prompt_text(proof):
 def writer_live(proj, tid):
     """True when the task's `tests-<tid>` writer is live in the project's herdr space."""
     name = fc_herdr.agent_name(proj.name, f"tests-{tid}")
-    return any(a["name"] == name and a["workspace_id"] == fc_herdr.herdr_project_space(proj) for a in fc_herdr.live_agents())
+    return any(a["name"] == name and a["workspace_id"] == fc_fleet.project_space(proj) for a in fc_fleet.live_agents())
 
 
 def reprompt(proj, tid, text):
     """Send `text` to the task's writer; whether herdr answered."""
-    return fc_herdr.herdr("agent", "prompt", fc_herdr.agent_name(proj.name, f"tests-{tid}"), text) is not None
+    return fc_fleet.prompt(fc_herdr.agent_name(proj.name, f"tests-{tid}"), text)[1] is None
 
 
 def restartable(proj, tid):

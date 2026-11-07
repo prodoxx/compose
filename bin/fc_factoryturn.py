@@ -1,7 +1,7 @@
 """The build loop's decision step: what is in flight, and which ready stories to start next."""
 import copy, hashlib, json, os, re, subprocess, sys, time, traceback
 from pathlib import Path
-import fc_change, fc_config, fc_core, fc_crew, fc_delivery, fc_linearapi, fc_herdr, fc_linear, fc_load, fc_plan, fc_prd, fc_readiness, fc_reconcile, fc_tasks
+import fc_change, fc_config, fc_core, fc_crew, fc_delivery, fc_linearapi, fc_herdr, fc_fleet, fc_linear, fc_load, fc_plan, fc_prd, fc_readiness, fc_reconcile, fc_tasks
 import fc_factorystate, fc_lead
 
 JUDGE_LIMIT = 6
@@ -159,7 +159,7 @@ def compose_cli(args, stdin=None, pane=None):
     """Run one compose command as the engineering manager, from its pane when given (the loop's own may be stale); its stdout, or RuntimeError with its stderr."""
     env = {k: v for k, v in os.environ.items() if k != "COMPOSE_ROLE"}
     if pane:
-        env["HERDR_PANE_ID"] = pane
+        env[fc_fleet.session_var()] = pane
     try:
         p = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "compose.py"), *map(str, args)], input=stdin,
                            stdin=None if stdin is not None else subprocess.DEVNULL, capture_output=True, text=True, env=env, timeout=CLI_TIMEOUT)
@@ -176,12 +176,12 @@ class HerdrDown(RuntimeError):
 
 def leads_or_none(repo):
     """live_leads, or None when herdr's agent list call failed (a failure is not "no lead")."""
-    got = fc_herdr.herdr("agent", "list")
+    got = fc_fleet.agent_list()
     return None if not isinstance(got, dict) else fc_reconcile.leads_among(repo, got.get("agents") or [])
 
 def prompt_lead(name, text):
     """Send a prompt to a live team lead; whether herdr took it."""
-    return fc_herdr.herdr("agent", "prompt", name, text) is not None
+    return fc_fleet.prompt(name, text)[1] is None
 
 def _add_story(proj, story):
     meta = _linear(proj)

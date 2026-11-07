@@ -4,7 +4,7 @@ them. Each project pins the version it started on (~/.compose/pins), and an upda
 since the pin, so its team lead re-reads those and nothing else."""
 import atexit, json, os, shlex, sys, threading, time
 from pathlib import Path
-import fc_core, fc_config, fc_tasks, fc_init, fc_links, fc_hooks, fc_herdr, fc_pin
+import fc_core, fc_config, fc_tasks, fc_init, fc_links, fc_hooks, fc_herdr, fc_fleet, fc_pin
 
 
 def live_dir():
@@ -22,23 +22,27 @@ def hold(kind, project, repo):
                                         "since": time.strftime("%H:%M"), "started": time.time()}))
     atexit.register(f.unlink, missing_ok=True)
     _stages.clear()
+    _stage_states.clear()
     if hold_stage not in fc_herdr.STAGE_OBSERVERS:
         fc_herdr.STAGE_OBSERVERS.append(hold_stage)
 
-def hold_stage(name, state):
+_stage_states = {}  # every stage's last state: name -> [state, message, when], for `compose stages` (a pane that follows the verify)
+
+def hold_stage(name, state, message=""):
     """Keep in this process's hold file the verify stages that are working and since when (`stages`): a stage going `working` is added,
-    one going idle or blocked is dropped. A process that holds nothing records nothing."""
+    one going idle or blocked is dropped; and each stage's last state and message (`stage_states`). A process that holds nothing records nothing."""
     f = live_dir() / f"{os.getpid()}.json"
     with _stages_lock:
         if state == "working":
             _stages.setdefault(name, time.time())
         else:
             _stages.pop(name, None)
+        _stage_states[name] = [state, message, time.time()]
         try:
             held = json.loads(f.read_text())
         except (OSError, ValueError):
             return
-        fc_core.atomic_write(f, json.dumps({**held, "stages": dict(_stages)}))
+        fc_core.atomic_write(f, json.dumps({**held, "stages": dict(_stages), "stage_states": dict(_stage_states)}))
 
 def live_work():
     """The runs and verifies alive on this machine, each {pid, kind, project, repo, since}; the files of dead processes are removed."""
@@ -89,7 +93,7 @@ def refuse_while_running(cmd, proj, repo):
 
 def mid_turn(pins, agents=None):
     """[(project, teammate)] for every teammate of a pinned project herdr shows working: a turn an update would change the skill under."""
-    agents = fc_herdr.live_agents() if agents is None else agents
+    agents = fc_fleet.live_agents() if agents is None else agents
     return [(p["project"], ag["name"]) for p in pins for ag in agents or []
             if ag.get("agent_status") == "working" and fc_herdr.agent_id(p["project"], ag.get("name") or "")]
 

@@ -964,7 +964,7 @@ class HerdrPiTurn(unittest.TestCase):
         session = {"name": "shop-028", "pane": "p1", "sfile": str(self.sfile), "seen": 0}
         task = {"meta": {"id": "028", "title": "t"}, "proj": self.root / "shop", "space": "w9"}
         with mock.patch.object(fc.fc_herdr, "herdr", herdr), mock.patch.object(fc.fc_herdr, "herdr_error", herdr_error), \
-                mock.patch.object(fc.fc_implement, "time", clock), mock.patch.object(fc.fc_herdr, "time", clock):
+                mock.patch.object(fc.fc_implement, "time", clock), mock.patch.object(fc.fc_herdr, "time", clock), mock.patch.object(fc.fc_fleet, "time", clock):
             return fc.fc_implement.herdr_pi(str(self.root / "wt"), "openrouter/x/y", "hi", session, task, timeout=180)
 
     def sent(self, *what):

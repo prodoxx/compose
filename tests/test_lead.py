@@ -139,7 +139,7 @@ class Restart(Base):
         super().setUp()
         self.enter(mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj))
         self.enter(mock.patch.object(fc.fc_herdr, "herdr_env", return_value=True))
-        self.enter(mock.patch.object(fc.fc_herdr, "herdr_manager_claim"))
+        self.enter(mock.patch.object(fc.fc_fleet, "manager_claim"))
         self.enter(mock.patch.object(fc.fc_herdr, "herdr", side_effect=self.herdr))
         self.started = []
         self.enter(mock.patch.object(crew, "cmd_crew", side_effect=lambda a: self.started.append(a)))

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json, os, re, sys, time
 from pathlib import Path
 
-import fc_core, fc_config, fc_proc, fc_sleep, fc_models, fc_change, fc_herdr, fc_reconcile, fc_tasks, fc_factorystate, fc_factoryturn
+import fc_core, fc_config, fc_proc, fc_sleep, fc_models, fc_change, fc_herdr, fc_fleet, fc_reconcile, fc_tasks, fc_factorystate, fc_factoryturn
 import fc_nightstate, fc_answer, fc_nightprep, fc_digest  # fc_nightprep sets IDLE["night"] as it loads
 
 VERBS = ("night", "day", "digest", "answer", "prep")
@@ -139,7 +139,7 @@ def _before(repo, state, now, out) -> bool:
         leads = fc_reconcile.live_leads(repo)
     except ERRORS:
         leads = {}
-    read = lambda name: fc_herdr.herdr_text("agent", "read", name, "--source", "recent-unwrapped", "--lines", "12")
+    read = lambda name: fc_fleet.read(name, lines=12)
     out += fc_nightstate.usage_step(night, leads, now, read, fc_factoryturn.prompt_lead)
     if night.get("ended"):  # a billing banner seen twice: usage_step said it
         if _claim(repo, night):

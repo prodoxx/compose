@@ -1,6 +1,6 @@
 import json, os, sys, time
 from pathlib import Path
-import fc_cost, fc_core, fc_load, fc_tasks, fc_worktree, fc_layers, fc_blockers, fc_budget, fc_change, fc_linear, fc_ledger, fc_tierpin, fc_tierspend, fc_update, fc_routecost, fc_shed, fc_history, fc_herdr, fc_manager
+import fc_cost, fc_core, fc_load, fc_tasks, fc_worktree, fc_layers, fc_blockers, fc_budget, fc_change, fc_linear, fc_ledger, fc_tierpin, fc_tierspend, fc_update, fc_routecost, fc_shed, fc_history, fc_herdr, fc_fleet, fc_manager
 
 
 def project_head(repo, proj):
@@ -242,7 +242,7 @@ def in_flight(repo, proj):
 
 def render_status(repo, projects):
     out = []
-    agents = fc_manager.panes()[0] if fc_herdr.herdr_env() else None
+    agents = fc_manager.panes()[0] if fc_fleet.inside() else None
     for proj in projects:
         b = board(repo, proj)
         trunk, rows, layers = b["trunk"], b["rows"], b["layers"]
@@ -386,7 +386,7 @@ def cmd_done(a):
         fc_core.atomic_write(res, json.dumps(prev, indent=2))
         print(f"{tid} hand_done  {meta.get('title', '')}  ({a.note})")
         fc_linear.linear_event(proj, meta, "hand_done", prev)
-        fc_herdr.herdr_close_task(proj, tid)  # the pi pane of its earlier attempts
+        fc_fleet.close_task(proj, tid)  # the pi pane of its earlier attempts
     if unsaved:
         sys.exit(1)
 

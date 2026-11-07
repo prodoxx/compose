@@ -1,7 +1,7 @@
 import argparse, fcntl, json, re, sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-import fc_core, fc_config, fc_claude, fc_tasks, fc_herdr, fc_worktree, fc_change, fc_crew, fc_crewpick, fc_toolbug, fc_testred, fc_planner_brief, fc_prd, fc_retro
+import fc_core, fc_config, fc_claude, fc_tasks, fc_herdr, fc_fleet, fc_worktree, fc_change, fc_crew, fc_crewpick, fc_toolbug, fc_testred, fc_planner_brief, fc_prd, fc_retro
 
 
 # ---------- groundwork: the boilerplate brief, then one test-writing teammate per task on a shared contract ----------
@@ -294,7 +294,7 @@ def cmd_testcrews(a):
     if not metas:
         say_queued()
         return
-    fc_herdr.herdr_space(proj)  # once, before the parallel starts
+    fc_fleet.space(proj)  # once, before the parallel starts
     wts = {m["id"]: test_worktree(proj, m["id"]) for m in metas}  # serially: worktree adds share one lock
     def start(m):
         try:

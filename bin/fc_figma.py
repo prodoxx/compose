@@ -1,7 +1,7 @@
 import argparse, json, os, re, subprocess, sys, time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-import fc_core, fc_config, fc_pace, fc_steps, fc_tasks, fc_linear, fc_models, fc_herdr, fc_crew, fc_init, fc_figmaplan, fc_figmanodes, fc_figmashots
+import fc_core, fc_config, fc_pace, fc_steps, fc_tasks, fc_linear, fc_models, fc_herdr, fc_fleet, fc_crew, fc_init, fc_figmaplan, fc_figmanodes, fc_figmashots
 
 
 FIGMA_CONNECTOR = ("Figma tools: the authenticated Figma connector, `mcp__claude_ai_Figma__*` or the Figma plugin's `mcp__plugin_figma_figma__*` (the same server; use whichever ToolSearch finds), is for WRITES ONLY: `use_figma` (and the `create_session` it needs), never a read-only script, and never `whoami`, `get_libraries`, `search_design_system`, or `create_new_file`. Load it in one ToolSearch select call.\n"
@@ -188,13 +188,13 @@ def cmd_designcrews(a):
             print(f"===== design-{m['id']}\n{design_brief(m, figma, proj / 'results')}\n")
         return
     cfg = json.loads((proj / "verify.json").read_text()) if (proj / "verify.json").exists() else {}
-    space = fc_herdr.herdr_project_space(proj)
-    in_space = {ag.get("name"): ag for ag in fc_herdr.live_agents() if ag.get("workspace_id") == space}
+    space = fc_fleet.project_space(proj)
+    in_space = {ag.get("name"): ag for ag in fc_fleet.live_agents() if ag.get("workspace_id") == space}
     running = {m["id"]: fc_herdr.agent_name(proj.name, f"design-{m['id']}") for m in metas}
     for m in metas:  # herdr keeps listing an agent whose process exited (the pane is back at its shell): close it, so the task restarts
         ag = in_space.get(running[m["id"]])
-        if ag and ag.get("pane_id") and not fc_herdr.pane_processes(ag["pane_id"]):
-            print(f"design-{m['id']} is listed by herdr but its process has exited; closing its pane to start it again")
+        if ag and ag.get("pane_id") and not fc_fleet.pane_processes(ag["pane_id"]):
+            print(f"design-{m['id']} is listed by the host but its process has exited; closing its pane to start it again")
             try:
                 fc_crew.cmd_crew(argparse.Namespace(repo=a.repo, project=proj.name, action="stop", role=f"design-{m['id']}", force=True))
             except SystemExit as e:
@@ -204,12 +204,12 @@ def cmd_designcrews(a):
     live = set(in_space)
     for m in metas:  # a running builder keeps its task: starting it again only fails, and would read as a failure to retry
         if running[m["id"]] in live:
-            print(f"design-{m['id']} is already running; steer it with: herdr agent prompt {running[m['id']]} \"...\"")
+            print(f"design-{m['id']} is already running; steer it with: compose crew prompt --project {proj.name} --role design-{m['id']} \"...\"")
     metas = [m for m in metas if running[m["id"]] not in live]
     cap = a.max or cfg.get("design_concurrency") or DESIGN_CONCURRENCY  # never the config's `parallel`: Figma's per-minute write rate limit sets it
     # designcrews exits once the builders start, so nothing can start the rest later: the queued ids are printed with the command.
     metas, queued = metas[:cap], metas[cap:]
-    fc_herdr.herdr_space(proj)  # once, before the parallel starts
+    fc_fleet.space(proj)  # once, before the parallel starts
     def start(m):
         old = proj / "results" / f"{m['id']}.json"
         aside = old.with_name(old.name + ".before-redo")

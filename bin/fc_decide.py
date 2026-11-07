@@ -2,7 +2,7 @@
 with the product owner's words attached, as an unconfirmed recommendation while away or yolo is on, or as compose's own ruling
 on an easily reversible decision (`--ruling`), posture or not."""
 import json, re, sys, time
-import fc_core, fc_tasks, fc_linear, fc_linear_cmd, fc_plan, fc_herdr, fc_change, fc_ask
+import fc_core, fc_tasks, fc_linear, fc_linear_cmd, fc_plan, fc_herdr, fc_fleet, fc_change, fc_ask
 
 
 # ---------- the map's two decision sections ----------
@@ -330,7 +330,7 @@ def cmd_decide(a):
     print(open_left(ident, new_body))
     lead = fc_herdr.agent_name(proj.name, "orchestrator")
     note = f"recorded on {ident}: {', '.join(l.split(':')[0] for l in lines)}; read Decisions so far (tell the planner, or the change architect, if live)"
-    if fc_herdr.herdr_env() and fc_herdr.herdr("agent", "prompt", lead, note) is not None:
+    if fc_fleet.inside() and fc_fleet.prompt(lead, note)[1] is None:
         print(f"told {lead}")
     else:
-        print(f"tell the team lead: herdr agent prompt {lead} \"{note}\"")
+        print(f"tell the team lead: compose crew prompt --project {proj.name} --role orchestrator \"{note}\"")

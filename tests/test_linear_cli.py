@@ -168,7 +168,7 @@ class LinearStates(unittest.TestCase):
         self.assertEqual(fc.fc_tasks.linear_cache(self.proj)["tasks"][0]["linear_state"], "Todo")
 
     def test_done_by_hand_closes_the_pi_pane_its_earlier_attempts_left(self):
-        with mock.patch.object(fc.fc_herdr, "herdr_close_task") as close:
+        with mock.patch.object(fc.fc_fleet, "close_task") as close:
             self.done("003,004")
         self.assertEqual([c.args[1] for c in close.call_args_list], ["003", "004"])
 

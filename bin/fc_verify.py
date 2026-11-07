@@ -1,7 +1,7 @@
 import itertools, json, os, re, shutil, subprocess, sys, tempfile, time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-import fc_core, fc_proc, fc_config, fc_tasks, fc_ledger, fc_linear, fc_models, fc_herdr, fc_worktree, fc_layers, fc_change, fc_routecost, fc_implement, fc_green, fc_gate, fc_init, fc_jev, fc_accept, fc_reroute, fc_costevent, fc_review, fc_history, fc_load, fc_trailpack, fc_update, fc_fixround, fc_keepout
+import fc_core, fc_proc, fc_config, fc_tasks, fc_ledger, fc_linear, fc_models, fc_herdr, fc_fleet, fc_worktree, fc_layers, fc_change, fc_routecost, fc_implement, fc_green, fc_gate, fc_init, fc_jev, fc_accept, fc_reroute, fc_costevent, fc_review, fc_history, fc_load, fc_trailpack, fc_update, fc_fixround, fc_keepout
 
 CHECK_TIMEOUT = 900  # seconds a check may run; past it the check fails, named as a timeout
 
@@ -120,7 +120,7 @@ def e2e_stage(repo, cfg, panes, report, findings, results=None, retry=True, keep
         for i, case in enumerate(cfg.get("e2e", [])):
             t1 = time.time()
             stage = f"e2e {case.get('name', i)}"[:40]
-            fc_herdr.herdr_stage(panes, stage, "working")
+            fc_fleet.stage(panes, stage, "working")
             record = {"record_dir": str(shots / f"{i + 1:02d}-{re.sub(r'[^A-Za-z0-9._-]+', '-', str(case.get('name', 'case')))[:60]}"), "keep_record": keep} \
                 if shots and not case.get("driver") else {}
             run_case = lambda: fc_jev.jev_e2e({**case, **record, "env": {**env, **(case.get("env") or {})}}, repo)
@@ -133,7 +133,7 @@ def e2e_stage(repo, cfg, panes, report, findings, results=None, retry=True, keep
             report["e2e"].append(r)
             ok &= r["exit"] == 0
             verdict = "ok  " if r["exit"] == 0 else "TOOL ERROR" if r["tool_error"] and retry else "FAIL"  # prove expects its cases to fail: a blocked jev is not a tool error there
-            fc_herdr.herdr_stage(panes, stage, "idle" if r["exit"] == 0 else "blocked", verdict.strip())
+            fc_fleet.stage(panes, stage, "idle" if r["exit"] == 0 else "blocked", verdict.strip())
             fc_jev.say_case(case.get("name"), r, verdict)
             if r["exit"] and not r["tool_error"]:  # a tool crash is not the app's failure: no fixer gets it
                 findings.append(f"E2E failed: {case.get('name')}\n{r['stdout']}\n{r['stderr']}")
@@ -185,7 +185,7 @@ def run_stages(repo, proj, cfg, a, tests=None):
     e2e_cases = [] if a.skip_e2e or review_only else cfg.get("e2e", [])
     stages = (["checks"] if (cfg.get("checks") or tests) and not review_only else []) + [f"e2e {c.get('name', i)}"[:40] for i, c in enumerate(e2e_cases)] \
         + ([] if a.skip_review else (["review"] if cfg.get("review", True) else []) + (["jev"] if cfg.get("jev_acceptance", True) and cfg.get("depth") != "FAST" else []))
-    panes = fc_herdr.herdr_verify_panes(fc_herdr.herdr_space(proj), repo, stages, fc_herdr.tab_label(proj, "verify"))
+    panes = fc_fleet.verify_panes(proj, fc_fleet.space(proj), repo, stages, fc_herdr.tab_label(proj, "verify"))
 
     def run_checks(cmds, into):
         for c in cmds:
@@ -220,14 +220,14 @@ def run_stages(repo, proj, cfg, a, tests=None):
             if p.returncode and not tool:
                 findings.append(f"Command failed: {c}\n{failure_summary(full, out, record['output_file'])}")
         passed = all(c["exit"] == 0 for c in into)
-        fc_herdr.herdr_stage(panes, "checks", "idle" if passed else "blocked", "ok" if passed else "FAIL")
+        fc_fleet.stage(panes, "checks", "idle" if passed else "blocked", "ok" if passed else "FAIL")
         return passed
 
     checks_pass = None  # no checks ran: the reviewers are not told the tests pass
     if not review_only:
         if cfg.get("checks") or tests:
             fc_load.wait(fc_core.say, getattr(a, "force", False))
-        fc_herdr.herdr_stage(panes, "checks", "working", "" if tests is None else "the fix's tests")
+        fc_fleet.stage(panes, "checks", "working", "" if tests is None else "the fix's tests")
         if tests is not None:
             fc_core.say(f"check  scope  {len(tests)} task test(s) for the fix; the full checks run once every stage passes")
         checks_pass = run_checks(cfg.get("checks", []) if tests is None else tests, report["checks"] if tests is None else report["scoped"])
@@ -240,13 +240,13 @@ def run_stages(repo, proj, cfg, a, tests=None):
     e2e = pool.submit(e2e_stage, repo, cfg, panes, report, findings, proj / "results") if not a.skip_e2e and cfg.get("e2e") and not review_only else None
     if not a.skip_review and cfg.get("review", True):
         t1 = time.time()
-        fc_herdr.herdr_stage(panes, "review", "working")
+        fc_fleet.stage(panes, "review", "working")
         diff, plan, docs, _ = review_inputs(repo, proj, cfg)
         rv = fc_review.llm_review(cfg, diff, plan, docs, bool(checks_pass))
         rv["seconds"] = round(time.time() - t1, 1)
         report["review"] = rv
         ok &= rv["pass"]  # review always gates; the jev acceptance stage below is advisory unless asked to gate
-        fc_herdr.herdr_stage(panes, "review", "idle" if rv["pass"] else "blocked", f"{len(rv['confirmed'])} confirmed")
+        fc_fleet.stage(panes, "review", "idle" if rv["pass"] else "blocked", f"{len(rv['confirmed'])} confirmed")
         verdict = "ok  " if rv["pass"] else "FAIL" if any(i["severity"] == "high" for i in rv["confirmed"]) else "TOOL ERROR"  # no confirmed high: only a confirm call failed
         fc_core.say(f"review {verdict} {fc_core.fmt(rv['seconds']):>8}  {len(rv['confirmed'])} confirmed of {len(rv['issues'])} raised"
                     + (f", {rv['malformed']} malformed dropped" if rv.get("malformed") else ""))
@@ -260,7 +260,7 @@ def run_stages(repo, proj, cfg, a, tests=None):
                             + (f"\nMust read: {i['fix'] or '(remove the line)'}" if "fix" in i else ""))
     if not a.skip_review and cfg.get("jev_acceptance", True) and cfg.get("depth") != "FAST":
         t1 = time.time()
-        fc_herdr.herdr_stage(panes, "jev", "working")
+        fc_fleet.stage(panes, "jev", "working")
         diff = fc_worktree.project_diff(repo, cfg)  # whole: each task's hunks are picked from it, so the reviewers' cut pack would drop late files
         try:
             acc = fc_accept.jev_acceptance(cfg, proj, diff, repo=repo, fresh=getattr(a, "fresh", False))
@@ -273,7 +273,7 @@ def run_stages(repo, proj, cfg, a, tests=None):
             ok &= acc["pass"]
         n = len(acc.get("criteria", []))
         met = sum(r["choice"] == "MET" for r in acc.get("criteria", []))
-        fc_herdr.herdr_stage(panes, "jev", "idle" if acc["pass"] or not gate else "blocked", f"{met}/{n} met")
+        fc_fleet.stage(panes, "jev", "idle" if acc["pass"] or not gate else "blocked", f"{met}/{n} met")
         fc_core.say(f"jev    {'ok  ' if acc['pass'] else ('FAIL' if gate else 'warn')} {fc_core.fmt(acc['seconds']):>8}  {met}/{n} criteria met, "
             f"{len(acc.get('unclear', []))} unproven"
             + (f", {n_test} proven by their task's test" if (n_test := sum(bool(r.get("proven_by")) for r in acc.get("criteria", []))) else "")
@@ -294,7 +294,7 @@ def run_stages(repo, proj, cfg, a, tests=None):
     pool.shutdown()
     if ok and tests is not None and cfg.get("checks"):  # the fix passed its own tests and every stage: no regression anywhere else
         fc_core.say("check  full   every check, once, after the fix passed every stage")
-        fc_herdr.herdr_stage(panes, "checks", "working", "full checks")
+        fc_fleet.stage(panes, "checks", "working", "full checks")
         ok &= run_checks(cfg["checks"], report["checks"])
     fc_core.flag_home(home, "verify's checks and e2e")
     return ok, report, "\n\n".join(findings)
@@ -593,6 +593,6 @@ def verify_rounds(repo, proj, cfg, a, rounds, t0, left_out=()):
     if not ok and not left_out and not lost:  # a smoke run is a sign of life only; its findings never reach the reflect screen
         print("\nUnresolved after the fix budget. Escalate to the team lead with the confirmed findings above.")
         verify_failed(proj, rounds, findings)
-    if ok and (space := fc_herdr.herdr_project_space(proj)):  # a failed run keeps its tab to read, like a missed task's pane
-        fc_herdr.herdr_close_tabs(space, fc_herdr.tab_label(proj, "verify"))
+    if ok and (space := fc_fleet.project_space(proj)):  # a failed run keeps its tab to read, like a missed task's pane
+        fc_fleet.close_tabs(space, fc_herdr.tab_label(proj, "verify"))
     sys.exit(0 if ok else 1)

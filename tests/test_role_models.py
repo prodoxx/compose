@@ -62,7 +62,7 @@ class RoleModels(unittest.TestCase):
         with mock.patch.object(fc.fc_core, "project_dir", return_value=proj), mock.patch.object(fc.fc_herdr, "project_worktree", return_value=proj), \
                 mock.patch.object(fc.fc_herdr, "herdr_env", return_value=True), mock.patch.object(fc.fc_herdr, "herdr", herdr), \
                 mock.patch.object(fc.fc_herdr, "herdr_space", return_value="w9"), mock.patch.object(fc.fc_crew, "crew_preamble", return_value=""), \
-                mock.patch.object(fc.fc_claude, "claude_trusted", return_value=True), mock.patch.object(fc.fc_herdr, "herdr_await_start"), \
+                mock.patch.object(fc.fc_claude, "claude_trusted", return_value=True), mock.patch.object(fc.fc_fleet, "await_start"), \
                 contextlib.redirect_stdout(io.StringIO()) as out:
             fc.fc_crew.cmd_crew(a)
         self.assertIn("teammate p-groundwork started in tab 'groundwork' of space p on claude:claude-sonnet-5-5", out.getvalue())
@@ -231,7 +231,7 @@ class PlannerChain(unittest.TestCase):
         with self.probe(False), mock.patch.object(fc.fc_herdr, "herdr", herdr), mock.patch.object(fc.fc_herdr, "herdr_env", return_value=True), \
                 mock.patch.object(fc.fc_core, "project_dir", return_value=proj), mock.patch.object(fc.fc_herdr, "project_worktree", return_value=proj), \
                 mock.patch.object(fc.fc_herdr, "herdr_space", return_value="w9"), mock.patch.object(fc.fc_crew, "crew_preamble", return_value=""), \
-                mock.patch.object(fc.fc_crew, "write_report"), mock.patch.object(fc.fc_claude, "claude_trusted", return_value=True), mock.patch.object(fc.fc_herdr, "herdr_await_start"), \
+                mock.patch.object(fc.fc_crew, "write_report"), mock.patch.object(fc.fc_claude, "claude_trusted", return_value=True), mock.patch.object(fc.fc_fleet, "await_start"), \
                 contextlib.redirect_stdout(io.StringIO()) as out:
             fc.fc_crew.cmd_crew(a)
         self.assertIn("WARNING: architect wanted its first-choice model but claude:claude-fable-5-1 unavailable", out.getvalue())
@@ -435,7 +435,7 @@ class TestCrewTiers(unittest.TestCase):
         with mock.patch.object(fc.fc_herdr, "herdr", herdr), mock.patch.object(fc.fc_herdr, "herdr_env", return_value=True), mock.patch.object(fc.fc_core, "project_dir", return_value=proj), \
                 mock.patch.object(fc.fc_herdr, "project_worktree", return_value=proj), mock.patch.object(fc.fc_herdr, "herdr_space", return_value="w9"), mock.patch.object(fc.fc_crew, "crew_preamble", return_value=""), \
                 mock.patch.object(fc.fc_crew, "write_report"), mock.patch.object(fc.fc_claude, "claude_trusted", return_value=True), \
-                mock.patch.object(fc.fc_herdr, "herdr_await_start"), mock.patch.object(fc_tierspend, "frontier", return_value=spend), contextlib.redirect_stdout(io.StringIO()):
+                mock.patch.object(fc.fc_fleet, "await_start"), mock.patch.object(fc_tierspend, "frontier", return_value=spend), contextlib.redirect_stdout(io.StringIO()):
             fc.fc_crew.cmd_crew(a)
         return json.loads(next((proj / "results" / "crew").glob("*.json")).read_text())["model"]
 

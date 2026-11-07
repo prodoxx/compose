@@ -2,7 +2,7 @@
 import copy, fcntl, json, os, signal, subprocess, sys, time, traceback
 from pathlib import Path
 
-import fc_core, fc_config, fc_herdr, fc_change, fc_watch, fc_factorystate, fc_factoryturn, fc_night, fc_prd, fc_manager
+import fc_core, fc_config, fc_herdr, fc_fleet, fc_change, fc_watch, fc_factorystate, fc_factoryturn, fc_night, fc_prd, fc_manager
 
 POLL = 2.0  # seconds between looks at the event log in one watch
 
@@ -178,8 +178,8 @@ def _exited(pid):
         return True
 
 def verb_start(a, repo):
-    if not fc_herdr.herdr_env():
-        sys.exit("factory: start it inside herdr: the team leads it starts live there (sections/0h.md)")
+    if not fc_fleet.inside():
+        sys.exit("factory: start it inside a terminal host (herdr, the Herdr app, or Rex): the team leads it starts live there (sections/0h.md)")
     state = fc_factorystate.load_state(repo)
     if running(repo):
         sys.exit(f'factory: already running (pid {state["pid"]}); compose factory status shows it')

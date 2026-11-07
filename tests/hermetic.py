@@ -19,7 +19,8 @@ CALLERS = ("COMPOSE_TEST_SLOT",  # the slot of a `compose timed` running the sui
            "HERDR_PANE_ID",  # the herdr pane the suite runs in is the session identity of a watch, crew start, or yolo: a test sets its own
            "COMPOSE_ROLE",  # the suite run in a teammate's tab (a toolsmith's) is no engineering manager: a test sets its own
            "COMPOSE_NO_COMPACT",  # a shell with compaction switched off would change the doctor's compaction line: a test sets its own
-           "HERDR_ENV", "HERDR_SOCKET_PATH", "HERDR_SESSION", "HERDR_WORKSPACE_ID", "HERDR_TAB_ID", "HERDR_BIN_PATH")  # the suite is no pane of the user's herdr: a test that needs one sets its own
+           "HERDR_ENV", "HERDR_SOCKET_PATH", "HERDR_SESSION", "HERDR_WORKSPACE_ID", "HERDR_TAB_ID", "HERDR_BIN_PATH",  # the suite is no pane of the user's herdr: a test that needs one sets its own
+           "HC_TERMINAL_ID", "HC_TERMINAL_SOCKET", "HC_SCOPE", "REX_SESSION", "REX_BLOCK", "REX_SERVER", "REX_BIN_DIR", "COMPOSE_HOST")  # nor a terminal of the Herdr app or Rex
 
 
 INSTALLED = {  # what compose's required tools keep in a home, faked so `compose init` goes ahead without the user's machine
@@ -189,6 +190,11 @@ echo "herdr $*" >> "${COMPOSE_TEST_GUARD:-/dev/null}/calls"
 echo '{"error": {"code": "test_guard", "message": "a test must not reach the real herdr"}}'
 exit 1
 """
+FAKE_HOST = """#!/bin/sh
+echo "{name} $*" >> "${{COMPOSE_TEST_GUARD:-/dev/null}}/calls"
+echo '{{"error": {{"kind": "test_guard", "message": "a test must not reach the real {name}"}}}}' >&2
+exit 1
+"""
 FAKE_GIT = """#!/bin/sh
 [ "$*" = "--version" ] && { echo "git version 99.0.0"; exit 0; }
 echo "git $*" >> "${COMPOSE_TEST_GUARD:-/dev/null}/calls"
@@ -199,12 +205,13 @@ _guard = None
 
 
 def guard_dir():
-    """The directory holding the fake lsof, herdr and git, first on every test's PATH."""
+    """The directory holding the fake lsof, herdr, hc, herdr-app, rex and git, first on every test's PATH."""
     global _guard
     if _guard is None:
         _guard = Path(_mkdtemp(prefix="compose-guard-")).resolve()
         atexit.register(shutil.rmtree, _guard, ignore_errors=True)
-        for name, body in (("lsof", FAKE_LSOF.format(python=sys.executable)), ("herdr", FAKE_HERDR), ("git", FAKE_GIT)):
+        for name, body in (("lsof", FAKE_LSOF.format(python=sys.executable)), ("herdr", FAKE_HERDR), ("git", FAKE_GIT),
+                           *((n, FAKE_HOST.format(name=n)) for n in ("hc", "herdr-app", "rex"))):
             (_guard / name).write_text(body)
             _chmod(_guard / name, 0o755)
     return _guard

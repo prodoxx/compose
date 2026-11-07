@@ -2,7 +2,7 @@
 import datetime, json, sys
 from pathlib import Path
 
-import fc_core, fc_config, fc_crew, fc_herdr, fc_linear, fc_linear_cmd, fc_tasks
+import fc_core, fc_config, fc_crew, fc_herdr, fc_fleet, fc_linear, fc_linear_cmd, fc_tasks
 
 SORTS = ("keep", "cancel", "merge", "verify")
 LABELS = ("Epic", "Feature", "Story")
@@ -432,7 +432,7 @@ def touched(features, chains, changes):
 
 def live_leads(repo):
     """Project slug to its team lead's name, for each project whose crew record matches a live herdr agent by name and workspace."""
-    return leads_among(repo, fc_herdr.live_agents())
+    return leads_among(repo, fc_fleet.live_agents())
 
 def leads_among(repo, agents):
     """live_leads over a given herdr agent list."""

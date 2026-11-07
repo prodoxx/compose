@@ -141,7 +141,7 @@ class Tabs(unittest.TestCase):
     def test_a_passed_task_closes_its_pi_pane_by_the_agents_name(self):
         calls, h = self.fake({}, [])
         with mock.patch.object(fc.fc_herdr, "herdr", lambda *a, **k: ({"agent": {"pane_id": "w9:p4"}} if a[:2] == ("agent", "get") else calls.append(a))):
-            fc.fc_herdr.herdr_close_task(Path("/x/.compose/shop"), "003")
+            fc.fc_fleet.close_task(Path("/x/.compose/shop"), "003")
         self.assertEqual(calls, [("pane", "close", "w9:p4")])
 
 
@@ -233,24 +233,24 @@ class PaneNames(unittest.TestCase):
     def test_the_engineering_manager_pane_names_every_project_it_runs(self):
         manager = {"HERDR_PANE_ID": "w7:p1"}
         for slug in ("shop", "cart", "shop"):  # a project named again is not listed twice
-            self.run_as(manager, fc.fc_herdr.herdr_name_manager, Path("/r/.compose") / slug)
+            self.run_as(manager, fc.fc_fleet.name_manager, Path("/r/.compose") / slug)
         self.assertEqual(self.labels["w7:p1"], "manager: shop, cart")
-        self.run_as(manager, fc.fc_herdr.herdr_unname_manager, "shop")
+        self.run_as(manager, fc.fc_fleet.unname_manager, "shop")
         self.assertEqual(self.labels["w7:p1"], "manager: cart")
-        self.run_as(manager, fc.fc_herdr.herdr_unname_manager, "cart")
+        self.run_as(manager, fc.fc_fleet.unname_manager, "cart")
         self.assertIsNone(self.labels["w7:p1"])  # no project left: the pane's name is cleared, not left saying `manager`
 
     def test_a_label_the_product_owner_gave_and_a_teammate_pane_are_never_named(self):
-        self.run_as({"HERDR_PANE_ID": "w7:p2"}, fc.fc_herdr.herdr_name_manager, Path("/r/.compose/shop"))
-        self.run_as({"HERDR_PANE_ID": "w7:p3", "COMPOSE_ROLE": "orchestrator"}, fc.fc_herdr.herdr_name_manager, Path("/r/.compose/shop"))
-        self.run_as({"HERDR_PANE_ID": "w7:p2"}, fc.fc_herdr.herdr_unname_manager, "shop")
+        self.run_as({"HERDR_PANE_ID": "w7:p2"}, fc.fc_fleet.name_manager, Path("/r/.compose/shop"))
+        self.run_as({"HERDR_PANE_ID": "w7:p3", "COMPOSE_ROLE": "orchestrator"}, fc.fc_fleet.name_manager, Path("/r/.compose/shop"))
+        self.run_as({"HERDR_PANE_ID": "w7:p2"}, fc.fc_fleet.unname_manager, "shop")
         self.assertEqual(self.labels, {"w7:p1": None, "w7:p2": "my notes", "w7:p3": None})
         self.assertFalse([c for c in self.calls if c[:2] == ("pane", "rename")])
 
     def test_manager_projects_reads_only_composes_own_labels(self):
-        self.assertEqual(fc.fc_herdr.manager_projects(None), [])
-        self.assertEqual(fc.fc_herdr.manager_projects("manager: shop, cart"), ["shop", "cart"])
-        self.assertIsNone(fc.fc_herdr.manager_projects("managers meeting"))
+        self.assertEqual(fc.fc_fleet.manager_projects(None), [])
+        self.assertEqual(fc.fc_fleet.manager_projects("manager: shop, cart"), ["shop", "cart"])
+        self.assertIsNone(fc.fc_fleet.manager_projects("managers meeting"))
 
     def test_a_tab_compose_opens_names_its_pane_like_the_tab(self):
         r = self.run_as({}, fc.fc_herdr.herdr_tab, "w7", "shop status", "/r")
@@ -278,7 +278,7 @@ class NoHerdr(unittest.TestCase):
                  mock.patch.object(fc.fc_herdr, "herdr_repo_space", return_value=None), mock.patch.object(fc.fc_herdr, "herdr_close_tabs"):
                 fc.fc_herdr.HERDR_SPACES.clear()
                 space = fc.fc_herdr.herdr_space(proj)  # what init opens
-                fc.fc_herdr.herdr_name_manager(proj)
+                fc.fc_fleet.name_manager(proj)
                 fc.fc_herdr.herdr_verify_panes("w1", repo, ["checks"], fc.fc_herdr.tab_label(proj, "verify"))  # verify's tab: herdr_verify_panes itself asks only for a space
             asked = [tuple(c.args[0][1:]) for c in run.call_args_list]  # the arguments after the herdr binary
             if off:
@@ -600,7 +600,7 @@ class SignInScreen(unittest.TestCase):
         err = ""
         with mock.patch.object(fc.fc_herdr, "herdr", herdr), mock.patch.object(fc.fc_herdr, "herdr_text", text), mock.patch.object(time, "sleep"):
             try:
-                fc.fc_herdr.herdr_await_start("a", first)
+                fc.fc_fleet.await_start("a", first)
             except RuntimeError as e:
                 err = str(e)
         return [c[:2] for c in calls if c[:2] in (("agent", "send-keys"), ("agent", "prompt"))], err, reads

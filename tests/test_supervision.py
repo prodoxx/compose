@@ -39,7 +39,7 @@ class Stalls(unittest.TestCase):
         ev = self.stalls(s)
         self.assertEqual(len(ev), 1)
         self.assertIn("stall=quiet agent=hw-orchestrator", ev[0])
-        self.assertIn("herdr agent read hw-orchestrator --lines 60", ev[0])
+        self.assertIn("compose crew read --project hw --role orchestrator --lines 60", ev[0])
         self.assertEqual(self.stalls(s), [])  # the same silence does not wake the supervisor again
 
     def test_a_team_lead_working_report_with_nothing_parallel_and_no_reason_is_a_stall_the_team_lead_watch_passes(self):
@@ -237,7 +237,7 @@ class WatchTimeout(unittest.TestCase):
         snap.update({"tasks": {"001": {"state": "pending"}}, "last": (NOW - 600, "teammate x reported working")})
         ev = fc.fc_watch.watch_stalls(proj, snap, 240, now_s=NOW)
         self.assertIn("team lead working", ev[0])
-        self.assertIn("herdr agent prompt clean-recut-branche-orchestrator", ev[0])
+        self.assertIn("compose crew prompt --project clean-recut-branches --role orchestrator", ev[0])
 
 
 def wsnap(state="pending", run=False, ended=None, halt=None):
@@ -1452,7 +1452,7 @@ class NetworkDrop(unittest.TestCase):
         self.assertEqual(len(ev), 1, ev)
         self.assertIn("agent=hw-designer", ev[0])
         self.assertIn("The network dropped and is back; continue exactly where you stopped; re-check any write that may not have landed", ev[0])
-        self.assertIn("herdr agent prompt hw-designer", ev[0])
+        self.assertIn("compose crew prompt --project hw --agent hw-designer", ev[0])
         self.assertEqual(self.stalls(self.snap(), NOW + 500, err), [])  # once per idle spell
 
     def test_a_quiet_pane_a_done_or_closed_or_working_teammate_is_not_a_network_drop(self):
@@ -1485,7 +1485,7 @@ class ClosableIdle(unittest.TestCase):
         ev = self.closable(self.snap(), NOW + 241)
         self.assertEqual(len(ev), 1, ev)
         self.assertIn("agent=hw-designer", ev[0])
-        self.assertIn("herdr agent prompt hw-designer \"If nothing is left for you, report done\"", ev[0])
+        self.assertIn("compose crew prompt --project hw --agent hw-designer \"If nothing is left for you, report done\"", ev[0])
         self.assertNotIn("--force", ev[0])
         self.assertTrue(fc.fc_watch.URGENT.search(ev[0]))
         self.assertEqual(self.closable(self.snap(), NOW + 600), [])  # once per idle spell
@@ -1515,7 +1515,7 @@ class OneManager(unittest.TestCase):
         env = {"HERDR_PANE_ID": pane} | ({"COMPOSE_ROLE": role} if role else {})
         with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(fc.fc_herdr, "herdr", self.listed), \
                 mock.patch.object(fc.fc_herdr, "herdr_env", return_value=herdr_on):
-            fc.fc_herdr.herdr_manager_claim(self.proj, takeover)
+            fc.fc_fleet.manager_claim(self.proj, takeover)
 
     def owner(self):
         return fc.fc_herdr.herdr_manager_record(self.proj).get("session")
@@ -1581,7 +1581,7 @@ class RestoredTeammate(unittest.TestCase):
         env = self.restore(self.PANE)
         self.assertEqual((env["COMPOSE_ROLE"], env["COMPOSE_TEAMMATE"], env["COMPOSE_PROJECT"]), ("orchestrator", "hw-orchestrator", "hw"))
         with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(fc.fc_herdr, "herdr_env", return_value=True):
-            fc.fc_herdr.herdr_manager_claim(self.proj)  # no SystemExit, no manager.json
+            fc.fc_fleet.manager_claim(self.proj)  # no SystemExit, no manager.json
         self.assertEqual(fc.fc_herdr.herdr_manager_record(self.proj), {})
 
     def test_a_crew_teammate_gets_the_crew_role_and_a_manager_pane_gets_nothing(self):

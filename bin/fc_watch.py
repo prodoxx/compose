@@ -1,6 +1,6 @@
 import argparse, fcntl, json, os, re, sys, time
 from pathlib import Path
-import fc_core, fc_proc, fc_tasks, fc_herdr, fc_change, fc_reports, fc_crew, fc_hooks, fc_load, fc_status, fc_briefs, fc_sleep, fc_stall, fc_shed, fc_checks, fc_manager
+import fc_core, fc_proc, fc_tasks, fc_herdr, fc_fleet, fc_change, fc_reports, fc_crew, fc_hooks, fc_load, fc_status, fc_briefs, fc_sleep, fc_stall, fc_shed, fc_checks, fc_manager
 
 
 YOLO_HINT = "  {m}=on (answer with the recommendation; log it: compose {m} decided ...)"
@@ -21,7 +21,7 @@ class Agents:
     def __call__(self, records=None):
         now = time.monotonic()
         if self.at is None or now - self.at >= AGENTS_INTERVAL or records != self.records:
-            self.listed, self.at, self.records = fc_herdr.herdr("agent", "list"), now, records
+            self.listed, self.at, self.records = fc_fleet.agent_list(), now, records
         return self.listed
 
 def watch_snapshot(repo, proj, agents=None):
@@ -49,7 +49,7 @@ def watch_snapshot(repo, proj, agents=None):
     for r in rows:
         snap["tasks"][r["id"]] = {"state": r["state"], "attempts": r["attempts"], "cost": r["cost"], "note": r["note"], "linear": r["linear"], "title": r["title"]}
     records = [json.loads(f.read_text()) for f in sorted((proj / "results" / "crew").glob("*.json"))]  # before the list: it must be as new as they are
-    listed = agents(records) if agents else fc_herdr.herdr("agent", "list")
+    listed = agents(records) if agents else fc_fleet.agent_list()
     agents = None if listed is None else listed.get("agents", [])
     for ag in agents or []:
         n = ag.get("name") or ""
@@ -143,7 +143,7 @@ def load_lines(proj, key):
     if not new:
         return []
     lim = fc_load.limits()
-    pane = fc_herdr.herdr_manager_record(proj).get("session")
+    pane = fc_fleet.manager_record(proj).get("session")
     lines = []
     for e in new:
         if e["kind"] == "held":
@@ -153,14 +153,14 @@ def load_lines(proj, key):
         elif e["kind"] == "warn":
             tell = f"load {e['avg']:.1f} on {lim['cores']} cores is above the warn mark {lim['warn']:.1f}: compose holds new starts above {lim['high']:.1f}"
             if pane:
-                fc_herdr.herdr("pane", "report-metadata", pane, "--source", "compose-load", "--token", f"load={e['avg']:.1f} on {lim['cores']} cores")
+                fc_fleet.pane_label(pane, tokens={"load": f"{e['avg']:.1f} on {lim['cores']} cores"}, source="compose-load")
             if fc_load.claim(e["n"]):
                 fc_crew.desktop_notify("compose: load", tell)
             lines.append(f"event tell={tell!r}")
         else:
             tell = f"load cleared: {e['avg']:.1f} on {lim['cores']} cores, below {lim['low']:.1f}"
             if pane:
-                fc_herdr.herdr("pane", "report-metadata", pane, "--source", "compose-load", "--clear-token", "load")
+                fc_fleet.pane_label(pane, clear_tokens=("load",), source="compose-load")
             if fc_load.claim(e["n"]):
                 fc_crew.desktop_notify("compose: load", tell)
             lines.append(f"event tell={tell!r}")
@@ -217,7 +217,7 @@ def watch_stalls(proj, snap, limit, now_s=None, key="all", woke=None, agent_limi
     hm = lambda t: time.strftime("%H:%M:%S", time.localtime(t))
     tail = f"{f'team lead {status}' if lead else 'no team lead'}, pending tasks {len(pending)}{f', held {len(on_hold)}' if on_hold else ''}, teammates working {','.join(at_work(snap, working)) or 'none'}"
     if lead:
-        tail += f"  (read: herdr agent read {orch} --lines 60; nudge: herdr agent prompt {orch} \"...\")"
+        tail += f"  (read: compose crew read --project {proj.name} --role orchestrator --lines 60; nudge: compose crew prompt --project {proj.name} --role orchestrator \"...\")"
     def fire(key, what):
         if key not in fired:
             fired.add(key)
@@ -229,14 +229,14 @@ def watch_stalls(proj, snap, limit, now_s=None, key="all", woke=None, agent_limi
         since = seen[n][1]
         if st == "idle" and n not in closed and r and r[-1]["state"] == "working" and now_s - since >= NET_IDLE and f"netchk:{n}:{since}" not in fired:
             fired.add(f"netchk:{n}:{since}")  # the pane is read once per idle spell
-            pane = "\n".join(fc_herdr.herdr_text("agent", "read", n, "--source", "recent-unwrapped", "--lines", "12").strip().splitlines()[-6:])
+            pane = "\n".join(fc_fleet.read(n, lines=12).strip().splitlines()[-6:])
             if m := NET_ERROR.search(pane):
                 fire(f"net:{n}:{since}", f"network agent={n} its last turn ended on an API or network error ({m.group(0)}) and it has been idle since {hm(since)}; "
-                     f"once the network is back, nudge: herdr agent prompt {n} \"{NET_NUDGE}\"")
+                     f"once the network is back, nudge: compose crew prompt --project {proj.name} --agent {n} \"{NET_NUDGE}\"")
         if st == "idle" and n != orch and n not in closed and r and r[-1]["state"] == "working" and now_s - since >= limit and f"net:{n}:{since}" not in fired \
                 and not (re.search(r"-tests-\d+$", n) and fc_briefs.test_ready(r[-1])):  # collect closes a writer after its test ready
             fire(f"closable:{n}:{since}", f"closable agent={n} its turn ended and it has been idle since {hm(since)} with its last report working; "
-                 f"if its work is finished, nudge: herdr agent prompt {n} \"If nothing is left for you, report done\" (its tab then closes)")
+                 f"if its work is finished, nudge: compose crew prompt --project {proj.name} --agent {n} \"If nothing is left for you, report done\" (its tab then closes)")
     spells = mem.get("spells", {})
     for what_key, what in fc_stall.limit_spells(snap, spells, now_s) + fc_stall.silent_stalls(proj, snap, seen, now_s, agent_limit or fc_stall.AGENT_STALL_SECONDS, woke[1] if woke else 0):
         fire(what_key, what)  # a pane stuck on a limit or a retry loop, a teammate working for ages with nothing to show
@@ -285,7 +285,7 @@ def watch_events(before, after, started=False):
                       + (f" branch={t['note']}" if t["note"] else "") + (f" linear={t['linear']}" if t["linear"] else "") + f" title={t['title']!r}")
     for n, st in after["agents"].items():
         if st == "blocked" and before["agents"].get(n) != "blocked":
-            ev.append(f"event agent={n} status=blocked  (read: herdr agent read {n} --lines 60; steer: herdr agent prompt {n} \"...\")")
+            ev.append(f"event agent={n} status=blocked  (read: compose crew read --project <slug> --agent {n} --lines 60; steer: compose crew prompt --project <slug> --agent {n} \"...\")")
     if before["run"] and not after["run"]:
         passed = sum(t["state"] in ("passed", "already_green", "merged") for t in after["tasks"].values())
         ev.append(f"event run=ended passed={passed}/{len(after['tasks'])}"
@@ -422,7 +422,7 @@ def lead_sources(proj, others=()):
     lost that env, and keeps everything but its own reports."""
     lead = fc_herdr.agent_name(proj.name, "orchestrator")
     c = fc_crew.crew_record(proj, lead)
-    if os.environ.get("COMPOSE_ROLE") or not c or c.get("closed") or lead in others or crew_in_pane(proj, os.environ.get("HERDR_PANE_ID")) == lead:
+    if os.environ.get("COMPOSE_ROLE") or not c or c.get("closed") or lead in others or crew_in_pane(proj, fc_core.session_id()) == lead:
         return []
     return [lead]
 
@@ -583,7 +583,7 @@ def cmd_reenter(a):
     if not project:
         return
     proj = fc_core.project_dir(argparse.Namespace(repo=os.environ.get("COMPOSE_REPO") or ".", project=project))
-    name = os.environ.get("COMPOSE_TEAMMATE") or crew_in_pane(proj, os.environ.get("HERDR_PANE_ID")) or fc_herdr.agent_name(project, role)
+    name = os.environ.get("COMPOSE_TEAMMATE") or crew_in_pane(proj, fc_core.session_id()) or fc_herdr.agent_name(project, role)
     print("Your context was just compacted; the session continues from its brief and handoff, not from scratch.")
     print(f"Re-read your brief file {fc_crew.crew_dir(proj) / f'{name}.brief.md'} now.")
     if role == "orchestrator":

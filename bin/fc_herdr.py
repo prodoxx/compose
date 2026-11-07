@@ -1,12 +1,13 @@
-import shlex, json, os, re, shutil, signal, subprocess, sys, time
+import json, os, re, shutil, subprocess, sys, time
 from pathlib import Path
-import fc_core, fc_harness, fc_models, fc_proc
+import fc_core, fc_harness, fc_host, fc_proc
 
 
-# ---------- herdr ----------
+# ---------- herdr, the TUI ----------
 # Inside herdr (HERDR_ENV=1) the fleet is visible: one space per project, a `status` tab, one tab per task holding a named
 # interactive pi agent the team lead can steer with `herdr agent prompt`, and a verify tab of stage panes. Every call
 # here is best-effort: outside herdr, or when herdr refuses, the run continues exactly as the headless path would.
+# This module speaks herdr's CLI; fc_fleet is what the rest of compose calls, whichever host (herdr, the Herdr app, Rex) it runs in.
 
 HERDR_SPACES = {}  # project name -> workspace id, filled by herdr_space
 PI_HERDR_EXT = Path.home() / ".pi" / "agent" / "extensions" / "herdr-agent-state.ts"
@@ -16,22 +17,16 @@ def herdr_env():
     return os.environ.get("HERDR_ENV") == "1" and bool(os.environ.get("HERDR_SOCKET_PATH")) and not os.environ.get("COMPOSE_NO_HERDR")
 
 PANE_MAKERS = (("tab", "create"), ("pane", "split"), ("workspace", "create"))
-# herdr types the agent's command into the new pane's interactive shell (`agent start` cannot launch it as the pane's process), so a
-# prompt that shell asks first takes the command's first letters as its answer. oh-my-zsh's update prompt is the known one; both
-# variables are its old-style switches (an explicit `zstyle ':omz:update' mode` in the user's files outranks them: shell_startup_check).
-SHELL_GUARD = (("DISABLE_AUTO_UPDATE", "true"), ("DISABLE_UPDATE_PROMPT", "true"))
+SHELL_GUARD = fc_host.SHELL_GUARD
 def herdr_argv(args):
     """The herdr command line for `args`. A new pane gets the herdr server's env, not ours, so a call that makes one passes the
-    caller's COMPOSE_CONFIG and HOME on: a scratch config stays scratch in the CLI, agent, or teammate that pane runs. Each harness
-    row's home variable goes too, when set in the caller: the pane's harness must use the home compose wrote hooks, trust and skills
-    into, and its sign-in. PATH too: compose decides a harness is installed by its own PATH, so the pane must run with that PATH.
-    They go last: herdr reads `pane split`'s pane id only as the argument right after the subcommand. A new pane's shell also
-    gets SHELL_GUARD, so a startup prompt does not swallow the agent command herdr types."""
+    caller's variables on (fc_host.pane_env: SHELL_GUARD, COMPOSE_CONFIG, HOME, each harness home, PATH). They go last: herdr reads
+    `pane split`'s pane id only as the argument right after the subcommand. herdr types the agent's command into the new pane's
+    interactive shell (`agent start` cannot launch it as the pane's process), so a prompt that shell asks first would take the
+    command's first letters as its answer: SHELL_GUARD keeps oh-my-zsh quiet (shell_startup_check finds a zstyle that outranks it)."""
     args = [str(a) for a in args]
     if tuple(args[:2]) in PANE_MAKERS:
-        homes = [h for k in fc_harness.rows() if (h := fc_harness.HARNESSES[k].get("home_env")) and os.environ.get(h)]
-        args += [x for k, v in SHELL_GUARD for x in ("--env", f"{k}={v}")]
-        args += [x for k in ("COMPOSE_CONFIG", "HOME", *homes, "PATH") if os.environ.get(k) for x in ("--env", f"{k}={os.environ[k]}")]
+        args += [x for k, v in fc_host.pane_env().items() for x in ("--env", f"{k}={v}")]
     return ["herdr", *args]
 
 def herdr(*args, check=False, timeout=120):
@@ -156,65 +151,6 @@ def shell_startup_check(home):
     return False, ("; ".join(found) + ", which asks 'Would you like to update? [Y/n]' in every new shell and takes the first letter of "
                    "the agent command compose types into a teammate's pane, so its start times out")
 
-def herdr_ready(agent, timeout=60):
-    """Return once a Claude session's input box (its `❯` line) is on screen, or it is already on a turn, blocked on a dialog, or done.
-    `herdr agent start` reports a Claude session ready seconds before its UI exists, while the pane still shows the shell command
-    (`herdr agent explain`: idle, rule none): text typed then is kept in the box unsent, or dropped outright, so a brief waits for the box."""
-    for _ in range(max(1, timeout // 2)):
-        got = (herdr("agent", "get", agent) or {}).get("agent") or {}
-        if not got or got.get("agent_status") in ("working", "blocked", "done"):
-            return
-        if any(ln.lstrip().startswith("❯") for ln in herdr_text("agent", "read", agent, "--source", "visible", "--lines", "40").splitlines()):
-            return
-        time.sleep(2)
-
-def herdr_dialog(agent):
-    """The dialog a blocked Claude session shows (its title, text, and choices, on one line), read from its pane: everything below
-    the last rule line, without the key hints. "unknown" when the pane cannot be read."""
-    lines = herdr_text("agent", "read", agent, "--source", "visible", "--lines", "40").splitlines()
-    rules = [i for i, ln in enumerate(lines) if ln.strip() and set(ln.strip()) <= set("─━-")]
-    body = [ln.strip().removeprefix("❯").strip() for ln in lines[rules[-1] + 1 if rules else 0:]]
-    text = " / ".join(ln for ln in body if ln and not ln.startswith(("Enter to confirm", "Esc to")))
-    return text[:400] or "unknown"
-
-def herdr_login_screen(agent):
-    """The sign-in text on `agent`'s pane: the first `login_screens` text of any fc_harness row visible on it, else ""."""
-    text = herdr_text("agent", "read", agent, "--source", "visible", "--lines", "40")
-    for key in fc_harness.rows():
-        for screen in fc_harness.HARNESSES[key].get("login_screens", ()):
-            if screen in text:
-                return screen
-    return ""
-
-def herdr_await_start(agent, first=None, tries=3):
-    """Return once `agent` has started on its brief, the first prompt it gets. This only confirms the submission landed (status
-    working, blocked, or done); when it did not, presses Enter for a box that kept the text without submitting, then sends `first`
-    again for a box that lost it, and fails loudly with the agent name when it still did not start. A pane on a sign-in screen
-    gets neither: before each Enter and each re-send `herdr_login_screen` is asked, and one there raises naming its text."""
-    def started():  # `done` counts too: a short first turn can finish before the check
-        return ((herdr("agent", "get", agent) or {}).get("agent") or {}).get("agent_status") in ("working", "blocked", "done")
-    def settles(secs):
-        for _ in range(secs // 2):
-            if started():
-                return True
-            time.sleep(2)
-        return False
-    for attempt in range(tries + 1):
-        if attempt:
-            if screen := herdr_login_screen(agent):
-                raise RuntimeError(f"{agent} is on a sign-in screen ({screen}): sign in there, then run compose again")
-            herdr("agent", "send-keys", agent, "enter")
-            if settles(6):
-                return
-            if first:
-                if screen := herdr_login_screen(agent):
-                    raise RuntimeError(f"{agent} is on a sign-in screen ({screen}): sign in there, then run compose again")
-                herdr("agent", "prompt", agent, first)
-        if settles(20):
-            return
-    raise RuntimeError(f"{agent} did not start on its brief after {tries} retries: look in its tab"
-                       + (f", and send it again with: herdr agent prompt {agent} {shlex.quote(first)}" if first else ""))
-
 def herdr_start_crew(*args, tries=8):
     """`herdr agent start` for a teammate, retried while its pane is still coming up: starts running in parallel (designcrews,
     testcrews) race each other and the new pane answers agent_pane_busy until its shell is there, or agent_name_not_found while herdr
@@ -255,32 +191,12 @@ def pane_processes(pane):
     return [p for p in info.get("foreground_processes", []) if p.get("pid") != info.get("shell_pid")] \
         if info.get("foreground_process_group_id") != info.get("shell_pid") else []
 
-def pane_suspended(pane):
-    """True when a process in `pane` is stopped (Ctrl-Z, or SIGSTOP after a sleep): herdr keeps listing such an agent with its last
-    status, and after `fg` its terminal can stay wedged, so it is neither working nor finished."""
-    for p in pane_processes(pane):
-        try:
-            stat = subprocess.run(["ps", "-o", "stat=", "-p", str(p["pid"])], capture_output=True, text=True, timeout=5, check=False).stdout.strip()
-        except (OSError, subprocess.TimeoutExpired, KeyError):
-            continue
-        if stat.startswith("T"):
-            return True
-    return False
-
 def agent_pids(pane):
     return sorted(p["pid"] for p in pane_processes(pane) if fc_proc.nice_floor(p["pid"]) is not None)
 
 def pane_launching(agent, pane):
     """True when `agent` is registered by name, listed on `pane`, or the pane runs a process that is still becoming it."""
     return bool(herdr("agent", "get", agent)) or any(ag.get("pane_id") == pane for ag in live_agents()) or bool(pane_processes(pane))
-
-def pane_kill(pane):
-    """Stop whatever runs in `pane` in front of its shell, so closing the tab leaves nothing unregistered behind."""
-    for p in pane_processes(pane):
-        try:
-            os.kill(p["pid"], signal.SIGTERM)
-        except (OSError, KeyError):
-            pass
 
 def agent_name(slug, tid):
     """herdr agent names: [a-z][a-z0-9_-]{0,31}, unique among live agents. `<slug>-<id>`, slug trimmed to fit."""
@@ -328,33 +244,6 @@ def tab_label(proj, name):
 
 MANAGER = "manager"
 
-def manager_projects(label):
-    """The projects a pane's label names it the engineering manager of: [] for an unlabelled pane, None for a label that is not
-    compose's (the product owner's own, never touched)."""
-    if not label:
-        return []
-    if label == MANAGER or label.startswith(MANAGER + ": "):
-        return [p for p in label[len(MANAGER) + 2:].split(", ") if p]
-    return None
-
-def herdr_name_manager(proj):
-    """Label the engineering manager's pane `manager: <slug>, ...`, every project it runs, so the product owner tells the pane
-    they started compose in from their others. Only a session with no crew role names its pane, and a label the product owner
-    gave the pane is kept."""
-    pane = os.environ.get("HERDR_PANE_ID")
-    if not herdr_env() or not pane or os.environ.get("COMPOSE_ROLE"):
-        return
-    projects, slug = manager_projects(((herdr("pane", "get", pane) or {}).get("pane") or {}).get("label")), Path(proj).name
-    if projects is not None and slug not in projects:
-        herdr("pane", "rename", pane, f"{MANAGER}: {', '.join(projects + [slug])}")
-
-def herdr_unname_manager(slug):
-    """Take a cleaned project off every engineering manager pane's label; a label left naming no project is cleared."""
-    for p in (herdr("pane", "list") or {}).get("panes", []):
-        if slug in (projects := manager_projects(p.get("label")) or []):
-            rest = [x for x in projects if x != slug]
-            herdr("pane", "rename", p["pane_id"], f"{MANAGER}: {', '.join(rest)}" if rest else "--clear")
-
 def herdr_manager_record(proj):
     """results/manager.json: the engineering manager session (herdr pane) that drives the project, set by its first `crew start` or `watch`."""
     try:
@@ -366,39 +255,6 @@ def herdr_manager_live(pane):
     """Whether a live agent still sits in herdr pane `pane`. herdr unable to say counts as gone: it must not lock a project."""
     listed = herdr("agent", "list")
     return listed is not None and any(ag.get("pane_id") == pane for ag in listed.get("agents", []))
-
-def herdr_manager_claim(proj, takeover=False):
-    """One engineering manager session drives a project. The first `crew start`, `crew stop`, or continuous `watch` of a session with no
-    crew role claims it; the same from another session while the owner's pane still holds a live agent refuses, naming it, unless
-    `takeover`, which moves the claim and the owner's teammates (`started_by`) here. An owner whose pane is gone is replaced silently.
-    Outside herdr sessions cannot be told apart, so nothing is claimed. Returns None when nothing was written (not a manager session,
-    or already the owner), else {"from": the live pane the claim was taken from, else None}; manager.json keeps that as `from`, so
-    the session that lost the project can be told (fc_manager)."""
-    mine, proj = fc_core.session_id(), Path(proj)
-    if os.environ.get("COMPOSE_ROLE") or not mine or not herdr_env():
-        return None
-    rec = herdr_manager_record(proj)
-    owner = rec.get("session")
-    if owner == mine:
-        return None
-    taken = None
-    if owner and herdr_manager_live(owner):
-        if not takeover:
-            sys.exit(f"{proj.name} is driven by another engineering manager session (herdr pane {owner}, since {rec.get('since', '?')}): two sessions on "
-                     f"one project send prompts to the same teammates and take each other's events. From here you may look (`compose status --digest`, "
-                     f"`compose watch --now`). To drive it from this session instead, run the same command with --takeover.")
-        taken = owner
-        for f in sorted((proj / "results" / "crew").glob("*.json")):
-            try:
-                c = json.loads(f.read_text())
-            except json.JSONDecodeError:
-                continue
-            if isinstance(c, dict) and c.get("started_by") == owner:
-                fc_core.atomic_write(f, json.dumps({**c, "started_by": mine}, indent=2))
-    (proj / "results").mkdir(parents=True, exist_ok=True)
-    now = time.strftime("%Y-%m-%d %H:%M:%S")
-    fc_core.atomic_write(proj / "results" / "manager.json", json.dumps({"session": mine, "since": now, **({"from": {"session": taken, "since": rec.get("since")}} if taken else {})}))
-    return {"from": taken}
 
 def herdr_tab(space, label, cwd, *args, check=False):
     """A new tab labelled `label` whose one pane carries the same name. The `tab create` result, {} when herdr refused."""
@@ -472,12 +328,6 @@ def herdr_space(proj):
 def herdr_tabs(space):
     return {t.get("label"): t for t in (herdr("tab", "list", "--workspace", space) or {}).get("tabs", [])}
 
-def herdr_label(session, label, cost, state="working"):
-    """Display-only pane metadata: the state label the product owner reads next to the agent, and the running cost."""
-    if session and session.get("pane"):
-        herdr("pane", "report-metadata", session["pane"], "--source", "compose", "--state-label", f"{state}={label}",
-              "--state-label", f"done={label}", "--token", f"cost=${cost:.4f}")
-
 IMPLEMENTERS_TAB = "implementers"
 
 def herdr_implementer_pane(space, cwd, env, label=IMPLEMENTERS_TAB):
@@ -516,29 +366,7 @@ def herdr_agent_start(*args, tries=8):
     return started
 
 
-PROMPT_START_WAIT = 30  # seconds a stalled prompt gets to show up as a turn before it is sent again; pi starts one in 1 to 2 s
-
-def herdr_stalled(session, prompt, deadline):
-    """Follow a prompt herdr answered with agent_prompt_stalled. The turn is the one herdr sees working or blocked, waited for like
-    any other, or the one the session file records whole while herdr missed it. A prompt pi never wrote down goes once more into
-    the same session after PROMPT_START_WAIT. Returns None when the turn ended, else "timeout", or "agent_prompt_stalled" when it
-    never started."""
-    name, sent, again = session["name"], time.time(), False
-    while (left := deadline - time.time()) > 0:
-        got = (herdr("agent", "get", name) or {}).get("agent") or {}
-        session["sfile"] = session.get("sfile") or (got.get("agent_session") or {}).get("value")
-        if got.get("agent_status") in ("working", "blocked"):
-            return herdr_error("agent", "wait", name, "--timeout", str(int(left * 1000)), timeout=left + 30)[1]
-        delivered, ended = fc_models.pi_turn_state(session["sfile"], session["seen"])
-        if ended:
-            return None
-        if not delivered and time.time() - sent >= PROMPT_START_WAIT:
-            if again:
-                return "agent_prompt_stalled"
-            herdr_error("agent", "prompt", name, prompt, timeout=60)
-            sent, again = time.time(), True
-        time.sleep(1)
-    return "timeout"
+PROMPT_START_WAIT = 30  # seconds a stalled prompt gets to show up as a turn before it is sent again (fc_fleet.stalled); pi starts one in 1 to 2 s
 
 
 def herdr_close_tabs(space, label):
@@ -546,13 +374,6 @@ def herdr_close_tabs(space, label):
     for old, t in herdr_tabs(space).items():
         if re.fullmatch(re.escape(label) + r"( \d\d:\d\d)?", old or ""):
             herdr("tab", "close", t["tab_id"])
-
-def herdr_close_task(proj, tid):
-    """Closes the pane of a task's pi agent, whichever session the task ended on: a fallback turn runs headless, and a hand-done
-    task has no session, so only the agent's name still reaches the pane an earlier attempt left."""
-    got = herdr("agent", "get", agent_name(Path(proj).name, tid)) or {}
-    if pane := (got.get("agent") or got).get("pane_id"):
-        herdr("pane", "close", pane)
 
 def herdr_verify_panes(space, wt, names, label="verify"):
     """The project's one `verify` tab, rebuilt per run, with one pane per stage, each a plain shell the CLI reports states for. {name: pane_id}."""
@@ -573,11 +394,11 @@ def herdr_verify_panes(space, wt, names, label="verify"):
         herdr_stage(panes, n, "idle", "pending")
     return panes
 
-STAGE_OBSERVERS = []  # called with (stage name, state) at every stage change, whether or not herdr draws it: `compose status` reads it from the hold file (fc_update)
+STAGE_OBSERVERS = []  # called with (stage name, state, message) at every stage change, whether or not herdr draws it: `compose status` and `compose stages` read it from the hold file (fc_update)
 
 def herdr_stage(panes, name, state, message=""):
     for seen in STAGE_OBSERVERS:
-        seen(name, state)
+        seen(name, state, message)
     if panes.get(name):
         herdr("pane", "report-agent", panes[name], "--source", "compose", "--agent", name, "--state", state, "--message", message, "--seq", str(time.time_ns()))
 
@@ -587,10 +408,8 @@ def herdr_space_is(space, name):
     return any(w.get("workspace_id") == space and w.get("label") == name for w in (herdr("workspace", "list") or {}).get("workspaces", []))
 
 def herdr_attach():
-    """Bare `compose` on a terminal outside herdr: print the hint and exec `herdr session attach compose` in this directory.
-    Returns when a condition fails (no terminal, HERDR_ENV, CI, or COMPOSE_NO_HERDR set); exits 1 when herdr is not installed."""
-    if not (sys.stdin.isatty() and sys.stdout.isatty()) or any(os.environ.get(k) for k in ("HERDR_ENV", "CI", "COMPOSE_NO_HERDR")):
-        return
+    """Bare `compose` on a terminal outside any host, with herdr installed (fc_fleet.attach): print the hint and exec
+    `herdr session attach compose` in this directory; exits 1 when herdr is not installed."""
     if not shutil.which("herdr"):
         sys.exit("herdr is not installed: curl -fsSL https://herdr.dev/install.sh | sh\nor run compose setup")
     print("opening herdr session compose: run claude in a pane and type /compose", flush=True)

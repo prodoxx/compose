@@ -129,15 +129,16 @@ These need no install.
 | `COMPOSE_NO_TRAIL=1` | skip trail |
 | `COMPOSE_NO_POLICIES=1` | `route`, `run`, `quick`, and `verify` read no Verification policies and record or catch up no route on Linear, for work with Linear unreachable or the repo not linked; without it an unreadable policy document stops them (fail closed, since Linear is the record) |
 | `COMPOSE_TEST_SLOTS=<n>` | how many full-suite `compose timed` commands run at once on this machine (default 1); the next waits for a slot and says so. `COMPOSE_QUICK_SLOTS=<n>` is the same for every other command (`--help`, `uv sync`, or a test run with a `-k`/`-run`/`--grep` filter or one test file or module), in lanes apart from the suites (default 2). `COMPOSE_TEST_JOBS=<n>` is how many test files `python3 -m tests.run` runs side by side (default: a quarter of the cores; `-j` overrides it) |
-| `COMPOSE_NO_HERDR=1` | bare `compose` does not open the herdr session; it prints the usage. Every subcommand runs headless, inside herdr too: no space, tab, pane, or agent |
+| `COMPOSE_NO_HERDR=1` | bare `compose` opens no terminal host; it prints the usage. Every subcommand runs headless, inside a host too: no space, tab, pane, or agent |
 | `CODEX_HOME` | where Codex keeps its files; setup writes Codex's skills, hooks and config there |
 | `COMPOSE_HARNESS` | the harness a session uses ([harnesses.md](harnesses.md)) |
 | `COMPOSE_INSTALL_DIR` | where `install.sh` puts the checkout (default `~/.compose/src`) |
 | `COMPOSE_FAKE_402=<provider>` | simulate a billing halt (tests) |
-| `HERDR_ENV=1` with `HERDR_SOCKET_PATH` | marks a session inside herdr |
+| `HERDR_ENV=1` with `HERDR_SOCKET_PATH` | marks a session inside herdr; `HC_TERMINAL_ID` with `HC_TERMINAL_SOCKET` one inside the Herdr app; `REX_SESSION` with `REX_BLOCK` one inside Rex ([hosts.md](hosts.md)) |
+| `COMPOSE_HOST=<herdr\|hc\|rex>` | names the terminal host for a session whose variables were lost (a test, a restored pane) |
 
-Bare `compose` outside herdr, on a terminal, attaches the herdr session `compose`, and creates it when it is missing.
-It does so only when stdin and stdout are terminals and none of `HERDR_ENV`, `CI`, and `COMPOSE_NO_HERDR` is set.
+Bare `compose` outside every host, on a terminal, opens the host this machine has: the Herdr app, else the herdr session `compose` (created when it is missing), else Rex ([hosts.md](hosts.md)).
+It does so only when stdin and stdout are terminals and none of `HERDR_ENV`, `HC_TERMINAL_ID`, `REX_SESSION`, `CI`, and `COMPOSE_NO_HERDR` is set.
 Otherwise it prints the usage and exits 2.
-When herdr is not installed it prints herdr's install line, "or run compose setup", and exits 1.
+When no host is installed it prints herdr's install line, where the Herdr app and Rex come from, "or run compose setup", and exits 1.
 Every subcommand runs headless as before, so scripts, hooks, and teammates are unaffected.

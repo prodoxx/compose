@@ -1,7 +1,7 @@
 """What `compose report` records besides the reports themselves: the refusals (a report compose would not send, so the watch can say
 a teammate tried and why it failed) and the test writer's auto-collect, which runs once the turn that reported `test ready` has ended."""
 import json, re, shutil, subprocess, sys, time
-import fc_core, fc_herdr
+import fc_core, fc_herdr, fc_fleet
 
 
 def reports_dir(proj):
@@ -35,7 +35,7 @@ def collect_after_turn(proj, name, tid):
     `testcrews --collect --only NNN`, which puts the test on the project branch, frees the writer's slot, writes its `done`, and
     wakes the team lead. A collect that fails reports `blocked` as the writer, with the log to read. Outside herdr there is no turn
     to wait for: the team lead runs the collect."""
-    if not (reports_dir(proj) / f"{name}.json").exists() or not fc_herdr.herdr_env():
+    if not (reports_dir(proj) / f"{name}.json").exists() or not fc_fleet.inside():
         return
     wt, log = fc_herdr.project_worktree(proj), proj / "results" / "collect.log"
     compose = shutil.which("compose") or str(fc_core.CLI_CHECKOUT / "bin" / "compose")

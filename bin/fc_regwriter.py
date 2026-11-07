@@ -5,7 +5,7 @@ import re
 import time
 from pathlib import Path
 
-import fc_config, fc_core, fc_crew, fc_herdr, fc_tasks, fc_worktree
+import fc_config, fc_core, fc_crew, fc_herdr, fc_fleet, fc_tasks, fc_worktree
 
 
 def writer_branch(proj, tid):
@@ -73,7 +73,7 @@ def wait_ready(proj, tid, since=0, poll=5):
         record = json.loads(path.read_text())
         if "closed" in record:
             return None
-        listed = fc_herdr.herdr("agent", "list")
+        listed = fc_fleet.agent_list()
         if fc_crew.tab_closed(record, listed["agents"] if listed is not None else None):
             return None
         time.sleep(poll)

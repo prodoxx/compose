@@ -364,9 +364,12 @@ def report_time(at):
     return time.mktime(time.strptime(at, "%Y-%m-%d %H:%M:%S"))
 
 def session_id():
-    """This session's identity: the herdr pane it runs in (herdr never reuses a pane id), else None outside herdr. The engineering
-    manager stays in the pane it was started in, so a Claude session resumed there is the same one."""
-    return os.environ.get("HERDR_PANE_ID") or None
+    """This session's identity: the herdr pane, the Herdr app's hc terminal, or the Rex block it runs in (none reuses an id for a live
+    terminal), else None outside a terminal host. The engineering manager stays in the pane it was started in, so a Claude session
+    resumed there is the same one. The variables are read here, not through fc_host, so that every module may ask."""
+    if os.environ.get("COMPOSE_NO_HERDR"):
+        return None
+    return os.environ.get("HERDR_PANE_ID") or os.environ.get("HC_TERMINAL_ID") or os.environ.get("REX_BLOCK") or None
 
 
 # ---------- init / clean ----------

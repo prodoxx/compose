@@ -74,9 +74,9 @@ Run `/compose <what you want>` and each feature moves through the same life cycl
 11. **Pull requests.**
     Passed tickets become one gh stack, and when you say so, each layer becomes a draft pull request for your reviewers to read and merge.
 
-Every agent works in its own herdr pane, and you can type into any of them.
+Every agent works in its own pane of your terminal host (herdr, the Herdr app, or Rex), and you can type into any of them.
 Each pane is named for what it does, and the pane you started compose in is named `manager: <project>` for every project it runs.
-`compose` with no command opens the herdr session for you.
+`compose` with no command opens your terminal host for you.
 Nothing is pushed until you say so, and `compose` never merges anything.
 
 ## Start a planner or designer directly
@@ -156,7 +156,7 @@ The figures in this README come from small benchmarks and one prototype, and the
    Claude Code is not installed for you: setup runs the steps that do not need it, then prints the install line and asks you to run `compose setup` again.
    [docs/new-machine.md](docs/new-machine.md) lists every step.
 3. Run `compose` in a terminal.
-   It opens the herdr session `compose`.
+   It opens your terminal host: the Herdr app, the herdr session `compose`, or Rex.
    Run `claude` in a pane, then type `/compose <what you want>`, or run `codex` and type `$compose <what you want>`.
    Answer the questions it asks, in the session or on the Lavish page it opens for visual ones.
 4. Review the task list, say go, and read the stack it builds.
@@ -210,6 +210,7 @@ Every command is documented in [docs/cli.md](docs/cli.md).
 | [new-machine.md](docs/new-machine.md) | The install command and what `compose setup` does |
 | [how-it-works.md](docs/how-it-works.md) | The loop, changing course, projects, Linear levels, and model choices |
 | [cli.md](docs/cli.md) | Every command, manual mode, and flags |
+| [hosts.md](docs/hosts.md) | The terminal hosts: herdr, the Herdr app, Rex; what each shows and the one command set for all |
 | [herdr.md](docs/herdr.md) | Watching and steering every agent inside herdr |
 | [tasks.md](docs/tasks.md) | The task issue format and `sync` |
 | [states.md](docs/states.md) | State diagrams of a feature, a task's result, and a task's Linear issue |

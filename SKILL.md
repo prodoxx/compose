@@ -5,7 +5,7 @@ description: Full fast loop for a feature, from first question to verified stack
 
 # compose
 
-You are the team lead, or, inside herdr, the engineering manager who hands the project to one (0h).
+You are the team lead, or, inside a terminal host (herdr, the Herdr app, Rex), the engineering manager who hands the project to one (0h).
 Implementer is pi running GLM 5.3 Flash (OpenRouter preset `glm-5-3-flash-fast`); OpenCode or Claude can take a task via `model:`.
 Verification is local; nothing is pushed.
 This skill is the whole flow: when the user invokes it with a task, start at step 0 and carry it to verified, stacked branches.
@@ -16,7 +16,7 @@ The default path is brief, plan, build, verify: nothing waits for an approval, L
 | You (team lead; the engineering manager likewise) | Write the feature's Intent from the brief (0b; the shaping conversation only when one of its triggers holds, and then it is the engineering manager's), start the planner teammate and review its cut at 3b (never write the plan or every task yourself), move issues through Linear states, brief teammates for protected tests and any other code, dispatch, review diffs, make a small fix yourself (Rules), run verify, re-split escalated tasks, submit the stack when told | Write more than a small fix (Rules: at most 30 changed lines): anything bigger is a task for `run` or a teammate's; merge anything: a human reviewer merges the PRs on GitHub, or `compose land --yes` on the user's word (7) |
 | Teammates (Claude sessions in the project's space, 0h) | Protected tests with the stubs and groundwork they need, escalated work, conflict fixes, docs after merge, a change of course's questions (step 8), research; a toolsmith (briefed by `compose toolsmith`) only files compose's bugs as GitHub issues, never fixes them | Plan, re-scope their brief, address the product owner except through `report` and their own pane |
 | Designer (a Claude teammate in its own pane, 0d) | Continue design work in Figma from the ticket's level: read inputs, write the design-system epic, design stories, and design tasks on Linear, start `design-NNN` builders and a `design-review` reviewer in own panes, run the gate, hand off to code | Build in Figma (builders do), write any file in the repo (Linear only), decide a product question |
-| Implementer (fast model via pi or OpenCode; inside herdr a named pi agent in own pane of the `implementers` tab) | One task issue's brief, named files, until its test passes, at most 350 changed lines, no documents added | Edit protected files, plan, touch other tasks, address the product owner |
+| Implementer (fast model via pi or OpenCode; inside a terminal host a named pi agent in its own pane of the `implementers` tab) | One task issue's brief, named files, until its test passes, at most 350 changed lines, no documents added | Edit protected files, plan, touch other tasks, address the product owner |
 | `compose verify` | Checks, jev browser e2e (through `bp` for extensions), diff review | Push, open PRs, run CI |
 
 ## Workflow
@@ -104,7 +104,7 @@ The CLI also refreshes the `Ready` marks after every roll-up, `sync`, the end of
 ### 0e. Explore an existing repo first: read sections/0e.md
 
 ### 0b. Write the Intent; shape only when asked: read sections/0b.md
-The shaping conversation is the engineering manager's; inside herdr the team lead writes the Intent itself and reports `needs-user "shape <issue>"` only when one of 0b's triggers holds (0h).
+The shaping conversation is the engineering manager's; inside a terminal host the team lead writes the Intent itself and reports `needs-user "shape <issue>"` only when one of 0b's triggers holds (0h).
 
 ### 0g. Groundwork and the smoke check run while the product owner answers: read sections/0g.md
 

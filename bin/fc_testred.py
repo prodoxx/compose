@@ -1,7 +1,7 @@
 """The check before a test writer's test is collected: it must fail on the stubs for the reason its task fixes, not because it cannot load."""
 import json, re, sys
 from pathlib import Path
-import fc_core, fc_crew, fc_herdr, fc_models, fc_worktree
+import fc_core, fc_crew, fc_herdr, fc_fleet, fc_models, fc_worktree
 
 
 # A line that shows the test itself cannot run: a missing module or name, a syntax or compile error. An assertion or a stub's
@@ -55,7 +55,7 @@ def gate(proj, meta, writer):
         return False
     sent, before = fc_crew.crew_reports(proj, writer), sent_back(proj).get(tid)
     reports = len(sent)
-    agents = {a.get("name"): a for a in fc_herdr.live_agents()}
+    agents = {a.get("name"): a for a in fc_fleet.live_agents()}
     live = writer in agents
     last = (sent or [{}])[-1]
     if last.get("state") != "done" and (agents.get(writer) or {}).get("agent_status") == "working":
@@ -75,8 +75,8 @@ def gate(proj, meta, writer):
     text = "\n".join([f"Your test for task {tid} does not test the behavior the task adds: it cannot load, or it runs no test: {line}",
                       "Output of `" + meta["test"] + "`:", out[-1500:],
                       "Fix the test (a plain new commit), check it fails on the stubs for the missing behavior, and report test ready again."])
-    if fc_herdr.herdr("agent", "prompt", writer, text) is None:
-        fc_core.say(f"tests-{tid} collected although its test proves nothing ({line}): herdr could not reach its writer")
+    if fc_fleet.prompt(writer, text)[1] is not None:
+        fc_core.say(f"tests-{tid} collected although its test proves nothing ({line}): the host could not reach its writer")
         return False
     sent_back(proj, {tid: reports})
     fc_core.say(f"tests-{tid} sent back to its writer: {line}")
@@ -103,7 +103,7 @@ def oversize(proj, meta, writer, added):
     tid, budget = meta["id"], told_budget(proj, writer)
     if not budget or added <= budget * OVER:
         return False
-    live = writer in {a.get("name") for a in fc_herdr.live_agents()}
+    live = writer in {a.get("name") for a in fc_fleet.live_agents()}
     if sent_back(proj).get(tid) is not None or not live:
         fc_core.say(f"tests-{tid} collected although its test adds {added} lines, over its budget of {budget}: " + ("it was sent back once already" if live else "its writer is not running"))
         return False
@@ -111,8 +111,8 @@ def oversize(proj, meta, writer, added):
                       "Cut it to the cases that fail if the behavior the TASK BRIEF names breaks: one per criterion, at most two holdouts for a real edge (empty, boundary, error).",
                       "Drop every case on styling, copy the brief does not give, constants, types, configuration, glue that only forwards to a library, and a second case for the same behavior.",
                       "Make a plain new commit, check the test still fails on the stubs for the missing behavior, and report test ready again."])
-    if fc_herdr.herdr("agent", "prompt", writer, text) is None:
-        fc_core.say(f"tests-{tid} collected although its test adds {added} lines, over its budget of {budget}: herdr could not reach its writer")
+    if fc_fleet.prompt(writer, text)[1] is not None:
+        fc_core.say(f"tests-{tid} collected although its test adds {added} lines, over its budget of {budget}: the host could not reach its writer")
         return False
     sent_back(proj, {tid: len(fc_crew.crew_reports(proj, writer))})
     fc_core.say(f"tests-{tid} sent back to its writer: {added} lines, budget {budget}")

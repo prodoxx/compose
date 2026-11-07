@@ -18,7 +18,7 @@ def restore_crew_env(proj):
     """A teammate's session that comes back without the env its tab was created with (herdr rebuilds the pane after a computer
     restart) is found by its pane in the project's crew records, and gets that env again: otherwise it is taken for an engineering
     manager. A session with a role, outside herdr, or in a pane no record names is left alone."""
-    pane = os.environ.get("HERDR_PANE_ID")
+    pane = fc_core.session_id()
     if os.environ.get("COMPOSE_ROLE") or not pane:
         return
     for f in sorted((Path(proj) / "results" / "crew").glob("*.json")):
@@ -32,7 +32,7 @@ def restore_crew_env(proj):
 
 def restore_pane_env(cwd):
     """restore_crew_env for a hook: the project is found by the hook's cwd, over every worktree of its repo."""
-    if os.environ.get("HERDR_PANE_ID") and not os.environ.get("COMPOSE_ROLE"):
+    if fc_core.session_id() and not os.environ.get("COMPOSE_ROLE"):
         for _, proj in fc_core.all_projects(cwd or ".").values():
             restore_crew_env(proj)
             if os.environ.get("COMPOSE_ROLE"):

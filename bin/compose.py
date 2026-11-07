@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fc_cost, fc_mcp  # noqa: E402
-import fc_core, fc_proc, fc_readguard, fc_libapi, fc_green, fc_gate, fc_config, fc_compact, fc_transcript, fc_snapshot, fc_compactlog, fc_tasks, fc_linear, fc_linear_cmd, fc_prd, fc_delivery, fc_factorystate, fc_factoryturn, fc_lead, fc_factory, fc_claude, fc_models, fc_route, fc_quick, fc_herdr, fc_worktree, fc_layers, fc_blockers, fc_stack, fc_change, fc_frame0, fc_f0pages, fc_ask, fc_decide, fc_hooks, fc_pin, fc_reports, fc_manager, fc_compactor, fc_crew, fc_toolbug, fc_init, fc_clean, fc_figma, fc_briefs, fc_buildercheck, fc_reconcile, fc_format, fc_implement, fc_shrink, fc_jev, fc_accept, fc_fixround, fc_detach, fc_verify, fc_taskreview, fc_ship, fc_prove, fc_run, fc_status, fc_tiers, fc_tierpin, fc_budget, fc_spec, fc_watch, fc_rewake, fc_history, fc_yolo, fc_bench, fc_setup, fc_update, fc_readiness, fc_retro, fc_reader  # noqa: E402
+import fc_core, fc_proc, fc_readguard, fc_libapi, fc_green, fc_gate, fc_config, fc_compact, fc_transcript, fc_snapshot, fc_compactlog, fc_tasks, fc_linear, fc_linear_cmd, fc_prd, fc_delivery, fc_factorystate, fc_factoryturn, fc_lead, fc_factory, fc_claude, fc_models, fc_route, fc_quick, fc_herdr, fc_fleet, fc_worktree, fc_layers, fc_blockers, fc_stack, fc_change, fc_frame0, fc_f0pages, fc_ask, fc_decide, fc_hooks, fc_pin, fc_reports, fc_manager, fc_compactor, fc_crew, fc_toolbug, fc_init, fc_clean, fc_figma, fc_briefs, fc_buildercheck, fc_reconcile, fc_format, fc_implement, fc_shrink, fc_jev, fc_accept, fc_fixround, fc_detach, fc_verify, fc_taskreview, fc_ship, fc_prove, fc_run, fc_status, fc_tiers, fc_tierpin, fc_budget, fc_spec, fc_watch, fc_rewake, fc_history, fc_yolo, fc_bench, fc_setup, fc_update, fc_readiness, fc_retro, fc_reader, fc_stages  # noqa: E402
 
 DETACHED = fc_detach.DETACHED
 
@@ -127,10 +127,11 @@ def main():
                             ("yolo", fc_yolo.cmd_yolo, "the engineering manager answers until an explicit off, and the product owner may steer: [--push] [words] enters, `decided \"<q>: <a>\"` logs an answer taken, --clear-words empties the words, `digest` prints the digest, `off` prints it and archives"),
                             ("change", fc_change.cmd_change, "start | done | undo | keep|part|discard <task id> [--files a,b] a change of course: what changed in Linear and why, undoable; settle paused work"),
                             ("retro", fc_retro.cmd_retro, "the project's task retrospectives (what each missed task's attempts did and why); --task NNN one in full; --learnings a trail learning drafted from them; --history the pass rates over every run of the repository by model, route and tier"),
+                            ("stages", fc_stages.cmd_stages, "follow a verify's stages from a pane of the Herdr app or Rex, where no pane per stage exists: compose opens one itself in the project's `verify` tab (hosts.md)"),
                             ("decisions", fc_decide.cmd_decisions, "print the project's pending-decisions page: every open question with its recommendation and when it was asked, then the decisions to confirm; --issue picks another map"),
                             ("decide", fc_decide.cmd_decide, "record the product owner's decisions on the map (--new \"<decision>\" --closes Q1, --drop Q2, or --accept-all) with their words attached: --quote \"<what they said>\"; without it, under away or yolo as unconfirmed, or with --ruling as compose's own call on an easily reversible decision; it prints the open questions left"),
                             ("reconcile", fc_reconcile.cmd_reconcile, "the one-time cleanup of a messy Linear project: list | check --file | show | apply --go | notices"),
-                            ("crew", fc_lead.cmd_crew, "start | list | focus | stop teammates, the Claude sessions in the project's herdr space (the team lead, the architect, helpers); restart the team lead fresh from its handoff"),
+                            ("crew", fc_lead.cmd_crew, "start | list | focus | stop teammates, the sessions in the project's space of its terminal host (the team lead, the architect, helpers); restart the team lead fresh from its handoff; prompt | read | keys one teammate (or any agent by --agent), the same command in herdr, the Herdr app and Rex"),
                             ("report", fc_crew.cmd_report, "a teammate session reports up: working | needs-user | blocked | done, with one line"),
                             ("tool-bug", fc_toolbug.cmd_tool_bug, "file a tool bug (file): scrub --body and post it on the maintainer's machine or with --approved, else save a draft; --comment N or --new skips the search"),
                             ("toolsmith", fc_briefs.cmd_toolsmith, "print the toolsmith teammate's brief for the project's newest tool-bug entry"),
@@ -354,8 +355,11 @@ def main():
             s.add_argument("--why", help="start: one line, the reason for the change")
             s.add_argument("--files", help="part: comma-separated files of the paused work to keep")
         if name == "crew":
-            s.add_argument("action", choices=("start", "list", "focus", "stop", "restart"))
+            s.add_argument("action", choices=("start", "list", "focus", "stop", "restart", "prompt", "read", "keys"))
+            s.add_argument("text", nargs="?", help="prompt: the text to type into the teammate (`-` reads it from stdin); keys: the keys to press, e.g. esc")
             s.add_argument("--role", help="orchestrator (the team lead), architect, or a helper's job; the agent is named <slug>-<role>")
+            s.add_argument("--agent", help="prompt, read, keys: any live agent of the host by its full name (an implementer `<slug>-NNN`, a test writer) instead of --role")
+            s.add_argument("--lines", type=int, help="read: how many lines of the pane to print (default 60)")
             s.add_argument("--title", help="tab label, e.g. the ticket's title")
             s.add_argument("--brief", help="what to do; `-` reads it from stdin; restart: the fresh team lead's next job, after the handoff")
             s.add_argument("--force", action="store_true", help="stop: close it even though it has not reported done; start: start although the Mac's battery is nearly empty; restart: restart the team lead although work is in flight or its handoff is stale (never mid-turn)")
@@ -430,7 +434,7 @@ def main():
             s.add_argument("--prototype", action="store_true", help="after `run`: capture each verify.json `prototype` screen of the built app into results/prototype.md to compare with its reference")
             s.add_argument("--fix", type=int, default=2, help="auto-fix rounds with the fast model before escalating (0 = report only)")
     if len(sys.argv) == 1:
-        fc_herdr.herdr_attach()
+        fc_fleet.attach()
         ap.print_help(sys.stderr)
         sys.exit(2)
     a, extra = ap.parse_known_args()
@@ -457,7 +461,7 @@ def main():
         sys.stdout, sys.stderr = fc_core.Scrubbed(sys.stdout), fc_core.Scrubbed(sys.stderr)
         if a.cmd in ("run", "verify", "review", "bench", "resume"):  # the commands that spend; `watch` output stays one line
             fc_core.say(f"workspace {ws}")
-    if os.environ.get("HERDR_PANE_ID") and not os.environ.get("COMPOSE_ROLE") and hasattr(a, "repo"):  # a restored teammate pane has lost its env: no role looks like an engineering manager
+    if fc_core.session_id() and not os.environ.get("COMPOSE_ROLE") and hasattr(a, "repo"):  # a restored teammate pane has lost its env: no role looks like an engineering manager
         try:
             fc_hooks.restore_crew_env(fc_core.project_dir(argparse.Namespace(repo=a.repo, project=getattr(a, "project", None))))
         except SystemExit:  # no such project, or none named: this is no teammate's command

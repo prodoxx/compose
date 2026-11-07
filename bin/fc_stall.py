@@ -1,5 +1,5 @@
 import json, re, subprocess, time
-import fc_core, fc_herdr
+import fc_core, fc_herdr, fc_fleet
 
 
 # A banner a coding agent leaves while it waits out a limit or retries a refused call: "Retrying in 4s ... 401", "usage limit reached",
@@ -28,14 +28,14 @@ def limit_spells(snap, spells, now_s):
         if n in closed or (r and r[-1]["state"] == "done"):
             spells.pop(n, None)
         elif now_s - sp.get("read", 0) >= LIMIT_READ:
-            line = limit_line(fc_herdr.herdr_text("agent", "read", n, "--source", "recent-unwrapped", "--lines", "12"))
+            line = limit_line(fc_fleet.read(n, lines=12))
             if not line:
                 spells.pop(n, None)
                 continue
             spells[n] = sp = {"line": line, "since": sp.get("since", now_s), "read": now_s}
             if now_s - sp["since"] >= LIMIT_HOLD:
                 out.append((f"limit:{n}:{int(sp['since'])}", f"limit agent={n} line={line!r} on its pane since {time.strftime('%H:%M:%S', time.localtime(sp['since']))}: "
-                            f"a retry loop or a usage limit, not work; read it: herdr agent read {n} --lines 60"))
+                            f"a retry loop or a usage limit, not work; read it: compose crew read --project <slug> --agent {n} --lines 60"))
     return out
 
 def last_commit(proj, name):
@@ -60,5 +60,5 @@ def silent_stalls(proj, snap, seen, now_s, limit=AGENT_STALL_SECONDS, awake_from
         since = max(since, last_commit(proj, n))  # the git call waits until the rest says it may be stuck
         if now_s - since >= limit:
             out.append((f"silent:{n}:{int(since)}", f"silent agent={n} herdr shows it working, with no report and no commit for {fc_core.fmt(now_s - since)}; "
-                        f"read it: herdr agent read {n} --lines 60"))
+                        f"read it: compose crew read --project <slug> --agent {n} --lines 60"))
     return out

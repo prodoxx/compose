@@ -1,6 +1,6 @@
 import os, re, subprocess, sys, time
 from pathlib import Path
-import fc_compactlog, fc_config, fc_herdr, fc_manager, fc_transcript
+import fc_compactlog, fc_config, fc_herdr, fc_fleet, fc_manager, fc_transcript
 
 # The detached process the Stop hook starts to compact an engineering manager or team lead session at an idle moment: it waits for the
 # pane to be quiet, has the session write its handoff, then types `/compact` with a fixed focus. Every step lands in the compaction log
@@ -42,8 +42,7 @@ def input_line(lines):
 
 def pane_status(pane):
     """The agent's herdr status, read from the `agent` record `herdr agent get` answers with; None when there is none."""
-    got = fc_herdr.herdr("agent", "get", pane)
-    agent = got.get("agent") if isinstance(got, dict) else None
+    agent = fc_fleet.agent(pane)
     status = agent.get("agent_status") if isinstance(agent, dict) else None
     return status if isinstance(status, str) else None
 
@@ -53,7 +52,7 @@ def plain_lines(ansi_text):
 
 def pane_input(pane):
     """What waits in the pane's input line (see `input_line`), read with styling so a dim suggested prompt does not count as typed text."""
-    return input_line(plain_lines(fc_herdr.herdr_text("agent", "read", pane, "--source", "visible", "--format", "ansi", "--lines", "12")))
+    return input_line(plain_lines(fc_fleet.read(pane, lines=12, source="visible", fmt="ansi")))
 
 def pane_quiet(pane):
     """Whether the agent is idle or done and nothing waits in its input line."""

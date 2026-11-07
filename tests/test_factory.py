@@ -866,7 +866,7 @@ class Verbs(unittest.TestCase):
         mock = self.mock
         with mock.patch.dict(os.environ, {"HERDR_ENV": ""}), self.assertRaises(SystemExit) as e:
             self.verb("start")
-        self.assertEqual(e.exception.code, "factory: start it inside herdr: the team leads it starts live there (sections/0h.md)")
+        self.assertEqual(e.exception.code, "factory: start it inside a terminal host (herdr, the Herdr app, or Rex): the team leads it starts live there (sections/0h.md)")
         self.save(pid=os.getpid()); self.hold_lock()
         with mock.patch.dict(os.environ, {"HERDR_ENV": "1"}), mock.patch.object(fc.fc_factory.fc_herdr, "herdr_env", return_value=True), self.assertRaises(SystemExit) as e:
             self.verb("start")

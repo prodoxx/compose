@@ -1,6 +1,6 @@
 import json, shutil, subprocess, sys
 from pathlib import Path
-import fc_core, fc_tasks, fc_linear, fc_herdr, fc_worktree, fc_layers, fc_crew
+import fc_core, fc_tasks, fc_linear, fc_herdr, fc_fleet, fc_worktree, fc_layers, fc_crew
 
 # ---------- clean: remove a finished or abandoned project's worktrees, branches, tabs, and results ----------
 
@@ -81,15 +81,15 @@ def live_crew(proj):
     """Why the project still has people working: teammates whose last report is not done and whose tab is not closed, or agents
     alive in its herdr space. The team lead (orchestrator) is the one running the post-merge clean, so it does not count."""
     lead, why = fc_herdr.agent_name(proj.name, "orchestrator"), []
-    listed = fc_herdr.herdr("agent", "list")
+    listed = fc_fleet.agent_list()
     agents = None if listed is None else listed.get("agents", [])
     for f in sorted(fc_crew.crew_dir(proj).glob("*.json")):
         c = json.loads(f.read_text())
         last = (fc_crew.crew_reports(proj, c["name"]) or [{}])[-1]
         if c["name"] != lead and not c.get("closed") and last.get("state") != "done" and not fc_crew.tab_closed(c, agents):
             why.append(f"{c['name']} last reported {last.get('state', 'nothing')}")
-    space = fc_herdr.herdr_project_space(proj) if fc_herdr.herdr_env() else None
-    tabs = {t["tab_id"] for t in fc_herdr.herdr_project_tabs(proj, space)} if space else set()  # a space of several projects holds other projects' agents too: only agents named for this project count
+    space = fc_fleet.project_space(proj) if fc_fleet.inside() else None
+    tabs = {t["tab_id"] for t in fc_fleet.project_tabs(proj, space)} if space else set()  # a space of several projects holds other projects' agents too: only agents named for this project count
     why += [f"{ag.get('name')} is alive in its herdr space" for ag in agents or [] if ag.get("tab_id") in tabs and ag.get("name") != lead
             and fc_herdr.agent_id(proj.name, ag.get("name") or "")]
     return why
@@ -122,7 +122,7 @@ def standing_in(wt, proj, force=False):
     c = fc_crew.crew_record(proj, lead)
     last = (fc_crew.crew_reports(proj, lead) or [{}])[-1]
     if lead_working(c, last, force) \
-            and not fc_crew.tab_closed(c, (fc_herdr.herdr("agent", "list") or {}).get("agents") if fc_herdr.herdr_env() else None):
+            and not fc_crew.tab_closed(c, (fc_fleet.agent_list() or {}).get("agents") if fc_fleet.inside() else None):
         why.append(f"{lead} last reported {last.get('state', 'nothing')}")
     return why
 
@@ -149,13 +149,13 @@ def close_space(proj, name, force=False):
     """Close what the project holds in herdr: its tabs in a space it shares, or the space of its own.
     A tab whose crew record's last report is not done stays open, one line saying so (unless `force`); the team lead gets no exception.
     The engineering manager's pane stops naming the project."""
-    fc_herdr.herdr_unname_manager(name)
-    space = fc_herdr.herdr_project_space(proj)
+    fc_fleet.unname_manager(name)
+    space = fc_fleet.project_space(proj)
     if not space:
         return
     crew = {c["tab"]: c for c in (json.loads(f.read_text()) for f in sorted(fc_crew.crew_dir(proj).glob("*.json"))) if c.get("tab")}
     kept, closed = [], []
-    for t in fc_herdr.herdr_project_tabs(proj, space):
+    for t in fc_fleet.project_tabs(proj, space):
         c = crew.get(t["tab_id"])
         if c:
             last = (fc_crew.crew_reports(proj, c["name"]) or [{}])[-1]
@@ -166,13 +166,13 @@ def close_space(proj, name, force=False):
         closed.append(t["tab_id"])
     if fc_herdr.space_record(proj).exists():
         for tid in closed:
-            fc_herdr.herdr("tab", "close", tid)
-    elif fc_herdr.herdr_space_is(space, name):
+            fc_fleet.close_tab(tid)
+    elif fc_fleet.space_is(space, name):
         if kept:
             for tid in closed:
-                fc_herdr.herdr("tab", "close", tid)
+                fc_fleet.close_tab(tid)
         else:
-            fc_herdr.herdr("workspace", "close", space)
+            fc_fleet.close_space(space)
 
 def crew_holds_clean(crew, force, explicit):
     """Whether live crew keeps the project from a clean: only `--project <slug> --force` together override it."""

@@ -319,7 +319,7 @@ def yolo_by(y):
     if by.get("session") and by["session"] == fc_core.session_id():
         return "this session"
     who = {"manager": "an engineering manager session", "orchestrator": "the team lead"}.get(by.get("role"), f"a {by.get('role')} session")
-    return who + (f" in herdr pane {by['session']}" if by.get("session") else " outside herdr")
+    return who + (f" in herdr pane {by['session']}" if by.get("session") else " outside a terminal host")
 
 
 CANCELED = ("canceled", "cancelled")

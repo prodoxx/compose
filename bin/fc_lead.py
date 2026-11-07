@@ -5,7 +5,7 @@ fc_crew.handoff_path), so at a story boundary compose closes it and starts a new
 with work in flight."""
 import argparse, json, shutil, sys, time
 from pathlib import Path
-import fc_core, fc_herdr, fc_tasks, fc_crew, fc_update
+import fc_core, fc_herdr, fc_fleet, fc_tasks, fc_crew, fc_update
 
 LEAD_READS = ("SKILL.md, sections/0h.md, sections/0a.md, sections/0e.md, sections/0f.md, sections/0g.md, sections/4.md, sections/5.md, "
               "sections/6.md, sections/6a.md, sections/7.md, sections/8.md and ~/.claude/skills/herdr/SKILL.md")
@@ -82,7 +82,7 @@ def verdict(proj):
     """What a story handed to this project's live team lead does with it, as (how, why): "fresh" (a boundary: replace the lead), "wait" (it is mid-turn:
     the boundary comes when the turn ends) or "keep" (hand the story to the same lead; why, when not empty, says what stands in the way). herdr
     not answering its agent list, or no lead in it, is a "keep" with no why: the caller's own live check decides then."""
-    listed = fc_herdr.herdr("agent", "list")
+    listed = fc_fleet.agent_list()
     c = fc_crew.crew_record(proj, lead_name(proj))
     agents = listed.get("agents") or [] if isinstance(listed, dict) else None
     if agents is None or not c or fc_crew.tab_closed(c, agents):
@@ -96,7 +96,7 @@ def _gone(name, space):
     """Whether herdr's agent list no longer holds the closed team lead's name, waiting up to GONE_SECONDS for it to go."""
     end = time.time() + GONE_SECONDS
     while True:
-        got = fc_herdr.herdr("agent", "list")
+        got = fc_fleet.agent_list()
         if isinstance(got, dict) and not any(ag.get("name") == name and ag.get("workspace_id") == space for ag in got.get("agents") or []):
             return True
         if time.time() >= end:
@@ -109,20 +109,20 @@ def restart(a):
     proj = fc_core.project_dir(a)
     if (a.role or "").strip().lower() != "orchestrator":
         sys.exit(f"usage: compose crew restart --project {proj.name} --role orchestrator [--brief \"<job>\" | --brief -] [--force]  (only the team lead restarts: its state is in its handoff)")
-    if not fc_herdr.herdr_env():
-        sys.exit("team lead sessions live in herdr panes; there is no session to restart here")
-    fc_herdr.herdr_manager_claim(proj, getattr(a, "takeover", False))
+    if not fc_fleet.inside():
+        sys.exit("team lead sessions live in the panes of a terminal host; there is no session to restart here")
+    fc_fleet.manager_claim(proj, getattr(a, "takeover", False))
     name = lead_name(proj)
     c = fc_crew.crew_record(proj, name)
-    listed = fc_herdr.herdr("agent", "list")
+    listed = fc_fleet.agent_list()
     if listed is None:
-        sys.exit("herdr did not answer its agent list; nothing was restarted")
+        sys.exit("the terminal host did not answer its agent list; nothing was restarted")
     agents = listed.get("agents") or []
     if not c or fc_crew.tab_closed(c, agents):
         sys.exit(f"no live team lead {name}; start one with: compose crew start --project {proj.name} --role orchestrator --title orchestrator --brief -")
     midturn, why = gaps(proj, agents)
     if midturn:
-        sys.exit(f"{name} is mid-turn; restarting it now would cut off what it is doing, with --force too. Wait for its turn to end (`herdr agent read {name} --lines 40`), then run this again")
+        sys.exit(f"{name} is mid-turn; restarting it now would cut off what it is doing, with --force too. Wait for its turn to end (`compose crew read --project {proj.name} --role orchestrator --lines 40`), then run this again")
     if why and not a.force:
         sys.exit(f"{name} was not restarted: " + "; ".join(why) + f". Wait for the story boundary, or pass --force to restart it anyway "
                  f"(the fresh one starts from the handoff and the project's state)")
@@ -133,10 +133,10 @@ def restart(a):
     if not first.exists() and brief_file.exists():
         first.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(brief_file, first)
-    fc_herdr.herdr("tab", "close", c["tab"])
+    fc_fleet.close_tab(c["tab"])
     fc_crew.crew_closed(proj, name, "crew restart" + (" --force" if why else ""))
     if not _gone(c.get("agent", name), c.get("space")):
-        sys.exit(f"{name}'s tab is closed but herdr still lists it; run `compose crew start --project {proj.name} --role orchestrator --title orchestrator --brief -` once it is gone")
+        sys.exit(f"{name}'s tab is closed but the host still lists it; run `compose crew start --project {proj.name} --role orchestrator --title orchestrator --brief -` once it is gone")
     fresh = argparse.Namespace(**{**vars(a), "action": "start", "role": "orchestrator", "title": c.get("title") or "orchestrator", "brief": text,
                                   "model": getattr(a, "model", None) or (c["model"] if c.get("model_from") == "--model" else None)})
     try:
@@ -146,6 +146,42 @@ def restart(a):
     fc_crew.write_report(proj, name, "working", f"restarted fresh, from its handoff {fc_crew.handoff_path(proj, name)}")
     print(f"team lead {name} restarted fresh; it reads {fc_crew.handoff_path(proj, name)}")
 
+def steer(a):
+    """`crew prompt`: type a prompt into a teammate (`--role`, or any live agent of the host by `--agent`: an implementer, a test writer)
+    as the team lead or product owner would, whichever host it runs in; `crew read`: print the last `--lines` lines of its pane;
+    `crew keys`: press keys in it (`esc` to stop its turn). All exit 1 naming the host's refusal, so a session never has to know
+    which host's CLI steers its teammates."""
+    proj = fc_core.project_dir(a)
+    if not a.role and not getattr(a, "agent", None):
+        sys.exit(f"usage: compose crew {a.action} --project {proj.name} (--role <role> | --agent <name>)" + {"prompt": " \"<text>\"", "keys": " esc"}.get(a.action, ""))
+    target = getattr(a, "agent", None)
+    if not target:
+        c = fc_crew.crew_record(proj, fc_herdr.agent_ref(proj.name, a.role))
+        target = (c or {}).get("agent") or fc_herdr.agent_ref(proj.name, a.role)
+    if a.action == "read":
+        text = fc_fleet.read(target, lines=getattr(a, "lines", None) or 60)
+        if not text and not fc_fleet.agent(target):
+            sys.exit(f"no live agent {target}")
+        print(text)
+        return
+    if a.action == "keys":
+        keys = (a.text or "").split()
+        if not keys:
+            sys.exit("crew keys needs the keys to press, e.g. esc")
+        if not fc_fleet.send_keys(target, *keys):
+            sys.exit(f"{target} did not take the keys: no live agent of that name, or the host refused")
+        print(f"pressed {' '.join(keys)} in {target}")
+        return
+    text = sys.stdin.read() if a.text == "-" else a.text
+    if not (text or "").strip():
+        sys.exit("crew prompt needs the text to send (or - with it on stdin)")
+    _, err = fc_fleet.prompt(target, text)
+    if err:
+        sys.exit(f"{target} did not take the prompt: {err}" + (" (it waits at a dialog: answer it in its pane first)" if err == "agent_blocked" else ""))
+    print(f"prompted {target}")
+
 def cmd_crew(a):
-    """compose crew: `restart` here, every other action in fc_crew."""
+    """compose crew: `restart`, `prompt`, `read` and `keys` here, every other action in fc_crew."""
+    if a.action in ("prompt", "read", "keys"):
+        return steer(a)
     return restart(a) if a.action == "restart" else fc_crew.cmd_crew(a)

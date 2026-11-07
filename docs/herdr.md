@@ -1,5 +1,8 @@
 # Running inside herdr
 
+compose runs in two other terminal hosts too, the Herdr app and Rex, with the same commands: [hosts.md](hosts.md) says what each shows.
+This page is herdr's own.
+
 Inside [herdr](https://herdr.dev) you can see every agent in the fleet and steer any of them.
 `compose` with no command, run on a terminal outside herdr, opens the herdr session `compose` for you: `herdr session attach compose`, which creates the session when it is missing.
 It prints one hint line first, then you run `claude` in a pane and type `/compose`, or run `codex` and type `$compose`.

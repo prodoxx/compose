@@ -1,6 +1,6 @@
 import json, os, re, shutil, subprocess, sys, urllib.error, urllib.request
 from pathlib import Path
-import fc_auth, fc_checks, fc_config, fc_core, fc_harness, fc_steps, fc_tasks, fc_linear, fc_providers, fc_herdr, fc_worktree, fc_layers, fc_crew, fc_pin
+import fc_auth, fc_checks, fc_config, fc_core, fc_harness, fc_steps, fc_tasks, fc_linear, fc_providers, fc_herdr, fc_fleet, fc_worktree, fc_layers, fc_crew, fc_pin
 
 
 TRAIL_INIT = ["trail", "init", "--no-agents", "--no-global", "--no-build"]  # Claude Code wiring only, nothing outside the repo
@@ -399,11 +399,11 @@ def cmd_init(a):
         if made:
             undo_worktree(here, *made)
         raise
-    if fc_herdr.herdr_space(proj):
-        print(f"herdr space {fc_herdr.HERDR_SPACES[name]} with tabs {fc_herdr.tab_label(proj, 'shell')!r} and {fc_herdr.tab_label(proj, 'status')!r}")
-        fc_herdr.herdr_name_manager(proj)
+    if fc_fleet.space(proj):
+        print(f"herdr space {fc_fleet.SPACES[name]} with tabs {fc_herdr.tab_label(proj, 'shell')!r} and {fc_herdr.tab_label(proj, 'status')!r}")
+        fc_fleet.name_manager(proj)
     print(f"initialised {proj}\nwork in {wt} from now on: tests and every command with --repo {wt} (or any checkout with --project {name}); "
           + f"the plan and tasks live on Linear: write {proj / 'linear.json'} as {{\"feature\": \"<issue id>\"}}")
     if (lead := fc_herdr.agent_name(name, "orchestrator")) != f"{name}-orchestrator":
-        print(f"herdr agent names stop at 32 characters, so this project's are cut: its team lead is {lead}, not {name}-orchestrator; "
+        print(f"agent names stop at 32 characters, so this project's are cut: its team lead is {lead}, not {name}-orchestrator; "
               f"use the names `compose crew list --project {name}` shows in every `herdr agent` command")

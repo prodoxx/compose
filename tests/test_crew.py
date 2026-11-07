@@ -304,7 +304,7 @@ class Crew(unittest.TestCase):
             raise RuntimeError(f"{agent} did not start on its brief after 3 retries")
         a = type("A", (), {"action": "start", "role": "eol", "title": "eol", "brief": "Do it."})
         with mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), mock.patch.object(fc.fc_herdr, "herdr", herdr), \
-                mock.patch.object(fc.fc_herdr, "herdr_text", return_value=screen), mock.patch.object(fc.fc_herdr, "herdr_await_start", side_effect=await_start), \
+                mock.patch.object(fc.fc_herdr, "herdr_text", return_value=screen), mock.patch.object(fc.fc_fleet, "await_start", side_effect=await_start), \
                 mock.patch.object(fc.fc_herdr, "herdr_env", return_value=True), mock.patch.object(fc.fc_herdr, "herdr_space", return_value="w9"), mock.patch.object(fc.fc_herdr, "herdr_find_space", return_value="w9"), \
                 mock.patch.object(fc.fc_claude, "claude_trusted", return_value=True), \
                 mock.patch("builtins.print", side_effect=lambda *x, **k: out.append(" ".join(map(str, x)))):
@@ -346,7 +346,7 @@ class Crew(unittest.TestCase):
         self.assertIn("New MCP server found in this project: db", code)
         self.assertIn("Continue without using this MCP server", code)
         self.assertNotIn("Enter to confirm", code)
-        self.assertIn("herdr agent prompt shop-eol", code)  # how the brief goes in once the dialog is answered
+        self.assertIn("compose crew prompt --project shop --role eol", code)  # how the brief goes in once the dialog is answered
         self.assertNotIn("run the same crew start again", code)
         self.assertNotIn(("tab", "close", "w9:t3"), calls)
         self.assertTrue((self.proj / "results" / "crew" / "shop-eol.json").exists())
@@ -927,7 +927,7 @@ class AwaitStart(unittest.TestCase):
             calls.append(args)
             return {"agent": {"agent_status": next(seen)}} if args[:2] == ("agent", "get") else {}
         with mock.patch.object(fc.fc_herdr, "herdr", herdr), mock.patch.object(time, "sleep"):
-            fc.fc_herdr.herdr_await_start("shop-tests-003", first)
+            fc.fc_fleet.await_start("shop-tests-003", first)
         return [c for c in calls if c[:2] in (("agent", "send-keys"), ("agent", "prompt"))]
 
     def test_a_slow_to_ready_agent_is_waited_for_without_enter(self):
@@ -945,7 +945,7 @@ class AwaitStart(unittest.TestCase):
         with self.assertRaises(RuntimeError) as e:
             self.run_await(["idle"] * 100, self.FIRST)
         self.assertIn("shop-tests-003 did not start", str(e.exception))
-        self.assertIn("herdr agent prompt shop-tests-003", str(e.exception))
+        self.assertIn("compose crew prompt --agent shop-tests-003", str(e.exception))
 
 
 class Ready(unittest.TestCase):
@@ -959,7 +959,7 @@ class Ready(unittest.TestCase):
         reads, shown = [], iter(screens)
         with mock.patch.object(fc.fc_herdr, "herdr", lambda *a, **k: {"agent": {"agent_status": status}} if a[:2] == ("agent", "get") else {}), \
                 mock.patch.object(fc.fc_herdr, "herdr_text", lambda *a, **k: reads.append(a) or next(shown, "")), mock.patch.object(time, "sleep"):
-            fc.fc_herdr.herdr_ready("shop-tests-003", timeout=timeout)
+            fc.fc_fleet.ready("shop-tests-003", timeout=timeout)
         return reads
 
     def test_the_brief_waits_for_the_input_box(self):
@@ -986,7 +986,7 @@ class Ready(unittest.TestCase):
             return {}
         a = type("A", (), {"action": "start", "role": "tests", "title": "tests", "brief": "Write them.", "cwd": None})
         with mock.patch.object(fc.fc_core, "project_dir", return_value=proj), mock.patch.object(fc.fc_herdr, "herdr", herdr), \
-                mock.patch.object(fc.fc_herdr, "herdr_ready", lambda agent, **k: calls.append(("ready", agent))), \
+                mock.patch.object(fc.fc_fleet, "ready", lambda agent, **k: calls.append(("ready", agent))), \
                 mock.patch.object(fc.fc_herdr, "herdr_env", return_value=True), mock.patch.object(fc.fc_herdr, "herdr_space", return_value="w9"), \
                 mock.patch.object(fc.fc_claude, "claude_trusted", return_value=True), mock.patch("builtins.print"):
             fc.fc_crew.cmd_crew(a)

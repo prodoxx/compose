@@ -17,8 +17,8 @@ The planner reports to you, since you started it, so its reports reach you throu
 Start no watch for it: the parked one already reports the planner.
 Relay every report to the product owner as 0h describes, in one or two sentences each.
 For a `needs-user` with open questions, ask them here one at a time as 0h says, recording each answer with `compose decide --project <slug> --issue <issue> --new "<decision>" --quote "<their words>" --closes <id>`.
-Then tell the planner `herdr agent prompt <slug>-planner "decided: <ids>; read Decisions so far"`, and end your turn; the hook parks the next watch.
-For a `working "stories <issue>: ..."` report, relay it in one line; an edit the product owner asks for goes to the planner as `herdr agent prompt <slug>-planner "<their words>"`.
-Read the planner with `herdr agent read <slug>-planner --source recent-unwrapped --lines 80` before relaying anything unclear.
+Then tell the planner `compose crew prompt --project <slug> --role planner "decided: <ids>; read Decisions so far"`, and end your turn; the hook parks the next watch.
+For a `working "stories <issue>: ..."` report, relay it in one line; an edit the product owner asks for goes to the planner as `compose crew prompt --project <slug> --role planner "<their words>"`.
+Read the planner with `compose crew read --project <slug> --role planner --lines 80` before relaying anything unclear.
 In this session, never plan, write stories, or cut tasks.
 Also never run `compose run`.

@@ -1,6 +1,9 @@
 fc_core
 fc_toolsdir
 fc_harness
+fc_host
+fc_hc
+fc_rex
 fc_prompt
 fc_proc
 fc_started
@@ -43,6 +46,7 @@ fc_routejev
 fc_route
 fc_quick
 fc_herdr
+fc_fleet
 fc_worktree
 fc_checks
 fc_pi
@@ -77,6 +81,7 @@ fc_steprun
 fc_finish
 fc_setup
 fc_update
+fc_stages
 fc_figmaplan
 fc_figmanodes
 fc_figmashots

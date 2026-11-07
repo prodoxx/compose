@@ -3,7 +3,7 @@ import os
 import shutil
 import sys
 from pathlib import Path
-import fc_core, fc_auth, fc_config, fc_defaults, fc_harness, fc_herdrconf, fc_keys, fc_links, fc_steps
+import fc_core, fc_auth, fc_config, fc_defaults, fc_harness, fc_herdrconf, fc_keys, fc_links, fc_steps, fc_fleet
 
 CLAUDE_MISSING = "Claude Code is missing: install it with curl -fsSL https://claude.ai/install.sh | bash, log in, then run compose setup again"
 
@@ -81,7 +81,7 @@ def _finish(results, yes, dry=False):
             return lines, 0
     if not shutil.which("claude") and other is not None:
         exe, sigil = fc_harness.HARNESSES[other]["exe"], fc_harness.HARNESSES[other]["sigil"]
-        lines += ["compose is ready", f"next: run {exe} in a pane and type {sigil}compose" if os.environ.get("HERDR_ENV") else "next: run compose to open herdr"]
+        lines += ["compose is ready", f"next: run {exe} in a pane and type {sigil}compose" if fc_fleet.inside() or os.environ.get("HERDR_ENV") else "next: run compose to open herdr"]
         return lines, 0
-    lines += ["compose is ready", "next: run claude in a pane and type /compose" if os.environ.get("HERDR_ENV") else "next: run compose to open herdr"]
+    lines += ["compose is ready", "next: run claude in a pane and type /compose" if fc_fleet.inside() or os.environ.get("HERDR_ENV") else "next: run compose to open herdr"]
     return lines, 0

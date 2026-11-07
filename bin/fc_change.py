@@ -1,6 +1,6 @@
 import json, os, re, sys, threading, time
 from pathlib import Path
-import fc_core, fc_config, fc_herdr, fc_tasks, fc_worktree, fc_linear, fc_models, fc_stack
+import fc_core, fc_config, fc_herdr, fc_fleet, fc_tasks, fc_worktree, fc_linear, fc_models, fc_stack
 
 
 # ---------- changing course: reflect, hold, change ----------
@@ -166,12 +166,12 @@ def steer_teammate(proj, tid, text, release=False):
     """Interrupt the task's live test teammate and send it `text`; False when there is none (or outside herdr) or, unless it is
     a `release`, when its turn is over. A release only prompts: the teammate the pause stopped is idle (`done`), waiting for it."""
     agent = fc_herdr.agent_name(proj.name, f"tests-{tid}")
-    got = fc_herdr.herdr("agent", "get", agent)
-    if got is None or (not release and (got.get("agent") or {}).get("agent_status") == "done"):
+    got = fc_fleet.agent(agent)
+    if got is None or (not release and got.get("agent_status") == "done"):
         return False
     if not release:
-        fc_herdr.herdr("agent", "send-keys", agent, "esc")
-    return fc_herdr.herdr("agent", "prompt", agent, text) is not None
+        fc_fleet.send_keys(agent, "esc")
+    return fc_fleet.prompt(agent, text)[1] is None
 
 def save_hold(proj, hold):
     """hold.json, written whole: a run re-reading mid-write never sees a torn file, and two holds never share a temp name."""
