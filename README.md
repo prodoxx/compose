@@ -212,6 +212,7 @@ Every command is documented in [docs/cli.md](docs/cli.md).
 | [cli.md](docs/cli.md) | Every command, manual mode, and flags |
 | [herdr.md](docs/herdr.md) | Watching and steering every agent inside herdr |
 | [tasks.md](docs/tasks.md) | The task issue format and `sync` |
+| [states.md](docs/states.md) | State diagrams of a feature, a task's result, and a task's Linear issue |
 | [verify.md](docs/verify.md) | `verify.json`, the stages, e2e, and jev |
 | [config.md](docs/config.md) | Every `config.json` key, what it takes, and what a bad entry does |
 | [harnesses.md](docs/harnesses.md) | The agent CLIs compose runs in, how a model id picks one, and which role runs where |

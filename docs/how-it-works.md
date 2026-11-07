@@ -2,6 +2,7 @@
 
 The loop turns a feature idea into one gh stack of small branches, each green against its own test and reviewed before verify checks the whole stack.
 A frontier model plans and checks the work, cheap fast models write the code in parallel, and nothing is pushed.
+[states.md](states.md) draws the same loop as state diagrams: the feature, each task's result, and each task's Linear issue.
 
 ## The loop
 
