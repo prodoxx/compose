@@ -38,7 +38,7 @@ The layout is the same idea in each: a space per project, a tab per teammate, on
 
 | compose | herdr | the Herdr app | Rex |
 |---|---|---|---|
-| the project's space | a worktree space grouped under the repo's space, or the space compose was started from | a space named for the project, its terminals in the project worktree | a session labelled with the project's name |
+| the project's space | a worktree space grouped under the repo's space, or the space compose was started from | a space named `<parent> › <project>` after the space compose was started from, placed right after that space and its other projects, its terminals in the project worktree | a session labelled `<parent> › <project>` after the session compose was started from, placed the same way |
 | a teammate's tab | a tab holding the agent, started by `herdr agent start` in its shell | a tab holding the agent's terminal (`hc run --name <agent>`), named for the teammate | a window named for the teammate, one block running the agent |
 | an implementer's pane | a split of the `implementers` tab | a terminal placed in the `implementers` tab by its labels | a split of the `implementers` window |
 | the agent's name | herdr's registered agent name | the hc terminal's name | the first part of the block's label: `<name> · <title> · <state>` |
@@ -50,6 +50,7 @@ The layout is the same idea in each: a space per project, a tab per teammate, on
 Claude Code, pi (1.3 and later) and Codex report their status over OSC 7501, so the Herdr app and Rex show a teammate `working`, `idle`, `blocked` or `done` as herdr does.
 A program that reports nothing (a plain shell) has no status; compose then judges by its reports and its process.
 
+The Herdr app and Rex list spaces flat, so the `<parent> › <project>` name and the placement stand in for herdr's worktree grouping; a project started from another project's space goes under that space's parent.
 In the Herdr app the window is a view: agents started while it is closed keep running under hc and are reachable by name, and they have no space or tab until the window opens.
 In Rex a block's label is the agent's identity, so a label you change by hand loses compose its agent; rename the window instead.
 

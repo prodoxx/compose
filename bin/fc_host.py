@@ -62,6 +62,31 @@ def installed():
         out.append(REX)
     return out
 
+# ---------- a project's space under the space it was started from ----------
+# herdr groups a project's worktree space under the repo's space. The Herdr app and Rex have flat lists, so compose names the
+# project's space `<parent> › <slug>` and puts it right after its parent and the parent's other projects, which reads as the
+# same tree.
+
+SPACE_SEP = " › "
+
+def space_root(name):
+    """The top of a space's tree: a project's space names its parent first (`dtt › recommender` -> `dtt`)."""
+    return (name or "").split(SPACE_SEP)[0]
+
+def space_name(parent, slug):
+    """The name a project's space gets under `parent` (a space's name, or None: the plain slug)."""
+    return f"{space_root(parent)}{SPACE_SEP}{slug}" if parent and space_root(parent) != slug else slug
+
+def is_space_of(name, slug):
+    """Whether a space named `name` is the project `slug`'s: the plain slug, or the slug under a parent."""
+    return bool(name) and (name == slug or name.endswith(SPACE_SEP + slug))
+
+def after_group(names, parent):
+    """The index (0-based, in `names`) of the last space of `parent`'s tree: the parent or its last project; None when absent."""
+    root = space_root(parent)
+    hits = [i for i, n in enumerate(names) if n == root or (n or "").startswith(root + SPACE_SEP)]
+    return hits[-1] if hits else None
+
 SHELL_GUARD = (("DISABLE_AUTO_UPDATE", "true"), ("DISABLE_UPDATE_PROMPT", "true"))
 # A host starts a teammate by typing its command into a new shell (herdr) or runs it under the login shell (hc, rex), so a
 # prompt that shell asks first swallows the command. oh-my-zsh's update prompt is the known one; both variables are its

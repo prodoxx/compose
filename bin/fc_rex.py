@@ -28,7 +28,8 @@ def rex_err(*args, timeout=60, text=False):
     if not exe:
         return None, "rex is not installed"
     args = list(map(str, args))
-    plain = text or args[0] in PLAIN or (args[0] in ("block", "window") and len(args) > 1 and args[1] in ("rename", "close", "focus"))
+    plain = text or args[0] in PLAIN or (args[0] in ("block", "window") and len(args) > 1 and args[1] in ("rename", "close", "focus")) \
+        or args[:2] == ["session", "move"]
     raw = args[:2] == ["block", "call"]  # answers JSON by itself and takes no --json
     cut = args.index("--") if "--" in args else len(args)  # --json goes before the program's own arguments
     argv = args if plain or raw else [*args[:cut], "--json", *args[cut:]]
@@ -157,14 +158,21 @@ def wait(name, timeout=None, until=None):
 # ---------- sessions and windows ----------
 
 def find_space(slug, wt):
-    return next((s["session_id"] for s in sessions() if s.get("label") == slug), None)
+    return next((s["session_id"] for s in sessions() if fc_host.is_space_of(s.get("label"), slug)), None)
 
 def space(slug, wt):
-    """The project's session, made when none is labelled `slug`: its terminals in the project worktree, its first window `shell`."""
+    """The project's session, made when none is the project's: its terminals in the project worktree, its first window `shell`. Rex lists
+    sessions flat, so it is labelled `<parent> › <slug>` after the session this one runs in (REX_SESSION) and moved right after that
+    session's tree (fc_host.space_name), as herdr groups a worktree space under its repo's."""
     if found := find_space(slug, wt):
         return found
-    made = rex("new", slug, "-c", str(wt), "--window", "shell")
-    return (made or {}).get("session_id")
+    listed, me = sessions(), os.environ.get("REX_SESSION")
+    parent = next((s for s in listed if me and me in (s.get("session_id"), s.get("label"))), None)
+    made = rex("new", fc_host.space_name((parent or {}).get("label"), slug), "-c", str(wt), "--window", "shell")
+    new = (made or {}).get("session_id")
+    if new and parent and (at := fc_host.after_group([s.get("label") for s in listed], parent.get("label"))) is not None:
+        rex("session", "move", new, "--after", listed[at]["session_id"])
+    return new
 
 def tabs(space):
     return {w.get("label"): {"tab_id": w.get("window_id"), "label": w.get("label")} for w in (rex("window", "ls", "-s", space) or {}).get("windows") or []}
@@ -216,7 +224,7 @@ def close_space(space):
     rex("kill", space)
 
 def space_is(space, slug):
-    return (rex("session", "inspect", space) or {}).get("label") == slug
+    return fc_host.is_space_of((rex("session", "inspect", space) or {}).get("label"), slug)
 
 def focus(space=None, tab=None, pane=None):
     if tab:

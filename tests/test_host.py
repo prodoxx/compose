@@ -91,3 +91,18 @@ class PaneEnv(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SpaceNames(unittest.TestCase):
+    def test_a_project_space_is_named_under_the_root_of_its_parent(self):
+        self.assertEqual(fc_host.space_name("dtt", "cart"), "dtt › cart")
+        self.assertEqual(fc_host.space_name("dtt › recommender", "cart"), "dtt › cart")  # started from another project's space
+        self.assertEqual(fc_host.space_name(None, "cart"), "cart")
+        self.assertEqual(fc_host.space_name("cart", "cart"), "cart")
+
+    def test_whose_space_and_where_its_tree_ends(self):
+        self.assertTrue(fc_host.is_space_of("dtt › cart", "cart"))
+        self.assertTrue(fc_host.is_space_of("cart", "cart"))
+        self.assertFalse(fc_host.is_space_of("dtt › supercart", "cart"))
+        self.assertEqual(fc_host.after_group(["a", "dtt", "dtt › x", "b", "dtt › y"], "dtt › x"), 4)
+        self.assertIsNone(fc_host.after_group(["a"], "dtt"))

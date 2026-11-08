@@ -170,9 +170,34 @@ class Spaces(unittest.TestCase):
         host = Host(**{"herdr-app__ls": json.dumps({"spaces": []}), "herdr-app__do__space.new": json.dumps({"space": "spNEW", "tab": "tbNEW", "terminal": "t2"})})
         with run_with(host):
             self.assertEqual(fc_hc.space("cart", "/w/cart"), "spNEW")
-        self.assertEqual(host.calls[1:], [["herdr-app", "do", "space.new", "--name", "cart", "--folder", "/w/cart"], ["herdr-app", "do", "tab.rename", "--id", "tbNEW", "--name", "shell"]])
+        self.assertEqual(host.calls[2:], [["herdr-app", "do", "space.new", "--name", "cart", "--folder", "/w/cart"], ["herdr-app", "do", "tab.rename", "--id", "tbNEW", "--name", "shell"]])
         with run_with(Host(**{"herdr-app__ls": ("", 1, "")})):
             self.assertIsNone(fc_hc.space("cart", "/w/cart"))
+
+    def test_a_new_space_sits_under_the_space_this_session_runs_in_after_its_other_projects(self):
+        ls = {"spaces": [{"id": "spA", "name": "dtt", "tabs": [{"id": "tb1", "name": "1", "terminals": [{"terminal": "t1"}]}]},
+                         {"id": "spB", "name": "dtt › recommender", "tabs": []},
+                         {"id": "spC", "name": "other", "tabs": []}]}
+        after = {"spaces": [*ls["spaces"], {"id": "spNEW", "name": "dtt › cart", "tabs": []}]}
+        host = Host(**{"herdr-app__do__space.new": json.dumps({"space": "spNEW", "tab": "tbNEW"})})
+        answers = iter([json.dumps(ls), json.dumps(ls), json.dumps(after)])
+        real = host.__call__
+        def call(argv, **kw):
+            if argv[:2] == ["herdr-app", "ls"]:
+                host.calls.append(list(argv))
+                return SimpleNamespace(returncode=0, stdout=next(answers), stderr="")
+            return real(argv, **kw)
+        with mock.patch.dict(os.environ, {"HC_TERMINAL_ID": "t1"}), mock.patch.object(fc_hc.subprocess, "run", call):
+            self.assertEqual(fc_hc.space("cart", "/w/cart"), "spNEW")
+        self.assertIn(["herdr-app", "do", "space.new", "--name", "dtt › cart", "--folder", "/w/cart"], host.calls)
+        self.assertEqual(host.calls[-1], ["herdr-app", "do", "space.move", "--id", "spNEW", "--index", "3"])  # after dtt › recommender
+
+    def test_a_grouped_space_is_still_the_projects(self):
+        ls = {"spaces": [{"id": "spB", "name": "dtt › shop", "folder": "/elsewhere", "tabs": []}]}
+        with run_with(Host(**{"herdr-app__ls": json.dumps(ls)})):
+            self.assertEqual(fc_hc.find_space("shop", "/w/shop"), "spB")
+            self.assertTrue(fc_hc.space_is("spB", "shop"))
+            self.assertFalse(fc_hc.space_is("spB", "op"))
 
     def test_tabs_gone_tabs_and_closing(self):
         host = Host(**{"herdr-app__ls": json.dumps(APP_LS)})

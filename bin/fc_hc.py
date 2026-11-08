@@ -136,23 +136,35 @@ def find_space(slug, wt):
     """The open space named `slug`, else the one whose folder is the project worktree; None when the window shows neither or is closed."""
     spaces = app_ls()
     for s in spaces or []:
-        if s.get("name") == slug:
+        if fc_host.is_space_of(s.get("name"), slug):
             return s["id"]
     for s in spaces or []:
         if s.get("folder") and Path(s["folder"]).resolve() == Path(wt).resolve():
             return s["id"]
     return None
 
+def own_space(spaces):
+    """The space this session's terminal sits in, as the window lists it; None when it shows it nowhere."""
+    me = os.environ.get("HC_TERMINAL_ID")
+    return next((s for s in spaces or [] for t in s.get("tabs") or [] for term in t.get("terminals") or [] if me and term.get("terminal") == me), None)
+
 def space(slug, wt):
-    """The project's space, made when the window shows none: named `slug`, its terminals in the project worktree, its first tab `shell`.
-    None when the window is not open: agents then run in hc without a space until it is."""
+    """The project's space, made when the window shows none: its terminals in the project worktree, its first tab `shell`. The window
+    lists spaces flat, so it is named `<parent> › <slug>` after the space this session runs in and moved right after that space's
+    tree (fc_host.space_name), as herdr groups a worktree space under its repo's. None when the window is not open: agents then run
+    in hc without a space until it is."""
     if found := find_space(slug, wt):
         return found
-    made = app("space.new", name=slug, folder=str(wt))
+    parent = own_space(app_ls())
+    made = app("space.new", name=fc_host.space_name((parent or {}).get("name"), slug), folder=str(wt))
     if not made or not made.get("space"):
         return None
     if made.get("tab"):
         app("tab.rename", id=made["tab"], name="shell")
+    if parent:
+        others = [s for s in app_ls() or [] if s.get("id") != made["space"]]
+        if (at := fc_host.after_group([s.get("name") for s in others], parent.get("name"))) is not None:
+            app("space.move", id=made["space"], index=at + 2)  # 1-based, right after the tree's last space
     return made["space"]
 
 def tabs(space):
@@ -228,7 +240,7 @@ def close_space(space):
     app("space.close", id=space, confirmed=True)
 
 def space_is(space, slug):
-    return any(s.get("id") == space and s.get("name") == slug for s in app_ls() or [])
+    return any(s.get("id") == space and fc_host.is_space_of(s.get("name"), slug) for s in app_ls() or [])
 
 def focus(space=None, tab=None, pane=None):
     if pane:

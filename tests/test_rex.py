@@ -163,6 +163,15 @@ class Sessions(unittest.TestCase):
         self.assertEqual(self.rex.argv("new"), [["new", "cart", "-c", "/w/cart", "--window", "shell", "--json"]])
         self.assertIsNone(fc_rex.find_space("nobody", "/w"))
 
+    def test_a_new_session_sits_under_the_session_this_one_runs_in_after_its_other_projects(self):
+        self.rex.answers[("ls",)] = json.dumps({"sessions": [{"session_id": "session:A", "label": "dtt"}, {"session_id": "session:B", "label": "dtt › recommender"},
+                                                             {"session_id": "session:C", "label": "other"}]})
+        with mock.patch.dict(os.environ, {"REX_SESSION": "session:A"}):
+            self.assertEqual(fc_rex.space("cart", "/w/cart"), "session:NEW")
+        self.assertEqual(self.rex.argv("new"), [["new", "dtt › cart", "-c", "/w/cart", "--window", "shell", "--json"]])
+        self.assertEqual(self.rex.argv("session", "move"), [["session", "move", "session:NEW", "--after", "session:B"]])
+        self.assertEqual(fc_rex.find_space("recommender", "/w"), "session:B")
+
     def test_tabs_gone_closing_focus_and_the_managers_label(self):
         self.assertEqual(fc_rex.tabs(S), {"verify": {"tab_id": W, "label": "verify"}})
         self.assertTrue(fc_rex.tab_gone(W))
