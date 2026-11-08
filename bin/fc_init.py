@@ -399,8 +399,9 @@ def cmd_init(a):
         if made:
             undo_worktree(here, *made)
         raise
-    if fc_fleet.space(proj):
-        print(f"herdr space {fc_fleet.SPACES[name]} with tabs {fc_herdr.tab_label(proj, 'shell')!r} and {fc_herdr.tab_label(proj, 'status')!r}")
+    if space := fc_fleet.space(proj):
+        shown = ", ".join(repr(t.get("label")) for t in fc_fleet.project_tabs(proj, space)) or "none yet"
+        print(f"{fc_fleet.host_name()} space {space} with tabs {shown}")
         fc_fleet.name_manager(proj)
     print(f"initialised {proj}\nwork in {wt} from now on: tests and every command with --repo {wt} (or any checkout with --project {name}); "
           + f"the plan and tasks live on Linear: write {proj / 'linear.json'} as {{\"feature\": \"<issue id>\"}}")
