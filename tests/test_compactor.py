@@ -97,8 +97,8 @@ class Typist(unittest.TestCase):
         d = Path(tempfile.mkdtemp()); self.addCleanup(shutil.rmtree, d)
         self.clock = 0.0
         self.prompts, self.statuses, self.tell_returns = [], [], True
-        self.owner_types_after_handoff = self.compose_types_after_handoff = False
-        self.compact_lands = True
+        self.owner_types_after_handoff = self.compose_types_after_handoff = self.owner_types_after_compact = False
+        self.compact_lands, self.landed = True, False
         self.boundary_meta = {"trigger": "manual", "preTokens": 90000, "postTokens": 30000, "durationMs": 9000}
         self.records_calls = self.handoff_at = self.records_at_handoff = None
         self.records_calls = 0
@@ -132,7 +132,7 @@ class Typist(unittest.TestCase):
         if not self.tell_returns:
             return False
         self.prompts.append(text)
-        if text.startswith("compose:"):
+        if text.startswith("compose: before a compaction"):
             self.handoff_at, self.records_at_handoff = self.clock, self.records_calls
             if self.owner_types_after_handoff:
                 self.append_row({"type": "user", "timestamp": now_stamp(), "uuid": "o1", "origin": {"kind": "human"}, "message": {"role": "user", "content": "wait, not now"}})
@@ -142,17 +142,24 @@ class Typist(unittest.TestCase):
         elif text.startswith("/compact") and self.compact_lands:
             self.append_row({"type": "system", "subtype": "compact_boundary", "timestamp": now_stamp(), "uuid": "b1",
                              "compactMetadata": self.boundary_meta})
+            self.landed = True
+            if self.owner_types_after_compact:
+                self.append_row({"type": "user", "timestamp": now_stamp(), "uuid": "o2", "origin": {"kind": "human"}, "message": {"role": "user", "content": "where were we?"}})
         return True
+
+    def steps(self):
+        return [(r["step"], r.get("outcome")) for r in fc.fc_compactlog.read() if r["kind"] == "step"]
 
     def run_compactor(self, mode="judged", statuses=("idle",), role="manager"):
         self.statuses = list(statuses)
         fc.fc_compactor.cmd_compactor(argparse.Namespace(pane="w1:p2", role=role, transcript=str(self.transcript), mode=mode, handoff=str(self.handoff), repo="."))
 
-    def test_a_judged_compaction_types_the_handoff_then_the_compact(self):
+    def test_a_judged_compaction_types_the_handoff_the_compact_then_the_resume(self):
         self.run_compactor(mode="judged", statuses=["idle", "idle", "working", "idle", "idle", "idle"])
-        self.assertEqual([p.split()[0] for p in self.prompts], ["compose:", "/compact"])
-        self.assertIn(str(self.handoff), self.prompts[0]); self.assertIn(str(self.handoff), self.prompts[1])
-        last = fc.fc_compactlog.read()[-1]
+        self.assertEqual([p.split()[0] for p in self.prompts], ["compose:", "/compact", "compose:"])
+        for p in self.prompts:
+            self.assertIn(str(self.handoff), p)
+        last = next(r for r in reversed(fc.fc_compactlog.read()) if r["kind"] == "compaction")
         self.assertEqual((last["kind"], last["trigger"], last["outcome"], last["post"]), ("compaction", "compose", "done", 30000))
         self.assertEqual((last["pre"], last["duration_ms"]), (90000, 9000))
         self.assertEqual(last["transcript"], str(self.transcript))
@@ -167,6 +174,45 @@ class Typist(unittest.TestCase):
     def test_the_lead_is_asked_for_its_own_sections(self):
         self.run_compactor(role="lead", statuses=["idle", "idle", "working", "idle", "idle", "idle"])
         self.assertIn("`## Holds`", self.prompts[0])
+        self.assertIn("for your project", self.prompts[2])
+
+    def test_the_resume_prompt_starts_the_session_from_its_handoff_and_is_logged_as_typed(self):
+        self.run_compactor(statuses=["idle", "idle", "working", "idle", "idle", "idle"])
+        resume = self.prompts[2]
+        self.assertTrue(resume.startswith("compose: your context was compacted"))
+        self.assertIn("for each project you hold", resume)
+        self.assertIn("say nothing to the product owner unless something waits on them", resume)
+        self.assertEqual(self.steps()[-1], ("resume", "sent"))
+        self.assertTrue(fc.fc_compactlog.was_typed("w1:p2", resume, None))
+        self.assertIsNone(fc.fc_compactlog.inflight("w1:p2"))
+
+    def test_no_resume_when_the_owner_prompted_after_the_compaction(self):
+        self.owner_types_after_compact = True
+        self.run_compactor(statuses=["idle", "idle", "working", "idle", "idle", "idle"])
+        self.assertEqual(len(self.prompts), 2)
+        self.assertEqual(self.steps()[-1], ("resume", "owner-typing"))
+        self.assertIsNone(fc.fc_compactlog.inflight("w1:p2"))
+
+    def test_no_resume_when_the_pane_stays_busy_after_the_compaction(self):
+        quiet = fc.fc_compactor.pane_quiet
+        with mock.patch.object(fc.fc_compactor, "pane_quiet", lambda pane: not self.landed and quiet(pane)):
+            self.run_compactor(statuses=["idle", "idle", "working", "idle", "idle", "idle"])
+        self.assertEqual(len(self.prompts), 2)
+        self.assertEqual(self.steps()[-1], ("resume", "not-quiet"))
+        self.assertIsNone(fc.fc_compactlog.inflight("w1:p2"))
+
+    def test_a_refused_resume_is_logged_and_releases_the_pane(self):
+        told = []
+        def tell(pane, text):
+            told.append(text)
+            if text.startswith("compose: your context was compacted"):
+                return False
+            return self.tell(pane, text)
+        with mock.patch.object(fc.fc_manager, "tell", tell):
+            self.run_compactor(statuses=["idle", "idle", "working", "idle", "idle", "idle"])
+        self.assertEqual(len(told), 3)
+        self.assertEqual(self.steps()[-1], ("resume", "refused"))
+        self.assertIsNone(fc.fc_compactlog.inflight("w1:p2"))
 
     def test_an_owner_prompt_after_the_handoff_stops_before_the_compact(self):
         self.owner_types_after_handoff = True
@@ -179,13 +225,13 @@ class Typist(unittest.TestCase):
     def test_a_prompt_compose_typed_itself_does_not_count_as_the_owner(self):
         self.compose_types_after_handoff = True  # the fake appends an owner-looking record whose text was logged with typed()
         self.run_compactor(mode="judged", statuses=["idle", "idle", "working", "idle", "idle", "idle"])
-        self.assertEqual(len(self.prompts), 2)
+        self.assertEqual(len(self.prompts), 3)
 
     def test_a_ceiling_compaction_waits_only_seconds(self):
         with mock.patch.object(fc.fc_config, "COMPACT", {**fc.fc_config.COMPACT_DEFAULTS, "idle_seconds": 9999}):
             self.run_compactor(mode="ceiling", statuses=["idle", "idle", "working", "idle", "idle", "idle"])
-        self.assertEqual(len(self.prompts), 2)
-        self.assertEqual(fc.fc_compactlog.read()[-1]["trigger"], "ceiling")
+        self.assertEqual(len(self.prompts), 3)
+        self.assertEqual(next(r for r in reversed(fc.fc_compactlog.read()) if r["kind"] == "compaction")["trigger"], "ceiling")
         self.assertGreaterEqual(self.clock, 5)
         self.assertLess(self.clock, 120)
 
@@ -207,7 +253,7 @@ class Typist(unittest.TestCase):
             self.run_compactor(statuses=["idle", "idle", "idle", "working", "idle", "idle", "working", "idle"])
         self.assertGreaterEqual(self.handoff_at, 10)
         self.assertLess(self.handoff_at, 14)
-        self.assertEqual(len(self.prompts), 2)
+        self.assertEqual(len(self.prompts), 3)
 
     def owner_types_at(self, clock, text="one more thing", typed_by_compose=False, statuses=("idle",)):
         """Run the compactor with a 6 s idle window while a user record lands in the transcript at `clock`; compose logs it as its own when asked."""
@@ -240,8 +286,8 @@ class Typist(unittest.TestCase):
 
     def test_a_prompt_compose_typed_inside_the_window_does_not_disarm(self):
         self.owner_types_at(2, text="compose: a teammate reported", typed_by_compose=True)
-        self.assertEqual(len(self.prompts), 2)
-        self.assertEqual(fc.fc_compactlog.read()[-1]["outcome"], "done")
+        self.assertEqual(len(self.prompts), 3)
+        self.assertEqual(next(r for r in reversed(fc.fc_compactlog.read()) if r["kind"] == "compaction")["outcome"], "done")
 
     def test_the_transcript_is_read_again_only_when_it_changed(self):
         with mock.patch.object(fc.fc_config, "COMPACT", {**fc.fc_config.COMPACT_DEFAULTS, "idle_seconds": 6}):
@@ -266,7 +312,7 @@ class Typist(unittest.TestCase):
         self.boundary_meta = {"trigger": "manual", "preTokens": 90000}
         fc.fc_compactlog.save_pane_state("w1:p2", {"baseline": 5, "failures": 2})
         self.run_compactor(statuses=["idle", "idle", "working", "idle", "idle", "idle"])
-        self.assertEqual(fc.fc_compactlog.read()[-1]["outcome"], "done")
+        self.assertEqual(next(r for r in reversed(fc.fc_compactlog.read()) if r["kind"] == "compaction")["outcome"], "done")
         self.assertEqual(fc.fc_compactlog.pane_state("w1:p2"), {"baseline": 5, "failures": 0})
 
     def test_an_unknown_role_leaves_another_compactors_marker_alone(self):

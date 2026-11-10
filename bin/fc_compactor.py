@@ -3,8 +3,10 @@ from pathlib import Path
 import fc_compactlog, fc_config, fc_herdr, fc_fleet, fc_manager, fc_transcript
 
 # The detached process the Stop hook starts to compact an engineering manager or team lead session at an idle moment: it waits for the
-# pane to be quiet, has the session write its handoff, then types `/compact` with a fixed focus. Every step lands in the compaction log
-# and every exit path clears the pane's in-flight marker. It types only into a pane that is idle with an empty input line.
+# pane to be quiet, has the session write its handoff, types `/compact` with a fixed focus, and once the compaction landed types the prompt
+# that resumes the session from its handoff (Claude Code starts no turn by itself after a typed `/compact`, and the re-entry note the
+# SessionStart hook prints only rides along with the next prompt). Every step lands in the compaction log and every exit path clears the
+# pane's in-flight marker. It types only into a pane that is idle with an empty input line.
 # The idle window counts quiet seconds: a wake from a parked watch or a prompt compose typed makes the pane busy for a moment, which pauses
 # the count, while a prompt from the product owner disarms the run so the next Stop judges again. A prompt the engineering manager types
 # itself through the herdr CLI in its own Bash tool is not in compose's log, so it disarms a team lead's run too: the safe side.
@@ -29,6 +31,9 @@ HANDOFF_PROMPTS = {
 HANDOFF_PROMPT = HANDOFF_PROMPTS["manager"]
 FOCUS = ("/compact The handoff at {path} is authoritative: keep the product owner's standing instructions and decisions, what each teammate "
          "waits on, and the watch rules exact; drop tool output and file contents.")
+_RESUME = ("compose: your context was compacted and this session continues. Read your handoff at {path} first, then run the `compose status` and "
+           "`compose watch --now` lines %s, act on what they show, and end your turn; say nothing to the product owner unless something waits on them.")
+RESUME = {"manager": _RESUME % "for each project you hold", "lead": _RESUME % "for your project"}
 
 
 # ---------- reading the pane ----------
@@ -183,6 +188,7 @@ def compact(a):
             return finish(pane, role, "compact", "not-quiet")
         time.sleep(POLL)
     step(pane, role, "compact", mode=mode)
+    compact_at = utc_second_before_now()
     if not fc_manager.tell(pane, FOCUS.format(path=handoff)):
         return finish(pane, role, "compact", "refused")
     fc_compactlog.set_inflight(pane, "compact", pid, mode)
@@ -205,7 +211,27 @@ def compact(a):
         if new.get("post") is not None:  # a boundary without postTokens leaves the old baseline in place
             state["baseline"] = new["post"]
         fc_compactlog.save_pane_state(pane, {**state, "failures": 0})
+        resume(pane, role, transcript, handoff, mode, pid, compact_at)
     fc_compactlog.clear_inflight(pane)
+
+def resume(pane, role, transcript, handoff, mode, pid, compact_at):
+    """Type the prompt that starts the session's first turn after the compaction, from its handoff. Not when the product owner prompted since
+    `/compact` went in (their prompt carries the re-entry note already) or the pane does not go quiet in REQUIET_LIMIT seconds. The prompt is
+    logged as typed before it lands, so the prompt hook never takes it for the product owner's; the step and its outcome are logged."""
+    fc_compactlog.set_inflight(pane, "resume", pid, mode)
+    give_up = time.monotonic() + REQUIET_LIMIT
+    while not pane_quiet(pane):
+        if time.monotonic() >= give_up:
+            return step(pane, role, "resume", "not-quiet")
+        time.sleep(POLL)
+    if owner_typed_since(transcript, pane, compact_at):
+        return step(pane, role, "resume", "owner-typing")
+    text = RESUME[role].format(path=handoff)
+    try:
+        fc_compactlog.typed(pane, text)
+    except OSError:
+        pass
+    step(pane, role, "resume", "sent" if fc_manager.tell(pane, text) else "refused", mode=mode)
 
 def cmd_compactor(a):
     """The detached process body. It never raises: whatever goes wrong is a log record, and the pane is released."""

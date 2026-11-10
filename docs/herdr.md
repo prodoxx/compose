@@ -42,6 +42,7 @@ An explicit `zstyle ':omz:update' mode prompt` in `~/.zshenv`, `~/.zprofile`, `~
 The engineering manager is the session you started, so compose sets neither its model nor a compaction window.
 It relays and supervises while planning goes to the planner on the strongest model, so Sonnet serves it well.
 Leave its window at the model's default and set no `CLAUDE_CODE_AUTO_COMPACT_WINDOW` of your own, because compose judges when the engineering manager's context is at a finished moment and compacts it then, after asking it to write its handoff.
+Once the compaction landed, compose types the prompt that resumes the manager from that handoff, since Claude Code starts no turn by itself after a typed `/compact`; it stays quiet toward you unless something waits on you.
 It is judged only past 65% of the budget: every manager turn ends handed to the product owner, which counts as finished, so judging it earlier compacted the conversation several times a day.
 compose forces one at the `compact.ceiling` tokens in `~/.compose/config.json` (150k by default), and `compose compactions` shows the week's compactions by trigger.
 
@@ -185,7 +186,7 @@ Restarting the team lead in its tab loses nothing, because its first turn end re
 The team lead is also replaced on purpose: its durable state lives in files, and its own handoff (`scratch/<agent>/handoff.md`: open threads, holds, pending go's, live teammates) is the one file only it can write.
 At a story boundary the factory runs `compose crew restart --role orchestrator`: it closes the team lead's tab and starts a fresh team lead under the same name, so the engineering manager's watch and every live teammate's reports reach it unchanged, briefed to read the handoff, the project's state and the first brief.
 It never restarts a team lead that is mid-turn, and it leaves one in place while a run, a verify or a teammate is live, a question is unanswered, or its handoff was not rewritten since its last story ended.
-After a compaction, `compose reenter` points the team lead at its handoff as well as its brief.
+After a compaction, `compose reenter` points the team lead at its handoff as well as its brief, and the compactor types the prompt that resumes it from there.
 `compose crew restart --force` restarts one that has work in flight, from the handoff and the project's state; mid-turn it always refuses.
 A `run` or `verify` it started keeps going meanwhile.
 Those work in their own session, so a closed tab or a crashed session never ends them.

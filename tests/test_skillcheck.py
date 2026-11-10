@@ -113,6 +113,14 @@ class SkillCheck(unittest.TestCase):
             note = self.context(self.back(self.transcript(self.owner("earlier", "2026-01-01T10:00:00.000Z"), self.owner("compose: bring your handoff up to date", recent))))
         self.assertIn("previous prompt was ", note)
 
+    def test_the_prompt_compose_types_to_resume_after_a_compaction_gets_no_note(self):
+        resume = "compose: your context was compacted and this session continues. Read your handoff at /h.md first."
+        boundary = {"type": "system", "subtype": "compact_boundary", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
+                    "compactMetadata": {"trigger": "manual", "preTokens": 90000, "postTokens": 30000}}
+        with mock.patch.dict(os.environ, {"HERDR_PANE_ID": "w1:p9"}):
+            fc.fc_compactlog.typed("w1:p9", resume)
+            self.assertEqual(self.back(self.transcript(self.owner("earlier", "2026-01-01T10:00:00.000Z"), boundary), text=resume), "")
+
     def test_a_teammate_with_a_role_never_gets_the_return_note(self):
         self.assertEqual(self.back(self.transcript(self.owner("earlier", "2026-01-01T10:00:00.000Z")), role="orchestrator"), "")
 

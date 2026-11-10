@@ -216,7 +216,8 @@ def _stamp(at):
 def return_note(ev, now=None):
     """For a session the product owner prompts (one without a role): the note that makes their first prompt after AWAY_SECONDS of silence,
     or after a compaction, open with what happened meanwhile and what waits on them; None otherwise, and on any failure. The silence is
-    measured from their previous prompt in the transcript, not counting what compose typed into the pane (the handoff and compact prompts)."""
+    measured from their previous prompt in the transcript, not counting what compose typed into the pane (the handoff, compact and resume
+    prompts), and a prompt compose typed gets no note itself."""
     try:
         if os.environ.get("COMPOSE_ROLE") or not ev.get("transcript_path"):
             return None
@@ -225,6 +226,8 @@ def return_note(ev, now=None):
         if prompts and prompts[-1]["text"] == ev.get("prompt", ""):
             prompts.pop()  # the prompt being submitted, when the transcript already holds it
         pane = fc_core.session_id()
+        if pane and fc_compactlog.was_typed(pane, ev.get("prompt", ""), None):
+            return None
         last = next((p for p in reversed(prompts) if not (pane and fc_compactlog.was_typed(pane, p["text"], None))), None)
         if last is None:
             return None
