@@ -7,7 +7,7 @@ import fc_core, fc_models
 PI_MODELS = fc_models.PI_AGENT_DIR / "models.json"
 PROVIDER = {"baseUrl": "https://openrouter.ai/api/v1", "api": "openai-completions", "apiKey": "$OPENROUTER_API_KEY",
             "models": [{"id": "z-ai/glm-5.3-flash@preset/glm-5-3-flash-fast", "cost": {"input": 0.15, "output": 0.5, "cacheRead": 0, "cacheWrite": 0}}]}
-TEXT_MODEL_DEFAULTS = {"TEXT_MODEL": "inception/mercury-2.5", "TEXT_MODEL_BASE_URL": "https://openrouter.ai/api/v1"}
+TEXT_MODEL_DEFAULTS = {"TEXT_MODEL": "anthropic/claude-sonnet-5.5", "TEXT_MODEL_BASE_URL": "https://openrouter.ai/api/v1"}
 PI_AUTH = PI_MODELS.parent / "auth.json"
 
 def has_glm(models):

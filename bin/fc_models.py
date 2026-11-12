@@ -436,14 +436,19 @@ def fast_env():
     """The env a fast-model call reads: ~/.compose/.env, overridden by the process env (the workspace key)."""
     return {**fc_core.load_env(fc_config.ENV_FILE), **os.environ}
 
+TEXT_MODEL = "anthropic/claude-sonnet-5.5"  # the fast text model when ~/.compose/.env names none (fc_pi.TEXT_MODEL_DEFAULTS writes it there)
+def reasoning(env):
+    """OpenRouter's `reasoning`, as jev sends it: TEXT_MODEL_REASONING=none turns it off, else it is the effort (`low` unset); Sonnet 5.5 refuses it off."""
+    return {"enabled": False} if (level := (env.get("TEXT_MODEL_REASONING") or "low").strip()) == "none" else {"effort": level}
+
 def fast_json(env, system, user, max_tokens=1500, timeout=90, key=None):
-    """One call to the fast text model in ~/.compose/.env (Mercury 2.5 by default) through OpenRouter, cost exact, or to Claude Code
+    """One call to the fast text model in ~/.compose/.env (Claude Sonnet 5.5 by default) through OpenRouter, cost exact, or to Claude Code
     when TEXT_MODEL is a `claude:<id>` (models.review sets it for the review). `key` names the field the caller needs, so the object
     holding it is the one read."""
     if fc_claude.is_claude(env.get("TEXT_MODEL", "")):  # no token cap to cut it off; a whole diff takes longer than a fast model
         return parse_reply(fc_claude.claude_json(fc_core.scrub(system), fc_core.scrub(user), env["TEXT_MODEL"], timeout=max(timeout, 300)), False, max_tokens, key)
-    body = {"model": env.get("TEXT_MODEL", "inception/mercury-2.5"), "max_tokens": max_tokens, "temperature": 0,  # the same code gets the same review
-            "response_format": {"type": "json_object"}, "reasoning": {"enabled": False}, "usage": {"include": True},
+    body = {"model": env.get("TEXT_MODEL", TEXT_MODEL), "max_tokens": max_tokens, "temperature": 0,  # the same code gets the same review
+            "response_format": {"type": "json_object"}, "reasoning": reasoning(env), "usage": {"include": True},
             "messages": [{"role": "system", "content": fc_core.scrub(system)}, {"role": "user", "content": fc_core.scrub(user)}]}
     req = urllib.request.Request(env.get("TEXT_MODEL_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/") + "/chat/completions",
                                  data=json.dumps(body).encode(),

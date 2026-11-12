@@ -310,3 +310,24 @@ class CheckOnlyEvents(unittest.TestCase):
 
     def test_a_held_run_has_no_rows(self):
         self.assertEqual(self.events("check-only", [], {"status": "held"}), [])
+
+
+class FastModelRequest(unittest.TestCase):
+    """The fast text model is Claude Sonnet 5.5 through OpenRouter unless ~/.compose/.env names another; Sonnet refuses a call with
+    reasoning disabled ("Reasoning is mandatory for this endpoint"), so reasoning is on at low effort unless TEXT_MODEL_REASONING=none."""
+    def body(self, env):
+        sent = []
+        def http_json(req, provider, timeout=None):
+            sent.append(json.loads(req.data))
+            return {"choices": [{"message": {"content": '{"ok": true}'}, "finish_reason": "stop"}], "usage": {}}
+        with mock.patch.object(fc.fc_models, "http_json", http_json):
+            fc.fc_models.fast_json({"TEXT_MODEL_API_KEY": "k", **env}, "s", "u", key="ok")
+        return sent[0]
+
+    def test_sonnet_with_low_reasoning_by_default(self):
+        got = self.body({})
+        self.assertEqual((got["model"], got["reasoning"]), ("anthropic/claude-sonnet-5.5", {"effort": "low"}))
+
+    def test_reasoning_follows_the_env(self):
+        self.assertEqual(self.body({"TEXT_MODEL_REASONING": "none"})["reasoning"], {"enabled": False})
+        self.assertEqual(self.body({"TEXT_MODEL_REASONING": "medium"})["reasoning"], {"effort": "medium"})

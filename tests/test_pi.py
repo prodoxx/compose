@@ -23,7 +23,7 @@ class PiChecks(unittest.TestCase):
     def test_provider_declared(self):
         self.assertEqual(pi.PROVIDER["models"][0]["id"], MODEL)
         self.assertEqual((pi.PROVIDER["apiKey"], pi.PROVIDER["baseUrl"]), ("$OPENROUTER_API_KEY", "https://openrouter.ai/api/v1"))
-        self.assertEqual(pi.TEXT_MODEL_DEFAULTS, {"TEXT_MODEL": "inception/mercury-2.5", "TEXT_MODEL_BASE_URL": "https://openrouter.ai/api/v1"})
+        self.assertEqual(pi.TEXT_MODEL_DEFAULTS, {"TEXT_MODEL": "anthropic/claude-sonnet-5.5", "TEXT_MODEL_BASE_URL": "https://openrouter.ai/api/v1"})
         other = {"anthropic": {"models": [{"id": "claude"}]}}
         key = {"apiKey": "$OPENROUTER_API_KEY"}
         self.assertTrue(pi.provider_declared(self.file({"providers": {**other, "openrouter-fast": {**key, "models": [{"id": "x"}, {"id": MODEL}]}}})))

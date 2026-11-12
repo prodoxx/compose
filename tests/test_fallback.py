@@ -421,7 +421,7 @@ class FixScope(unittest.TestCase):
             return subprocess.CompletedProcess(cmd, 0, json.dumps({"result": json.dumps(reply), "usage": {"input_tokens": 9, "output_tokens": 3}}), "")
         with mock.patch.object(fc.fc_config, "REVIEW_MODEL", "claude:claude-sonnet-x"), mock.patch.object(fc.fc_proc, "run", run), \
                 mock.patch.object(fc.fc_models, "http_json", side_effect=AssertionError("reached OpenRouter")), \
-                mock.patch.object(fc.fc_core, "load_env", return_value={"TEXT_MODEL": "inception/mercury-2.5", "TEXT_MODEL_API_KEY": "k"}):
+                mock.patch.object(fc.fc_core, "load_env", return_value={"TEXT_MODEL": "anthropic/claude-sonnet-5.5", "TEXT_MODEL_API_KEY": "k"}):
             rv = fc.fc_verify.fc_review.llm_review({"perspectives": ["correctness"]}, "def add(a, b): return a - b", "add adds", "", True)
         self.assertEqual(len(calls), 2)  # the review, then the confirm of its high finding
         self.assertEqual((rv["pass"], [i["note"] for i in rv["confirmed"]]), (False, ["adds with minus"]))

@@ -244,7 +244,7 @@ Reasoning has to be on.
 With reasoning `none`, the model plans but never edits, and `low` fixed that at about twice the cost.
 
 The reviewer is the config's `models.review`, such as `claude:claude-sonnet-5-5`.
-Without it, the reviewer is whichever model `~/.compose/.env` names as `TEXT_MODEL`, which defaults to Mercury 2.5.
+Without it, the reviewer is whichever model `~/.compose/.env` names as `TEXT_MODEL`, which defaults to Claude Sonnet 5.5 through OpenRouter.
 You set the planner and teammate models per role in the config, as [workspaces.md](workspaces.md#crew-models) describes.
 
 These figures come from small benchmarks and one prototype.
