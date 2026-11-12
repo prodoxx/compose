@@ -1,5 +1,6 @@
 import hermetic  # first: no test sees the real home
 import json, os, unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 from tests.test_trail_setup import fc
@@ -44,6 +45,20 @@ class Calls(unittest.TestCase):
         self.assertEqual(self.call(rex, "block", "rename", B, "x"), ({}, None))
         self.assertEqual(self.call(rex, "block", "call", "-b", B, "process"), ({}, None))
         self.assertEqual(rex.calls[1:], [["send", "-b", B, "hi"], ["block", "rename", B, "x"], ["block", "call", "-b", B, "process"]])
+
+    def test_a_call_reaches_every_session_not_only_the_one_compose_runs_in(self):
+        # Rex scopes `-b BLOCK` to REX_SESSION when it is set, so a block in the project's session is "not found" from the manager's
+        # terminal: every call runs without this terminal's REX_SESSION and REX_BLOCK, and names a session itself where it needs one.
+        seen = []
+        rex = Rex()
+        def run(argv, **kw):
+            seen.append(kw.get("env") or {})
+            return rex(argv, **kw)
+        with mock.patch.dict(os.environ, {"REX_SESSION": "session:me", "REX_BLOCK": "block:me", "REX_SERVER": "unix:///s"}):
+            self.call(run, "block", "call", "-b", B, "process")
+        self.assertNotIn("REX_SESSION", seen[0])
+        self.assertNotIn("REX_BLOCK", seen[0])
+        self.assertEqual(seen[0].get("REX_SERVER"), "unix:///s")
 
     def test_exit_3_is_not_found_and_capture_is_text(self):
         rex = Rex(block__inspect=("", 3, 'Error: block target "x" not found'), capture="one\ntwo\n")
@@ -149,6 +164,15 @@ class Start(unittest.TestCase):
         self.assertIn("boom", str(e.exception))
 
 
+class Rule(unittest.TestCase):
+    def test_a_teammate_in_rex_is_told_to_keep_the_sessions_name(self):
+        import fc_fleet
+        with mock.patch.dict(os.environ, {"COMPOSE_HOST": "rex", "HERDR_ENV": ""}):
+            self.assertIn("never rename the Rex session", fc_fleet.teammate_rule())
+        with mock.patch.dict(os.environ, {"COMPOSE_NO_HERDR": "1"}):
+            self.assertEqual(fc_fleet.teammate_rule(), "")
+
+
 class Sessions(unittest.TestCase):
     def setUp(self):
         self.rex = Rex(ls=SESSIONS, block__ls=BLOCKS, new=json.dumps({"session_id": "session:NEW"}), session__inspect=json.dumps({"label": "shop"}),
@@ -160,17 +184,34 @@ class Sessions(unittest.TestCase):
     def test_found_by_label_else_made_with_a_shell_window(self):
         self.assertEqual(fc_rex.space("shop", "/w/shop"), S)
         self.assertEqual(fc_rex.space("cart", "/w/cart"), "session:NEW")
-        self.assertEqual(self.rex.argv("new"), [["new", "cart", "-c", "/w/cart", "--window", "shell", "--json"]])
+        self.assertEqual(self.rex.argv("new"), [["new", "cart", "-c", "/w/cart", "--window", "shell", "--json", "--", *fc_rex.shell_tab()]])
         self.assertIsNone(fc_rex.find_space("nobody", "/w"))
+
+    def test_the_shell_tab_opens_at_a_prompt_not_at_the_update_question(self):
+        with mock.patch.dict(os.environ, {"SHELL": "/bin/zsh"}):
+            self.assertEqual(fc_rex.shell_tab(), ["env", "DISABLE_AUTO_UPDATE=true", "DISABLE_UPDATE_PROMPT=true", "/bin/zsh", "-l"])
 
     def test_a_new_session_sits_under_the_session_this_one_runs_in_after_its_other_projects(self):
         self.rex.answers[("ls",)] = json.dumps({"sessions": [{"session_id": "session:A", "label": "dtt"}, {"session_id": "session:B", "label": "dtt › recommender"},
                                                              {"session_id": "session:C", "label": "other"}]})
         with mock.patch.dict(os.environ, {"REX_SESSION": "session:A"}):
             self.assertEqual(fc_rex.space("cart", "/w/cart"), "session:NEW")
-        self.assertEqual(self.rex.argv("new"), [["new", "dtt › cart", "-c", "/w/cart", "--window", "shell", "--json"]])
+        self.assertEqual(self.rex.argv("new"), [["new", "dtt › cart", "-c", "/w/cart", "--window", "shell", "--json", "--", *fc_rex.shell_tab()]])
         self.assertEqual(self.rex.argv("session", "move"), [["session", "move", "session:NEW", "--after", "session:B"]])
         self.assertEqual(fc_rex.find_space("recommender", "/w"), "session:B")
+
+    def test_a_renamed_session_is_still_the_projects_and_gets_its_name_back(self):
+        # A Claude Code teammate in the session is told by Rex's SessionStart hook to name "its" session after its task, so the
+        # project's session turned `shop-architect`: compose keeps the session's id with the project and names it back.
+        import tempfile
+        wt = Path(tempfile.mkdtemp())
+        (wt / ".compose" / "cart").mkdir(parents=True)
+        self.assertEqual(fc_rex.space("cart", wt), "session:NEW")
+        self.rex.answers[("ls",)] = json.dumps({"sessions": [{"session_id": "session:NEW", "label": "cart-architect"}]})
+        self.assertEqual(fc_rex.find_space("cart", wt), "session:NEW")
+        self.assertEqual(self.rex.argv("session", "rename"), [["session", "rename", "session:NEW", "cart"]])
+        self.rex.answers[("ls",)] = json.dumps({"sessions": []})  # the session was closed: the record no longer counts
+        self.assertIsNone(fc_rex.find_space("cart", wt))
 
     def test_tabs_gone_closing_focus_and_the_managers_label(self):
         self.assertEqual(fc_rex.tabs(S), {"verify": {"tab_id": W, "label": "verify"}})
@@ -193,6 +234,14 @@ class Sessions(unittest.TestCase):
         fc_rex.set_manager_label("block:m", None)
         self.assertEqual(self.rex.argv("block", "rename")[-1], ["block", "rename", "block:m", "shell"])
 
+    def test_focus_says_when_the_app_did_not_switch(self):
+        # Rex.app takes client actions only with Remote Control on: the server's focus moves, the app keeps showing what it showed.
+        self.assertIsNone(fc_rex.focus(space=S, tab=W, pane=B))
+        self.rex.answers[("do",)] = ("", 1, "Error: Rex.app is not accepting actions. Turn on Remote Control in its Settings under Rex Server.")
+        note = fc_rex.focus(space=S, tab=W, pane=B)
+        self.assertIn("Remote Control", note)
+        self.assertIn("the session 'shop'", note)
+
     def test_the_label_keeps_what_it_is_not_told_now(self):
         fc_rex.pane_label(B, state="attempt 2/3")
         self.assertEqual(self.rex.argv("block", "rename")[-1], ["block", "rename", B, "shop-001 · 001 Parse · attempt 2/3"])
@@ -201,6 +250,49 @@ class Sessions(unittest.TestCase):
         self.assertEqual(self.rex.argv("block", "rename")[-1], ["block", "rename", B, "shop-001 · 001 Parse · attempt 2/3 · cost=$0.01 model=glm"])
         fc_rex.pane_label(B, title="001 Parse the node", state="")
         self.assertEqual(self.rex.argv("block", "rename")[-1], ["block", "rename", B, "shop-001 · 001 Parse the node"])
+
+        fc_rex.pane_label(B, title="shop-001: 001 Parse")  # crew start titles a herdr pane `<name>: <title>`; the label has the name already
+        self.assertEqual(self.rex.argv("block", "rename")[-1], ["block", "rename", B, "shop-001 · 001 Parse · attempt 2/3"])
+
+
+class ParallelStarts(unittest.TestCase):
+    def test_tasks_starting_at_once_share_one_implementers_window(self):
+        # `run` starts its tasks on threads: each looked for the implementers window before any had made it, so each made one.
+        import threading, time as _time, fc_fleet
+        state, lock = {"windows": [], "blocks": []}, threading.Lock()
+        calls = []
+        def run(argv, **kw):
+            args = argv[1:]
+            calls.append(args)
+            with lock:
+                if args[:2] == ["window", "ls"]:
+                    out = {"windows": list(state["windows"])}
+                elif args[:2] == ["block", "ls"]:
+                    out = {"blocks": list(state["blocks"])}
+                elif args[:2] == ["window", "new"]:
+                    n = len(state["windows"])
+                    state["windows"].append({"window_id": f"window:{n}", "label": args[4]})
+                    state["blocks"].append({"block_id": f"block:w{n}", "label": "shell", "flavor": "com.superlogical.terminal.shell", "window_id": f"window:{n}"})
+                    out = {"window_id": f"window:{n}", "block_ids": [f"block:w{n}"]}
+                elif args[0] == "split":
+                    n = len(state["blocks"])
+                    state["blocks"].append({"block_id": f"block:s{n}", "label": "x", "flavor": "com.superlogical.terminal.shell", "window_id": "window:0"})
+                    out = {"block_ids": [f"block:s{n}"]}
+                else:
+                    out = {}
+            if args[:2] == ["window", "ls"]:
+                _time.sleep(0.05)  # the gap between looking and making
+            return SimpleNamespace(returncode=0, stdout=json.dumps(out), stderr="")
+        with mock.patch.object(fc_rex.subprocess, "run", run), mock.patch.object(fc_host, "rex_bin", return_value="/bin/rex"), \
+                mock.patch.dict(os.environ, {"COMPOSE_HOST": "rex", "HERDR_ENV": ""}), mock.patch.object(fc_rex, "wait"), \
+                mock.patch.object(fc_fleet, "agent", return_value=None):
+            ts = [threading.Thread(target=fc_fleet.start_implementer, args=("/p/shop", S, "/w", {}, f"shop-00{i}", f"00{i} T", [], "m")) for i in (1, 2, 3)]
+            for t in ts:
+                t.start()
+            for t in ts:
+                t.join()
+        self.assertEqual(len([c for c in calls if c[:2] == ["window", "new"]]), 1)
+        self.assertEqual(len([c for c in calls if c[0] == "split"]), 2)
 
 
 if __name__ == "__main__":

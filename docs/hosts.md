@@ -53,6 +53,8 @@ A program that reports nothing (a plain shell) has no status; compose then judge
 The Herdr app and Rex list spaces flat, so the `<parent> › <project>` name and the placement stand in for herdr's worktree grouping; a project started from another project's space goes under that space's parent.
 In the Herdr app the window is a view: agents started while it is closed keep running under hc and are reachable by name, and they have no space or tab until the window opens.
 In Rex a block's label is the agent's identity, so a label you change by hand loses compose its agent; rename the window instead.
+compose keeps the id of the project's Rex session in `.compose/<project>/results/rex.json` and names the session back when something renamed it.
+Rex's SessionStart hook tells every Claude Code session to name its session after its task, so a teammate would rename the shared project session; compose's teammates are told not to, and a rename that happens anyway is undone on compose's next call.
 
 ## `compose stages`
 
@@ -70,5 +72,8 @@ When none is installed it prints herdr's install line and `or run compose setup`
 
 - The Herdr app's agents list shows the terminal's title, not compose's state label; `hc get <name>` shows the labels.
 - Rex's `rex wait` waits only for a program to exit, so compose polls a block's reported status while it waits for a turn, every 2 seconds.
+- compose runs every `rex` call without the terminal's `REX_SESSION` and `REX_BLOCK`: Rex scopes a block id to `REX_SESSION` when it is set, so from the manager's session a block in the project's session would be `not found`.
+- Rex.app shows another session only with Remote Control on (its Settings, under Rex Server); without it `compose crew focus` focuses the tab and pane and says the app did not switch.
+- pi 1.3 in `--tui-mode regular` (how compose runs implementers) writes OSC 133 prompt marks to the primary screen, and Rex ends a `working` record at the next prompt, so an implementer shows no `working` spinner in Rex; compose follows the turn in pi's session file instead.
 - The compactor reads a pane with styling to tell a suggested prompt from typed text; the Herdr app and Rex answer plain text, so there a suggested prompt counts as typed and the compaction waits for the next quiet moment.
 - `compose doctor`'s herdr rows (its config, its integrations) are herdr's; the Herdr app and Rex need no settings from compose.

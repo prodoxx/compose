@@ -1,6 +1,6 @@
 import json, os, re, subprocess, sys, time
 from pathlib import Path
-import fc_host
+import fc_core, fc_host
 
 # ---------- Rex (superlogical.com/rex): a session per project, a window per tab, a block per pane ----------
 # A compose agent is a terminal block whose label starts with its name (`<name> · <title> · <state>`): Rex names nothing itself,
@@ -11,6 +11,8 @@ import fc_host
 SEP = " · "
 NAME = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 STATUS = {"idle": "idle", "working": "working", "done": "done", "blocked": "blocked", "error": "blocked"}
+TEAMMATE_RULE = (" You run in a tab of the project's Rex session, which compose names after the project and finds by that name: "
+                 "never rename the Rex session, even when a hook or a guide asks you to name it after your task.")
 PROMPT_START_WAIT = 5  # seconds a prompt gets to show as a turn (working or blocked) before it counts as stalled, as herdr's own gate
 
 def _json(p):
@@ -21,6 +23,15 @@ def _json(p):
 
 PLAIN = {"send", "send-key", "kill", "focus", "do"}  # the commands that answer no JSON; `block`/`window` subcommands that act are plain too
 
+HERE_VARS = ("REX_SESSION", "REX_BLOCK")
+
+def cli_env():
+    """The environment every `rex` call runs with: this terminal's own, without REX_SESSION and REX_BLOCK. Rex scopes `-b BLOCK` (and
+    `capture`, `send`, `block rename|inspect|close`) to REX_SESSION when it is set, so from the manager's terminal a block in the
+    project's session would be "not found"; without them a block id reaches its block in any session. REX_SERVER stays: it names
+    the server this terminal belongs to. A command that needs a session names it with `-s`."""
+    return {k: v for k, v in os.environ.items() if k not in HERE_VARS}
+
 def rex_err(*args, timeout=60, text=False):
     """One `rex` call: (result, None), or (None, error) when Rex refused (exit 3: the target is not there) or did not answer.
     The commands that list or inspect answer JSON; `text` for `capture`; the ones that act answer nothing (result {})."""
@@ -29,12 +40,12 @@ def rex_err(*args, timeout=60, text=False):
         return None, "rex is not installed"
     args = list(map(str, args))
     plain = text or args[0] in PLAIN or (args[0] in ("block", "window") and len(args) > 1 and args[1] in ("rename", "close", "focus")) \
-        or args[:2] == ["session", "move"]
+        or args[:2] in (["session", "move"], ["session", "rename"])
     raw = args[:2] == ["block", "call"]  # answers JSON by itself and takes no --json
     cut = args.index("--") if "--" in args else len(args)  # --json goes before the program's own arguments
     argv = args if plain or raw else [*args[:cut], "--json", *args[cut:]]
     try:
-        p = subprocess.run([exe, *argv], capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+        p = subprocess.run([exe, *argv], capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL, env=cli_env())
     except (OSError, subprocess.TimeoutExpired) as e:
         return None, f"rex {' '.join(args[:1])}: {e}"
     if p.returncode:
@@ -157,8 +168,36 @@ def wait(name, timeout=None, until=None):
 
 # ---------- sessions and windows ----------
 
+def space_file(slug, wt):
+    return Path(wt) / ".compose" / slug / "results" / "rex.json"
+
+def remember(slug, wt, session, label):
+    f = space_file(slug, wt)
+    if not f.parent.parent.is_dir():  # no project there (yet): nothing to keep it with
+        return
+    try:
+        f.parent.mkdir(exist_ok=True)
+        fc_core.atomic_write(f, json.dumps({"session": session, "label": label}))
+    except OSError:
+        pass
+
 def find_space(slug, wt):
-    return next((s["session_id"] for s in sessions() if fc_host.is_space_of(s.get("label"), slug)), None)
+    """The project's session: the one compose made for it (its id kept in results/rex.json), else one labelled for the project.
+    A Claude Code session started in a Rex terminal is told by Rex's SessionStart hook to name its session after its task, so a
+    teammate renames the project's session (`shop-architect`); compose finds it by its id and names it back."""
+    listed = sessions()
+    try:
+        kept = json.loads(space_file(slug, wt).read_text())
+    except (OSError, ValueError):
+        kept = {}
+    if s := next((s for s in listed if kept.get("session") and s["session_id"] == kept["session"]), None):
+        if not fc_host.is_space_of(s.get("label"), slug) and kept.get("label"):
+            rex("session", "rename", s["session_id"], kept["label"])
+        return s["session_id"]
+    if s := next((s for s in listed if fc_host.is_space_of(s.get("label"), slug)), None):
+        remember(slug, wt, s["session_id"], s["label"])
+        return s["session_id"]
+    return None
 
 def space(slug, wt):
     """The project's session, made when none is the project's: its terminals in the project worktree, its first window `shell`. Rex lists
@@ -168,11 +207,18 @@ def space(slug, wt):
         return found
     listed, me = sessions(), os.environ.get("REX_SESSION")
     parent = next((s for s in listed if me and me in (s.get("session_id"), s.get("label"))), None)
-    made = rex("new", fc_host.space_name((parent or {}).get("label"), slug), "-c", str(wt), "--window", "shell")
-    new = (made or {}).get("session_id")
+    label = fc_host.space_name((parent or {}).get("label"), slug)
+    made = rex("new", label, "-c", str(wt), "--window", "shell", "--", *shell_tab())
+    if new := (made or {}).get("session_id"):
+        remember(slug, wt, new, label)
     if new and parent and (at := fc_host.after_group([s.get("label") for s in listed], parent.get("label"))) is not None:
         rex("session", "move", new, "--after", listed[at]["session_id"])
     return new
+
+def shell_tab():
+    """The program of the project's `shell` tab: the person's login shell with fc_host.SHELL_GUARD, so it opens at a prompt and not at
+    oh-my-zsh's update question (a plain `rex new` starts the shell with the server's environment, which has no guard)."""
+    return fc_host.with_env(dict(fc_host.SHELL_GUARD), [os.environ.get("SHELL") or "/bin/sh", "-l"])
 
 def tabs(space):
     return {w.get("label"): {"tab_id": w.get("window_id"), "label": w.get("label")} for w in (rex("window", "ls", "-s", space) or {}).get("windows") or []}
@@ -207,6 +253,8 @@ def pane_label(pane, title=None, state=None, tokens=None, clear=None):
     parts = (b.get("label") or "").split(SEP)
     name = parts[0] if parts and NAME.fullmatch(parts[0]) else None
     old = {"title": parts[1] if len(parts) > 1 else "", "state": parts[2] if len(parts) > 2 else "", "tokens": SEP.join(parts[3:])}
+    if title and name and title.startswith(name + ": "):  # crew start titles a pane `<name>: <title>` for herdr; the label carries the name already
+        title = title[len(name) + 2:]
     new = {"title": old["title"] if title is None else title, "state": old["state"] if state is None else state,
            "tokens": old["tokens"] if tokens is None else " ".join(f"{k}={v}" for k, v in tokens.items())}
     rex("block", "rename", pane, SEP.join(x for x in (name, new["title"], new["state"], new["tokens"]) if x))
@@ -227,12 +275,18 @@ def space_is(space, slug):
     return fc_host.is_space_of((rex("session", "inspect", space) or {}).get("label"), slug)
 
 def focus(space=None, tab=None, pane=None):
+    """Focus the tab and pane in the session, and ask Rex.app to show the session. None when done; else a line saying the app did
+    not switch (it takes client actions only with Remote Control on, a setting that is the person's to change)."""
     if tab:
         rex("focus", *(["-s", space] if space else []), tab)
     if pane:
         rex("block", "focus", pane)
     if space:
-        rex("do", "session.select", f"session_id={space}")  # the app shows it, when one client is connected and lets the CLI drive it
+        _, err = rex_err("do", "session.select", f"session_id={space}")  # the app shows it, when one client is connected and lets the CLI drive it
+        if err:
+            shown = (rex("session", "inspect", space) or {}).get("label") or space
+            return f"Rex.app did not switch to it ({err.removeprefix('Error: ')}); pick the session '{shown}' in its sidebar"
+    return None
 
 def live(pane):
     return rex_err("block", "inspect", pane)[1] is None

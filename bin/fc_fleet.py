@@ -1,4 +1,4 @@
-import json, os, re, shlex, shutil, signal, subprocess, sys, time
+import json, os, re, shlex, shutil, signal, subprocess, sys, threading, time
 from pathlib import Path
 import fc_core, fc_harness, fc_proc, fc_compactlog, fc_models, fc_host, fc_hc, fc_rex, fc_herdr
 
@@ -45,6 +45,10 @@ def session_var():
 
 def backend():
     return BACKENDS.get(kind())
+
+def teammate_rule():
+    """A line the host adds to every teammate's system prompt ("" when it adds none)."""
+    return getattr(backend(), "TEAMMATE_RULE", "")
 
 # ---------- agents ----------
 
@@ -168,17 +172,21 @@ def start_teammate(proj, space, label, cwd, env, agent, kind_, program, argv):
         raise StartFailed(str(e), tab=tab["tab"]["tab_id"], pane=pane) from e
     return {"tab": tab["tab"]["tab_id"], "pane": pane}
 
+PLACING = threading.Lock()  # `run` starts its tasks on threads: the first makes the implementers tab, the rest split it, never one tab each
+
 def start_implementer(proj, space, cwd, env, name, title, argv, model):
     """One task's interactive pi as the agent `name` in a pane of the project's `implementers` tab, labelled `title`, with `env`.
     A previous run's agent of that name is closed first. {"pane", "tab", "sfile"}: the pi session file when the host reports it."""
     if old := agent(name):
         close_pane(old.get("pane_id"))
     if (b := backend()):
-        made = b.start(space, IMPLEMENTERS_TAB, cwd, env, name, ["pi", *argv], join=True, title=title)
+        with PLACING:
+            made = b.start(space, IMPLEMENTERS_TAB, cwd, env, name, ["pi", *argv], join=True, title=title)
         b.wait(name, timeout=60)
         b.pane_label(made["pane"], tokens={"model": model.split("/")[-1].split("@")[0]})
         return {**made, "sfile": None}
-    pane = fc_herdr.herdr_implementer_pane(space, cwd, env, tab_label(proj, IMPLEMENTERS_TAB))
+    with PLACING:
+        pane = fc_herdr.herdr_implementer_pane(space, cwd, env, tab_label(proj, IMPLEMENTERS_TAB))
     fc_herdr.herdr("pane", "rename", pane, title)
     started = fc_herdr.herdr_agent_start(name, "--kind", "pi", "--pane", pane, "--timeout", "60000", "--", *argv)
     fc_herdr.herdr("pane", "report-metadata", pane, "--source", "compose", "--title", title, "--token", f"model={model.split('/')[-1].split('@')[0]}")
@@ -285,9 +293,9 @@ def space_is(space, name):
     return fc_herdr.herdr_space_is(space, name)
 
 def focus(space=None, tab=None, pane=None):
+    """Take the person to the space, tab and pane. None when done, else a line saying what the host did not show."""
     if (b := backend()):
-        b.focus(space=space, tab=tab, pane=pane)
-        return
+        return b.focus(space=space, tab=tab, pane=pane)
     if space:
         fc_herdr.herdr("workspace", "focus", space)
     if tab:

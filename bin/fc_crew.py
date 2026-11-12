@@ -205,8 +205,8 @@ def cmd_crew(a):
         if not rec.exists():
             sys.exit(f"no teammate {name}")
         c = json.loads(rec.read_text())
-        fc_fleet.focus(space=c.get("space"), tab=c.get("tab"), pane=c.get("pane"))
-        print(f"focused {name} ({c['title']})")
+        note = fc_fleet.focus(space=c.get("space"), tab=c.get("tab"), pane=c.get("pane"))
+        print(f"focused {name} ({c['title']})" + (f"; {note}" if note else ""))
         return
     if a.action == "stop":
         if not rec.exists():
@@ -282,16 +282,16 @@ def cmd_crew(a):
     write_report(proj, name, "working", "started")  # before the agent starts: a fast teammate's own report must come after it
     if h:
         pool = (fc_worktree.common_dir(cwd).parent / ".treehouse",) if a.role == "orchestrator" and fc_worktree.use_treehouse() else ()
-        kind, program, argv = h["kind"], h["exe"], fc_harness.crew_argv(model, effort, TRUST_PROMPT, CLI_REPO / "SKILL.md", cwd, crew_dir(proj).parent, work,
+        kind, program, argv = h["kind"], h["exe"], fc_harness.crew_argv(model, effort, TRUST_PROMPT + fc_fleet.teammate_rule(), CLI_REPO / "SKILL.md", cwd, crew_dir(proj).parent, work,
                                                                       more=(fc_config.CONFIG_PATH.parent, *pool) if a.role == "orchestrator" else ())
     elif model.startswith("pi:"):  # the same teammate in pi: its skills dir is this repo, its thinking level is the entry's effort
         kind, program, argv = "pi", "pi", ["--tui-mode", "regular", "--no-extensions",
               *(["-e", str(fc_herdr.PI_HERDR_EXT)] if fc_herdr.PI_HERDR_EXT.exists() else []), *fc_providers.pi_args(fc_models.pi_id(model)), "--skill", str(CLI_REPO / "SKILL.md"), "--no-prompt-templates",
-              *(["--thinking", effort] if effort else []), "--model", fc_models.pi_id(model), "--append-system-prompt", TRUST_PROMPT]
+              *(["--thinking", effort] if effort else []), "--model", fc_models.pi_id(model), "--append-system-prompt", TRUST_PROMPT + fc_fleet.teammate_rule()]
     else:
         kind, program, argv = "claude", "claude", [
               *(["--model", fc_claude.claude_id(model)] if fc_claude.claude_id(model) else []), *(["--effort", effort] if effort else []),
-              "--no-chrome", "--append-system-prompt", TRUST_PROMPT, "--settings", fc_claude.crew_settings(a.role, cwd),
+              "--no-chrome", "--append-system-prompt", TRUST_PROMPT + fc_fleet.teammate_rule(), "--settings", fc_claude.crew_settings(a.role, cwd),
               *( ["--disallowedTools", *deny] if (deny := fc_mcp.disallowed(a.role, fc_mcp.installed_servers(cwd))) else []),  # no --mcp-config: a `frame0` server would start with the session and idle; `compose frame0` reaches the app without one
               *( [] if fc_mcp.keeps_commands(a.role) else ["--disable-slash-commands"]),  # the team lead keeps `/compact` for the compactor
               *(["--add-dir", str(work)] if work else []), "--permission-mode", "auto", "--allowedTools", "Bash(npx -y lavish-axi:*)",
