@@ -139,7 +139,7 @@ def _linearize(repo, proj, trunk, wt, through=()):
             # Replay only b's own commits: start above the deepest tip it was built on whose work the chain already holds, or
             # that is being rebuilt: one recorded in this pass (a replaced layer, or a layer rebased just now), a chained layer
             # as it is now, or one in the reflog of a layer below (fork-point), which holds a rewrite made before this pass,
-            # by hand or by a redo whose replaced ref is gone. Else one in the trunk's reflog; without any, a plain rebase.
+            # by hand or by a redo whose replaced ref is gone, the commit it shares with the layer it goes onto, or one in the trunk's reflog; without any, a plain rebase.
             # A reflog tip that the layer's own tip sits below is no rewrite: the layer was moved back (its commits moved up
             # by hand to b), so those commits are b's own now.
             old = [(t, "the old base recorded in this pass") for rb, t in tips if (rb in linear or t in stale) and contains(t, b)]
@@ -148,12 +148,14 @@ def _linearize(repo, proj, trunk, wt, through=()):
                 fork = fc_core.sh(["git", "merge-base", "--fork-point", x, b], repo, check=False).stdout.strip()
                 start = before.get(x) or fc_core.sh(["git", "rev-parse", x], repo).stdout.strip()
                 old += [(fork, f"the old base from the reflog of {x}")] if fork and (fork == start or not contains(start, fork)) else []
-            upstream, source = max(old, key=lambda o: int(fc_core.sh(["git", "rev-list", "--count", f"{trunk}..{o[0]}"], repo).stdout)) if old else ("", "")
-            if not upstream:
-                upstream = fc_core.sh(["git", "merge-base", "--fork-point", trunk, b], repo, check=False).stdout.strip()
-                source = f"the old base from the reflog of {trunk}"
-            if not upstream:
-                upstream, source = prev, "no old base found: a plain rebase"
+            # The deepest commit that b and prev share is a base the chain holds whatever was rewritten: a layer cut from the same
+            # parent as prev (one that `through` left out of `linear`, so it is no candidate above) replays only its own commits.
+            shared = fc_core.sh(["git", "merge-base", prev, b], repo, check=False).stdout.strip()
+            old += [(shared, f"the commit it shares with {prev}")] if shared else []
+            # The trunk's old tips are the base of a layer cut on the trunk itself.
+            fork = fc_core.sh(["git", "merge-base", "--fork-point", trunk, b], repo, check=False).stdout.strip()
+            old += [(fork, f"the old base from the reflog of {trunk}")] if fork else []
+            upstream, source = max(old, key=lambda o: int(fc_core.sh(["git", "rev-list", "--count", f"{trunk}..{o[0]}"], repo).stdout)) if old else (prev, "no old base found: a plain rebase")
             before[b] = fc_core.sh(["git", "rev-parse", b], repo).stdout.strip()
             tips.append((b, before[b]))
             fc_core.sh(["git", "checkout", "-q", b], wt)
