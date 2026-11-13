@@ -175,6 +175,16 @@ class Restart(Base):
         self.assertEqual(last["state"], "working")
         self.assertIn("restarted fresh", last["message"])
 
+    def test_a_lead_whose_record_has_no_tab_is_closed_by_the_pane_the_host_lists_for_it(self):
+        """#465: the restart read the tab with a bare index, as `crew stop` did."""
+        rec = crew.crew_dir(self.proj) / f"{NAME}.json"
+        c = json.loads(rec.read_text())
+        c.pop("tab", None)
+        rec.write_text(json.dumps(c))
+        self.agents[:] = [{**ag, "tab_id": "w9:t7"} for ag in self.agents]
+        lead.cmd_crew(self.args())
+        self.assertEqual(self.closed(), [("tab", "close", "w9:t7")])
+
     def test_the_first_brief_is_kept_through_later_restarts(self):
         brief = crew.crew_dir(self.proj) / f"{NAME}.brief.md"
         brief.write_text("the first brief\n")

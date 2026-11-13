@@ -148,7 +148,7 @@ def cmd_designcrews(a):
             print(f"design-{m['id']} is listed by the host but its process has exited; closing its pane to start it again")
             try:
                 fc_crew.cmd_crew(argparse.Namespace(repo=a.repo, project=proj.name, action="stop", role=f"design-{m['id']}", force=True))
-            except SystemExit as e:
+            except (SystemExit, Exception) as e:  # noqa: BLE001  one builder's pane that will not close must not end the command for the others
                 print(f"design-{m['id']} not closed: {e}")
             else:
                 in_space.pop(running[m["id"]])

@@ -133,7 +133,7 @@ def restart(a):
     if not first.exists() and brief_file.exists():
         first.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(brief_file, first)
-    fc_fleet.close_tab(c["tab"])
+    fc_fleet.close_teammate(c)
     fc_crew.crew_closed(proj, name, "crew restart" + (" --force" if why else ""))
     if not _gone(c.get("agent", name), c.get("space")):
         sys.exit(f"{name}'s tab is closed but the host still lists it; run `compose crew start --project {proj.name} --role orchestrator --title orchestrator --brief -` once it is gone")

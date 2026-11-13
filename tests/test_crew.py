@@ -575,6 +575,32 @@ class Crew(unittest.TestCase):
         stop(False)
         self.assertEqual(closed, [("tab", "close", "w9:t3")])
 
+    def test_stop_closes_the_tab_the_host_lists_for_a_record_that_never_stored_one(self):
+        """#465: a `crew start` that ended before it stored `tab` left a booting record without one, and `crew stop` raised KeyError: 'tab'."""
+        rec = fc.fc_crew.crew_dir(self.proj) / "shop-design-237.json"
+        rec.write_text(json.dumps({"name": "shop-design-237", "agent": "shop-design-237", "role": "design-237", "title": "t", "space": "w9", "booting": True}))
+        listed = {"agents": [{"name": "shop-design-237", "workspace_id": "w9", "tab_id": "w9:t5", "pane_id": "w9:p5"},
+                             {"name": "shop-design-237", "workspace_id": "w3", "tab_id": "w3:t1", "pane_id": "w3:p1"}]}  # a stranger of the same name elsewhere stays
+        calls = []
+        def herdr(*args, **kw):
+            calls.append(args)
+            return listed if args[:2] == ("agent", "list") else {}
+        a = type("A", (), {"action": "stop", "role": "design-237", "force": True})
+        with mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), mock.patch("builtins.print") as out, mock.patch.object(fc.fc_herdr, "herdr", herdr), \
+                mock.patch.object(fc.fc_herdr, "herdr_env", return_value=True):
+            fc.fc_crew.cmd_crew(a)
+        self.assertEqual([c for c in calls if c[:2] == ("tab", "close")], [("tab", "close", "w9:t5")])
+        out.assert_called_with("teammate shop-design-237 stopped")
+        self.assertTrue(json.loads(rec.read_text()).get("closed"))
+        calls.clear()
+        listed["agents"].clear()  # the host lists nothing for it: nothing to close, and the record is still marked closed
+        rec.write_text(json.dumps({"name": "shop-design-237", "agent": "shop-design-237", "role": "design-237", "title": "t", "space": "w9", "booting": True}))
+        with mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), mock.patch("builtins.print"), mock.patch.object(fc.fc_herdr, "herdr", herdr), \
+                mock.patch.object(fc.fc_herdr, "herdr_env", return_value=True):
+            fc.fc_crew.cmd_crew(a)
+        self.assertEqual([c for c in calls if c[:2] in (("tab", "close"), ("pane", "close"))], [])
+        self.assertTrue(json.loads(rec.read_text()).get("closed"))
+
 
 class Attention(unittest.TestCase):
     """The CLI, not a session's memory, gets the product owner's attention."""

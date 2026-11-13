@@ -261,6 +261,19 @@ def close_tab(tab):
     else:
         fc_herdr.herdr("tab", "close", tab)
 
+def close_teammate(c):
+    """Close a teammate's tab, from its record `c`. A record with no `tab` is a `crew start` that ended before it stored one (the record is
+    written first, with `booting`): the tab, else the pane, the host lists for its agent in the record's space is closed instead."""
+    if c.get("tab"):
+        return close_tab(c["tab"])
+    if c.get("pane"):
+        return close_pane(c["pane"])
+    ag = next((ag for ag in live_agents() if ag.get("name") == c.get("agent", c["name"]) and ag.get("workspace_id") == c.get("space")), {})
+    if ag.get("tab_id"):
+        close_tab(ag["tab_id"])
+    else:
+        close_pane(ag.get("pane_id"))
+
 def tab_gone(tab):
     """Whether the host says the tab is no longer there. A host that cannot say leaves it open."""
     if (b := backend()):

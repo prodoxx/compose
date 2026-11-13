@@ -605,6 +605,22 @@ class DesignCrews(unittest.TestCase):
         self.assertEqual([(ns.action, ns.role) for ns in started], [("stop", "design-001"), ("start", "design-001")])
         self.assertNotIn("already running", out.getvalue())
 
+    def test_a_builder_whose_pane_will_not_close_does_not_end_the_command_for_the_others(self):
+        """#465: `crew stop` raised KeyError on a record with no tab, which ended designcrews before any builder started."""
+        agents = [{"name": fc.fc_herdr.agent_name("p", "design-001"), "workspace_id": "w1", "pane_id": "p1"}]
+        started = []
+        def crew(ns):
+            started.append((ns.action, ns.role))
+            if ns.action == "stop":
+                raise KeyError("tab")
+        with mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), mock.patch.object(fc.fc_herdr, "herdr_space"), \
+                mock.patch.object(fc.fc_herdr, "live_agents", return_value=agents), mock.patch.object(fc.fc_herdr, "herdr_project_space", return_value="w1"), \
+                mock.patch.object(fc.fc_herdr, "pane_processes", return_value=[]), mock.patch.object(fc.fc_crew, "cmd_crew", side_effect=crew), \
+                mock.patch.object(fc.fc_linear, "linear_event"), mock.patch("sys.stdout", io.StringIO()) as out:
+            fc.fc_figma.cmd_designcrews(SimpleNamespace(repo=".", project="p", only="001,005", print_=False, max=None, redo=False, force=False))
+        self.assertIn("design-001 not closed: 'tab'", out.getvalue())
+        self.assertEqual(sorted(started), [("start", "design-005"), ("stop", "design-001")])  # 001 stays listed, so it is not started over; 005 starts
+
     def test_a_task_figma_line_names_its_own_file_else_the_stored_key(self):
         def issue(n, **kv):
             block = "\n".join(f"{k}: {v}" for k, v in {"id": n, "kind": "design", "test": "t", "nodes": "P/A", **kv}.items())

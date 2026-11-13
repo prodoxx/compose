@@ -217,7 +217,7 @@ def cmd_crew(a):
         if last.get("state") != "done" and not a.force:  # closing mid-conversation loses what the product owner was saying there
             sys.exit(f"{name} has not reported done (last: {last.get('state', 'nothing')} {last.get('message', '')!r}); "
                      f"read it with `compose crew read --project {slug} --role {a.role} --lines 60`, or pass --force to close it anyway")
-        fc_fleet.close_tab(json.loads(rec.read_text())["tab"])
+        fc_fleet.close_teammate(json.loads(rec.read_text()))
         crew_closed(proj, name, "crew stop" + (" --force" if a.force else ""))
         print(f"teammate {name} stopped")
         return
