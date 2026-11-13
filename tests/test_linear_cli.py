@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import importlib.machinery, importlib.util, io, json, os, subprocess, tempfile, threading, time, unittest, urllib.error
+import http.client, importlib.machinery, importlib.util, io, json, os, socket, subprocess, tempfile, threading, time, unittest, urllib.error
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
@@ -326,7 +326,7 @@ class LinearErrors(unittest.TestCase):
                 self.assertEqual(self.rejected(body), text)
 
     def test_an_http_error_without_json_errors_is_raised_unchanged(self):
-        for body, code in ((b"<html>502 Bad Gateway</html>", 502), (b"", 401), (b'{"data": null}', 400), (b'["errors"]', 400)):
+        for body, code in ((b"", 401), (b'{"data": null}', 400), (b'["errors"]', 400), (b"<html>no</html>", 404)):
             with self.subTest(body=body):
                 err = self.http(body, code)
                 with self.assertRaises(urllib.error.HTTPError) as e:
@@ -363,6 +363,58 @@ class LinearErrors(unittest.TestCase):
                 self.assertEqual(call.call_count, tries)
                 self.assertLessEqual(now[0], fc.fc_linear.fc_linearapi.LINEAR_CALL_SECONDS)
                 self.assertIn("Rate limit exceeded", str(e.exception)); self.assertIn("run it again then", str(e.exception))
+
+    def reads(self, outcomes, query="query { viewer { id } }"):
+        """linear_gql over `outcomes` (an exception is raised by urlopen, bytes are a 200 reply): (result or the error, urlopen calls, pauses, stderr)."""
+        def answer(o):
+            ok = mock.MagicMock()
+            ok.__enter__.return_value = io.BytesIO(o)
+            return ok
+        seq = [o if isinstance(o, Exception) else answer(o) for o in outcomes]
+        with mock.patch("urllib.request.urlopen", side_effect=seq) as call, mock.patch("time.sleep") as nap, mock.patch("sys.stderr", io.StringIO()) as said:
+            try:
+                got = fc.fc_linear.linear_gql(query, {})
+            except Exception as e:  # noqa: BLE001
+                got = e
+        return got, call.call_count, [c.args[0] for c in nap.call_args_list], said.getvalue()
+
+    GOOD = b'{"data": {"viewer": {"id": "u1"}}}'
+
+    def test_a_read_that_times_out_once_is_run_again_and_the_job_goes_on(self):
+        """#470: one `The read operation timed out` while verify recorded a route ended 17 minutes of verify with FAIL."""
+        for blip in (socket.timeout("The read operation timed out"), urllib.error.URLError(socket.timeout("timed out")), ConnectionResetError("reset"),
+                     http.client.RemoteDisconnected("closed"), self.http(b"<html>502 Bad Gateway</html>", 502)):
+            with self.subTest(blip=type(blip).__name__):
+                got, calls, pauses, said = self.reads([blip, self.GOOD])
+                self.assertEqual((got, calls, pauses), ({"viewer": {"id": "u1"}}, 2, [2]))
+                self.assertIn("no answer to a read", said)
+                self.assertIn("retry 1 of 3", said)
+
+    def test_a_read_nothing_answers_waits_longer_each_time_then_fails_naming_that_nothing_was_refused(self):
+        got, calls, pauses, said = self.reads([socket.timeout("The read operation timed out")] * 4)
+        self.assertEqual((calls, pauses), (4, [2, 5, 15]))
+        self.assertIsInstance(got, fc.fc_linear.fc_linearapi.LinearNoAnswer)
+        self.assertEqual(str(got), "Linear did not answer a read (The read operation timed out) after 4 tries")
+        self.assertTrue(str(got).startswith(fc.fc_linear.fc_linearapi.NO_ANSWER))
+
+    def test_a_write_that_timed_out_is_never_run_again_since_it_may_have_landed(self):
+        got, calls, pauses, said = self.reads([socket.timeout("The read operation timed out"), self.GOOD], query="mutation { x }")
+        self.assertEqual((type(got), calls, pauses), (socket.timeout, 1, []))
+
+    def test_an_answer_that_refuses_the_call_is_not_run_again(self):
+        got, calls, pauses, _ = self.reads([self.http(b'{"errors": [{"message": "no such field"}]}', 400), self.GOOD])
+        self.assertEqual((str(got), calls, pauses), ("no such field", 1, []))
+        got, calls, pauses, _ = self.reads([self.http(b"", 401), self.GOOD])
+        self.assertEqual((type(got), calls, pauses), (urllib.error.HTTPError, 1, []))
+
+    def test_the_retries_stay_inside_the_time_one_call_may_take(self):
+        now = [0.0]
+        nap = lambda s: now.__setitem__(0, now[0] + s)
+        with mock.patch("urllib.request.urlopen", side_effect=[socket.timeout("slow")] * 4) as call, mock.patch("time.sleep", nap), mock.patch("time.monotonic", lambda: now[0]), \
+                mock.patch.object(fc.fc_linear.fc_linearapi, "LINEAR_CALL_SECONDS", 8), mock.patch("sys.stderr", io.StringIO()):
+            with self.assertRaises(fc.fc_linear.fc_linearapi.LinearNoAnswer):
+                fc.fc_linear.linear_gql("query { viewer { id } }", {})
+        self.assertEqual(call.call_count, 3)  # the pauses 2 and 5 fit in 8 seconds, the 15 after them does not
 
     def test_a_reply_that_never_ends_fails_naming_the_time_instead_of_hanging(self):
         stuck = threading.Event()

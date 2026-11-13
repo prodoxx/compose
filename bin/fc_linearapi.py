@@ -1,13 +1,14 @@
 """The one way the CLI calls Linear's GraphQL API: every call is paced with every other compose process on the machine (fc_pace),
 learns the hour's budget from Linear's reply headers, and a rate limit one call runs into holds the whole fleet as long as Linear says.
 The key is the active workspace's `linear_api_key`; it goes in a header, never argv or a results file."""
-import json, os, sys, threading, time, urllib.error, urllib.request
+import http.client, json, os, socket, sys, threading, time, urllib.error, urllib.request
 import fc_config, fc_pace
 
 LINEAR_URL = "https://api.linear.app/graphql"
 
 LINEAR_RETRIES = 5     # waits before a rate-limited call gives up
 LINEAR_MAX_WAIT = 300  # the doubling pause stops growing here
+LINEAR_TRANSIENT_WAITS = (2, 5, 15)  # pauses before each retry of a read that failed in transit (a timeout, a reset, a 5xx); a write is never repeated
 LINEAR_CALL_SECONDS = 120  # one call, its turn in the pace, its rate-limit waits and slow replies included, never takes longer: it fails naming the time, so no caller waits silently
 
 # Linear's hour for an API key: 2,500 requests and 3,000,000 complexity points, shared by every compose process using the
@@ -26,6 +27,12 @@ class LinearRateLimited(RuntimeError):
 
 class LinearBusy(RuntimeError):
     """Linear's rate limit outlasted the call's time: nothing ran, and Linear lets calls through again after `wait` seconds."""
+
+NO_ANSWER = "Linear did not answer a read"
+
+class LinearNoAnswer(RuntimeError):
+    """A read Linear did not answer in any of its tries: the connection timed out, was reset, or came back 5xx. Nothing was refused,
+    so running the command again is the way on. The message starts with NO_ANSWER."""
 
 def _number(v):
     try:
@@ -76,6 +83,12 @@ def linear_pace(s, now):
             not_before = max(not_before, now + (per_call - spare) * refill)
     return not_before, spacing
 
+def _in_transit(e):
+    """True for a failure of the connection and not an answer: a timeout, a reset, a connection that did not open, or a 5xx reply."""
+    if isinstance(e, urllib.error.HTTPError):
+        return e.code >= 500
+    return isinstance(e, (socket.timeout, TimeoutError, ConnectionError, urllib.error.URLError, http.client.HTTPException))
+
 def _linear_post(query, variables, attempt):
     req = urllib.request.Request(os.environ.get("LINEAR_URL") or LINEAR_URL, data=json.dumps({"query": query, "variables": variables}).encode(),
                                  headers={"Content-Type": "application/json", "Authorization": fc_config.LINEAR_KEY})
@@ -123,15 +136,30 @@ def _within(seconds, fn):
 def linear_gql(query, variables):
     """One GraphQL call, bounded by LINEAR_CALL_SECONDS: it takes its turn in the fleet's pace first. A rate-limited call did not
     run, so it holds every process off Linear, waits as long as Linear says (while that fits in the time left) and runs again,
-    saying so on stderr."""
+    saying so on stderr. A read that failed in transit (a timeout, a reset, a 5xx) is run again after each of
+    LINEAR_TRANSIENT_WAITS while that fits in the time left, and raises LinearNoAnswer when none of its tries is answered: one
+    blip of the network must not end a long job. A write is never run again, since it may have landed."""
     deadline = time.monotonic() + LINEAR_CALL_SECONDS
-    for attempt in range(LINEAR_RETRIES + 1):
+    write = query.lstrip().startswith("mutation")
+    limited = transient = 0
+    while True:
         fc_pace.wait("linear", linear_pace, deadline - time.monotonic(), "Linear")
         try:
-            return _within(deadline - time.monotonic(), lambda: _linear_post(query, variables, attempt))
+            return _within(deadline - time.monotonic(), lambda: _linear_post(query, variables, limited))
         except LinearRateLimited as e:
             fc_pace.hold("linear", e.wait)
-            if e.wait > deadline - time.monotonic() or attempt == LINEAR_RETRIES:
+            if e.wait > deadline - time.monotonic() or limited == LINEAR_RETRIES:
                 raise LinearBusy(f"{e} (Linear lets calls through again in about {fc_pace.about(e.wait)}; run it again then)") from None
-            print(f"Linear rate limit: waiting {int(e.wait)}s, then retry {attempt + 1} of {LINEAR_RETRIES}", file=sys.stderr)
+            limited += 1
+            print(f"Linear rate limit: waiting {int(e.wait)}s, then retry {limited} of {LINEAR_RETRIES}", file=sys.stderr)
             time.sleep(e.wait)
+        except Exception as e:  # noqa: BLE001  only a read that failed in transit goes on
+            if write or not _in_transit(e):
+                raise
+            why = f"HTTP {e.code}" if isinstance(e, urllib.error.HTTPError) else str(getattr(e, "reason", None) or e)[:120]
+            wait = LINEAR_TRANSIENT_WAITS[transient] if transient < len(LINEAR_TRANSIENT_WAITS) else None
+            if wait is None or wait > deadline - time.monotonic():
+                raise LinearNoAnswer(f"{NO_ANSWER} ({why}) after {transient + 1} {'try' if transient == 0 else 'tries'}") from e
+            transient += 1
+            print(f"Linear: no answer to a read ({why}); trying again in {wait}s, retry {transient} of {len(LINEAR_TRANSIENT_WAITS)}", file=sys.stderr)
+            time.sleep(wait)

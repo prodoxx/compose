@@ -828,3 +828,16 @@ class SweepReads(unittest.TestCase):
         self.calls.clear()
         self.sweep(("diff",), ids=self.ids[:2])
         self.assertEqual(self.calls, ["XX-001", "XX-002"])
+
+
+class Unrouted(unittest.TestCase):
+    def test_a_route_not_recorded_because_linear_never_answered_says_nothing_was_refused_and_to_run_verify_again(self):
+        """#470: a read timeout while recording a route was reported as if Linear had refused something."""
+        no_answer = "Linear did not answer a read (The read operation timed out) after 4 tries"
+        for whys, line in (({"001": no_answer, "002": no_answer}, "verify FAIL  Linear did not answer, so nothing was refused: run `compose verify` again once it does "
+                            "(a check that passed on the same files is not run again, and a task judged on the same code is not rejudged), or set COMPOSE_NO_POLICIES=1 to verify without recording routes"),
+                           ({"001": no_answer, "002": "no issue XX-002"}, "verify FAIL  fix what Linear refused (`compose linear get <issue>` shows the task), or set COMPOSE_NO_POLICIES=1 to verify without recording routes")):
+            said = []
+            with mock.patch.object(fc.fc_core, "say", said.append):
+                fc_reroute.say_unrouted(whys)
+            self.assertEqual(said, [f"verify FAIL  route not recorded for {t}: {w}" for t, w in whys.items()] + [line])

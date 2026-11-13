@@ -10,6 +10,7 @@ import fc_core
 import fc_evidence
 import fc_ledger
 import fc_linear
+import fc_linearapi
 import fc_models
 import fc_policy
 import fc_route
@@ -197,7 +198,10 @@ def say_unrouted(whys):
     """A `verify FAIL` line per task whose route Linear did not take, then the way to go on once."""
     for id, why in whys.items():
         fc_core.say(f"verify FAIL  route not recorded for {id}: {why}")
-    if whys:
+    if whys and all(why.startswith(fc_linearapi.NO_ANSWER) for why in whys.values()):  # nothing was refused: Linear never answered, after its retries
+        fc_core.say("verify FAIL  Linear did not answer, so nothing was refused: run `compose verify` again once it does (a check that passed on the same files is not run again, "
+                    "and a task judged on the same code is not rejudged), or set COMPOSE_NO_POLICIES=1 to verify without recording routes")
+    elif whys:
         fc_core.say("verify FAIL  fix what Linear refused (`compose linear get <issue>` shows the task), or set COMPOSE_NO_POLICIES=1 to verify without recording routes")
 
 
