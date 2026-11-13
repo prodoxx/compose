@@ -157,6 +157,79 @@ class SufficiencyAsk(unittest.TestCase):
         self.assertEqual(([e["task_ids"] for e in events], self.record_task.call_count), ([["032"], ["032"]], 1))
 
 
+class AcceptanceConfirm(unittest.TestCase):
+    """The confirm step of the acceptance judge (#457): a NOT_MET was confirmed on evidence that said the criterion was met, because it
+    asked for `{"confirmed": bool}` (read as "the criterion is confirmed met", #348 in the figma judge), and it read the task's files
+    whole from the working tree, so code a later task added to the same file counted against an earlier task's criterion."""
+    CRITERION = "A failed transcribe saves nothing."
+    DIFF = "diff --git a/svc.ts b/svc.ts\n+  if (!text) return;\n+  await transcribe(file);\n"
+
+    def setUp(self):
+        self.proj = Path(tempfile.mkdtemp()) / "feat"
+        (self.proj / "results").mkdir(parents=True)
+        (self.proj / "linear.json").write_text('{"feature": "ENG-1"}')
+        body = f"## Goal\ng\n\n## Acceptance criteria\n* {self.CRITERION}\n"
+        (self.proj / "results" / "tasks.json").write_text(json.dumps({"tasks": [{"id": "031", "title": "one", "linear": "ENG-4", "kind": "code", "files": ["svc.ts"], "protected": [], "test": "t", "body": body}]}))
+        self.repo = Path(tempfile.mkdtemp())  # a later task has grown the file since: its function is in the working tree, not in task 031's hunk
+        (self.repo / "svc.ts").write_text("export const lastAgentState = () => select({ agentState: true });\n")
+        self.sent = []
+        reply = {"model": "m", "answers": {"c0": {"choice": "NOT_MET", "probabilities": {"MET": 0.1, "NOT_MET": 0.9}}}}
+        for mod, name, kw in ((fc.fc_config, "ENV_FILE", {"new": self.proj / "none.env"}), (fc.fc_models, "jev_ask", {"return_value": reply}), (fc.fc_models, "reask_criterion", {}),
+                              (fc_evidence, "task_rows", {"return_value": []}), (fc_ledger, "counted", {"side_effect": lambda *a: a[-1]}),
+                              (fc.fc_core, "sh", {"side_effect": lambda argv, cwd, check=True: subprocess.CompletedProcess(argv, 0, "a" * 40 + "\n", "")})):
+            p = mock.patch.object(mod, name, **kw); p.start(); self.addCleanup(p.stop)
+
+    def judge(self, answer):
+        """jev_acceptance with the confirm call answering `answer` (its (violated, evidence) pair)."""
+        def confirm(env, system, user, **kw):
+            self.sent.append((system, user, kw))
+            return answer
+        with mock.patch.object(fc.fc_models, "confirm_call", side_effect=confirm):
+            return fc_accept.jev_acceptance({}, self.proj, self.DIFF, repo=self.repo)
+
+    def test_the_confirm_asks_for_violated_with_the_evidence_first_never_for_confirmed(self):
+        self.judge((False, ""))
+        [(system, user, kw)] = self.sent
+        self.assertEqual(kw, {"key": "violated"})
+        self.assertIn('Return JSON {"evidence": str, "violated": bool}.', system)
+        self.assertNotIn("confirmed", system)
+        self.assertIn("including a criterion that says something is absent and it is absent", system)
+
+    def test_a_met_criterion_whose_evidence_quotes_no_violation_is_not_failed(self):
+        """The row of #457: confirmed on "tests confirm no call is made", which quotes no line."""
+        for answer in ((True, "Tests confirm no R2 calls occur when files are absent or when an earlier gate fails."), (True, ""), (True, "the code never calls saveTurn")):
+            with self.subTest(answer=answer):
+                res = self.judge(answer)
+                self.assertEqual((res["failed"], [r["confirmed"] for r in res["criteria"]], len(res["unclear"])), ([], [False], 1))
+                self.assertIn("no line of the code is quoted as the violation", res["criteria"][0]["evidence"])
+
+    def test_a_violation_that_quotes_a_line_of_the_code_fails_the_criterion_whatever_the_quote_is_marked_with(self):
+        for evidence in ("await transcribe(file);", "+  await transcribe(file);", "The call `await transcribe(file)` is not guarded", 'line: "if (!text) return;"'):
+            with self.subTest(evidence=evidence):
+                res = self.judge((True, evidence))
+                self.assertEqual(([r["task"] for r in res["failed"]], res["unclear"]), (["031"], []))
+
+    def test_the_confirm_reads_the_tasks_own_hunks_the_judge_read_and_not_the_file_as_a_later_task_grew_it(self):
+        self.judge((False, ""))
+        [(_, user, _)] = self.sent
+        self.assertIn("await transcribe(file);", user)
+        self.assertNotIn("lastAgentState", user)
+        self.assertTrue(user.startswith(f"CRITERION: {self.CRITERION}\n\nCODE:\n"))
+
+    def test_a_verdict_kept_from_another_confirm_question_is_judged_again(self):
+        """A confirmed row is kept until the task's code or criteria change, so a wrong one came back on every rerun: the key holds the question."""
+        meta, crits = {"id": "031", "title": "one"}, [self.CRITERION]
+        key = fc_accept.verdict_key(meta, crits, self.DIFF)
+        with mock.patch.object(fc_accept, "CONFIRM", fc_accept.CONFIRM + " "):
+            self.assertNotEqual(fc_accept.verdict_key(meta, crits, self.DIFF), key)
+
+    def test_quotes_code(self):
+        code = "diff --git a/f b/f\n+  const a = 1;\n-  const b = 2;\n   keep();\n"
+        for evidence, ok in (("const a = 1;", True), ("+const a = 1;", True), ("-  const b = 2;", True), ("keep();", True), ("`keep()` runs twice", True), ("const a  =\n 1;", True),
+                             ("it never keeps", False), ("", False), ("a", False), ("`x`", False)):
+            self.assertEqual(fc_accept.quotes_code(evidence, code), ok, evidence)
+
+
 class AcceptanceReuse(unittest.TestCase):
     """A task whose criteria, judged hunks, and files are as they were at its last verify keeps that verdict: jev is not asked again,
     and neither is sufficiency once it has judged that verdict."""
@@ -175,7 +248,7 @@ class AcceptanceReuse(unittest.TestCase):
                 return subprocess.CompletedProcess(argv, int(bool(set(argv[argv.index("--") + 1:]) & self.changed)), "", "")
             return subprocess.CompletedProcess(argv, 0, self.head + "\n", "")
         for mod, name, kw in ((fc.fc_config, "ENV_FILE", {"new": self.proj / "none.env"}), (fc.fc_models, "jev_ask", {"side_effect": ask}),
-                              (fc.fc_models, "fast_json", {"return_value": {"confirmed": False, "evidence": ""}}), (fc_evidence, "task_rows", {"return_value": []}),
+                              (fc.fc_models, "fast_json", {"return_value": {"violated": False, "evidence": ""}}), (fc_evidence, "task_rows", {"return_value": []}),
                               (fc_ledger, "counted", {"side_effect": lambda *a: a[-1]}), (fc_ledger, "record_task", {"return_value": True}),
                               (fc.fc_core, "say", {"new": self.said.append}), (fc.fc_core, "sh", {"side_effect": sh})):
             p = mock.patch.object(mod, name, **kw); p.start(); self.addCleanup(p.stop)

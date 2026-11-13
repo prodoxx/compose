@@ -108,29 +108,35 @@ def hunk(path, body):
 
 
 class AcceptanceJudge(unittest.TestCase):
-    """The judge reads each task's own diff hunks, and confirm calls share one 60,000-character budget per task."""
-    def test_state_is_the_tasks_hunks_and_confirm_shares_one_budget_per_task(self):
+    """The judge reads each task's own diff hunks, and the confirm call reads those same hunks (#457), never the files in the repo."""
+    def judge(self, proj, repo, diff, tasks, reply):
+        """jev_acceptance with Jev answering `reply` and the confirm call confirming every suspect with a quote of its task's code: (result, jev_ask mock, [(criterion, code the confirm was sent)])."""
+        fc.fc_tasks.sync_tasks(proj, {"feature": {"id": "ENG-1", "title": "F", "description": ""}, "issues": tasks})
+        sent = []
+        def confirm_call(env, system, user, max_tokens=500, key="confirmed"):
+            assert key == "violated"
+            crit, code = user.split("\n\nCODE:\n", 1)
+            sent.append((crit[len("CRITERION: "):], code))
+            return True, next(w for w in ("A_OWN", "BBBBBBBBBB", "x = 1") if w in code)
+        with mock.patch.object(fc.fc_config, "ENV_FILE", proj / "none.env"), mock.patch.object(fc.fc_models, "jev_ask", return_value=reply) as ask, \
+                mock.patch.object(fc.fc_accept.fc_ledger, "counted", lambda repo, proj, meta, rows: rows), mock.patch.object(fc.fc_models, "confirm_call", side_effect=confirm_call), \
+                mock.patch.object(fc.fc_core, "sh", return_value=subprocess.CompletedProcess([], 0, "", "")):  # keep_verdict asks for the tip
+            res = fc.fc_accept.jev_acceptance({}, proj, diff, repo=repo)
+        return res, ask, sent
+
+    def test_state_is_the_tasks_hunks_and_confirm_is_sent_the_same_code(self):
         repo, proj = Path(tempfile.mkdtemp()), Path(tempfile.mkdtemp()) / "p"
         (repo / "tests").mkdir()
         for f, n in (("a.py", 21000), ("tests/test_a.py", 21000), ("b.py", 31000)):
-            (repo / f).write_text("R" * n)  # whole files, which only confirm reads
+            (repo / f).write_text("R" * n)  # whole files, which neither the judge nor the confirm reads
         proj.mkdir()
         (proj / "linear.json").write_text('{"feature": "ENG-1"}')
-        fc.fc_tasks.sync_tasks(proj, {"feature": {"id": "ENG-1", "title": "F", "description": ""}, "issues": [
+        diff = (hunk("a.py", "A_OWN") + hunk("lib/a.py", "NOT_MINE") + hunk("tests/test_a.py", "T_OWN") + hunk("b.py", "\n+".join(["B" * 100] * 400)))  # 40,000 characters in lines, so the cut is at a whole line
+        reply = {"model": "m", "answers": {f"c{i}": {"choice": "NOT_MET", "probabilities": {"NOT_MET": 0.9}} for i in range(3)}}
+        res, ask, sent = self.judge(proj, repo, diff, [
             task_issue("ENG-2", "002", ["a1", "a2", "a3"], files="a.py", protected="tests/test_a.py"),
             task_issue("ENG-3", "003", ["b1", "b2", "b3"], files="b.py"),
-            task_issue("ENG-4", "004", ["c1"], files="c.py")]})
-        diff = (hunk("a.py", "A_OWN") + hunk("lib/a.py", "NOT_MINE") + hunk("tests/test_a.py", "T_OWN") + hunk("b.py", "B" * 40000))
-        reply = {"model": "m", "answers": {f"c{i}": {"choice": "NOT_MET", "probabilities": {"NOT_MET": 0.9}} for i in range(3)}}
-        sent = []
-        def confirm_call(env, system, user, max_tokens=500):
-            crit, code = user.split("\n\nCODE:\n", 1)
-            sent.append((crit[len("CRITERION: "):], code))
-            return True, "x"
-        with mock.patch.object(fc.fc_config, "ENV_FILE", proj / "none.env"), mock.patch.object(fc.fc_models, "jev_ask", return_value=reply) as ask, \
-                mock.patch.object(fc.fc_accept.fc_ledger, "counted", lambda repo, proj, meta, rows: rows), mock.patch.object(fc.fc_models, "confirm_call", side_effect=confirm_call), \
-                mock.patch.object(fc.fc_core, "sh", return_value=subprocess.CompletedProcess([], 0, "", "")):  # keep_verdict asks git for the tip
-            res = fc.fc_accept.jev_acceptance({}, proj, diff, repo=repo)
+            task_issue("ENG-4", "004", ["c1"], files="c.py")], reply)
         states = {c.args[2]["task"]: c.args[2] for c in ask.call_args_list if c.args[4] == "Jev acceptance"}
         a, b = states["002"], states["003"]
         self.assertEqual(a["files"], ["a.py", "tests/test_a.py"])
@@ -143,15 +149,13 @@ class AcceptanceJudge(unittest.TestCase):
         self.assertTrue(b["code"].endswith(fc.fc_accept.CUT_MARK))  # the tool says it cut, so the judge does not read the cut as the code's
         self.assertNotIn("004", states)  # no hunk and no file of its own: never judged on the other tasks' code (#455)
         self.assertEqual([(r["choice"], r["note"]) for r in res["criteria"] if r["task"] == "004"], [("UNCLEAR", fc.fc_accept.NO_CODE)])
-        for prefix in ("a", "b"):
-            calls = [code for crit, code in sent if crit.startswith(prefix)]
-            self.assertEqual(len(calls), 2, prefix)  # the second call gets the rest of the budget, the third none
-            self.assertLessEqual(sum(map(len, calls)), 60000, prefix)
-            spent = [r for r in res["suspects"] if r["criterion"].startswith(prefix) and r.get("evidence") == "confirm budget spent"]
-            self.assertEqual([r["confirmed"] for r in spent], [False], prefix)
-            self.assertNotIn(spent[0]["criterion"], [crit for crit, _ in sent])
+        # every suspect is confirmed on exactly the code its task's state holds (cut the same way), never on the repo's whole files
+        for prefix, state in (("a", a), ("b", b)):
+            self.assertEqual([code for crit, code in sent if crit.startswith(prefix)], [state["code"]] * 3, prefix)
+        self.assertNotIn("R" * 10, "".join(code for _, code in sent))
+        self.assertEqual((len(res["failed"]), [r["evidence"] for r in res["suspects"] if not r["confirmed"]]), (6, []))  # the old 60,000-character budget per task is gone
 
-    def test_confirm_reads_only_regular_files_and_budgets_what_it_sends(self):
+    def test_confirm_reads_only_what_the_judge_read_so_a_directory_is_never_read(self):
         repo, proj = Path(tempfile.mkdtemp()), Path(tempfile.mkdtemp()) / "p"
         for d in ("sections", "docs", "tests/fixtures"):
             (repo / d).mkdir(parents=True)
@@ -159,27 +163,15 @@ class AcceptanceJudge(unittest.TestCase):
         (repo / "a.py").write_text("A" * 50000)
         proj.mkdir()
         (proj / "linear.json").write_text('{"feature": "ENG-1"}')
-        fc.fc_tasks.sync_tasks(proj, {"feature": {"id": "ENG-1", "title": "F", "description": ""}, "issues": [
-            task_issue("ENG-2", "002", ["a1", "a2", "a3"], files="sections, a.py", protected="tests/fixtures, gone.py"),
-            task_issue("ENG-3", "003", ["b1"], files="docs")]})
         reply = {"model": "m", "answers": {f"c{i}": {"choice": "NOT_MET", "probabilities": {"NOT_MET": 0.9}} for i in range(3)}}
-        sent = []
-        def confirm_call(env, system, user, max_tokens=500):
-            crit, code = user.split("\n\nCODE:\n", 1)
-            sent.append((crit[len("CRITERION: "):], code))
-            return True, "x"
-        with mock.patch.object(fc.fc_config, "ENV_FILE", proj / "none.env"), mock.patch.object(fc.fc_models, "jev_ask", return_value=reply), \
-                mock.patch.object(fc.fc_accept.fc_ledger, "counted", lambda repo, proj, meta, rows: rows), mock.patch.object(fc.fc_models, "confirm_call", side_effect=confirm_call), \
-                mock.patch.object(fc.fc_core, "sh", return_value=subprocess.CompletedProcess([], 0, "", "")):  # keep_verdict asks git for the tip
-            res = fc.fc_accept.jev_acceptance({}, proj, hunk("a.py", "x"), repo=repo)  # raises IsADirectoryError if a directory is read
-        whole = "==== a.py ====\n" + "A" * 50000
-        a = sorted((code for crit, code in sent if crit.startswith("a")), key=len)
-        self.assertEqual(a, [whole[:60000 - len(whole)], whole])  # the directories cost nothing; the second call gets the rest
+        res, ask, sent = self.judge(proj, repo, hunk("a.py", "x = 1"), [
+            task_issue("ENG-2", "002", ["a1", "a2", "a3"], files="sections, a.py", protected="tests/fixtures, gone.py"),
+            task_issue("ENG-3", "003", ["b1"], files="docs")], reply)  # raises IsADirectoryError if a directory is read
+        self.assertEqual([code for crit, code in sent if crit.startswith("a")], [hunk("a.py", "x = 1")] * 3)  # the hunk, not the file's 50,000 characters
         self.assertNotIn("INNER", "".join(code for _, code in sent))
         self.assertNotIn("b1", [crit for crit, _ in sent])  # only a directory: no code, so it is never judged or confirmed
         self.assertEqual([(r["choice"], r["note"]) for r in res["criteria"] if r["task"] == "003"], [("UNCLEAR", fc.fc_accept.NO_CODE)])
-        self.assertEqual([r["evidence"] for r in res["suspects"] if not r["confirmed"]], ["confirm budget spent"])
-        self.assertEqual(len(res["failed"]), 2)  # a1 and a2: confirmed suspects are judged as before
+        self.assertEqual(len(res["failed"]), 3)
 
 
 class PrettierOptIn(unittest.TestCase):

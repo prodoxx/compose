@@ -74,8 +74,10 @@ A start stops while a target differs from the record or an env file sets one the
    It is never judged on another task's code.
    Code over 30,000 characters is cut at a whole line and ends with a mark that says the tool cut it.
    A busy provider (HTTP 429, 502, 503 or 504) is asked again after 2, 5, 10 and 20 seconds, or after its `Retry-After` up to 60, before the call counts as an error.
-   Failures above the threshold become findings.
-   Each task's verdict is kept in `results/acceptance/<id>.json` with the commit it judged, keyed by the task's title, criteria, and the hunks of its files.
+   A NOT_MET above the threshold is checked by a second call that reads the same hunks (never the file as a later task has grown it) and answers `{"evidence": str, "violated": bool}`: the lines that break the criterion, then whether they do.
+   A criterion the code satisfies, an absent thing that should be absent included, is `violated: false`, and a `violated: true` whose evidence quotes no line of that code is not a violation: the criterion stays `unproven`.
+   Failures above the threshold that the second call confirms become findings.
+   Each task's verdict is kept in `results/acceptance/<id>.json` with the commit it judged, keyed by the task's title, criteria, the hunks of its files, and the question the second call is asked, so a verdict kept from another question is judged again.
    The next verify reuses it, and asks jev nothing for that task, while the key matches and `git diff` shows the task's `files` and `protected` unchanged since that commit; it prints `jev    acceptance N of M tasks unchanged since their last verify, not rejudged`.
    A verdict that judged nothing (a judge error, an unusable reply) is never kept, and `--fresh` rejudges every task.
    Then jev judges whether each task's evidence proves each criterion ([Evidence](#evidence)); that never changes the verdict.

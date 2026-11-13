@@ -1,4 +1,4 @@
-import hashlib, json, os, threading
+import hashlib, json, os, re, threading
 from concurrent.futures import ThreadPoolExecutor
 import fc_core, fc_config, fc_tasks, fc_evidence, fc_ledger, fc_models, fc_worktree
 
@@ -17,6 +17,25 @@ def capped(code):
     end = code.rfind("\n", 0, room)
     return code[:end if end > 0 else room] + CUT_MARK
 
+# The reply names its verdict `violated` and writes it after the evidence, as the figma judge's has been since #348: asked `{"confirmed": bool}` next to
+# "Return JSON", a model reads it as "the criterion is confirmed met" and answers true with evidence of a criterion that holds, which failed
+# the criterion (#457: three of seven NOT_METs in one verify). A satisfied criterion, an absent thing that should be absent included, is violated=false.
+CONFIRM = ("You are verifying whether code VIOLATES one acceptance criterion. Fill the fields in order. \"evidence\": the exact line or lines of the CODE "
+           "that break the criterion, copied verbatim, nothing else (\"\" when no line does). \"violated\": true only if the lines you quoted contradict the criterion's words. "
+           "If every part of the criterion is satisfied, including a criterion that says something is absent and it is absent, or an error path the code "
+           "handles as the criterion says, or you cannot quote a concrete line that breaks it, violated is false. "
+           "The CODE is one task's own change (a line starting with + was added, - was removed) or its files as they are; code outside what the criterion is about never violates it. "
+           'Return JSON {"evidence": str, "violated": bool}.')
+
+def quotes_code(evidence, code):
+    """Whether the evidence quotes the code: something in backticks or quotes, one of its lines, or the whole of it appears in the code
+    (whitespace and a diff's +/- marks aside). A violation that quotes no line of the code is a claim and not a finding."""
+    flat = lambda t: " ".join(str(t).split())
+    shown = flat(re.sub(r"(?m)^[+\- ]", "", code))
+    said = re.sub(r"(?m)^[+\- ]", "", str(evidence))  # a model quotes a diff line with its mark
+    spans = [m for g in re.findall(r"`([^`]+)`|\"([^\"]+)\"|'([^']+)'", said) for m in g]
+    return any(len(f := flat(piece)) >= 4 and f in shown for piece in [*spans, *said.splitlines(), said])
+
 def task_code(hunks, files, repo):
     """(the code a task's criteria are judged on, whether it is its files as they are): its own hunks of the diff, else, when
     none of its files changed (a check-only task, or a verify on the base itself), those files as they are in the repo. Never
@@ -32,8 +51,9 @@ def verdict_file(proj, tid):
     return proj / "results" / "acceptance" / f"{tid}.json"
 
 def verdict_key(meta, crits, code):
-    """What the judge saw for the task: its title, its criteria, and the hunks sent as its code."""
-    return hashlib.sha256(json.dumps([meta.get("title", ""), crits, code], separators=(",", ":")).encode()).hexdigest()
+    """What the judge saw for the task: its title, its criteria, and the hunks sent as its code, and what the confirm call is asked
+    (a verdict kept from another question is judged again: a wrong one is never kept past a fix of the question)."""
+    return hashlib.sha256(json.dumps([meta.get("title", ""), crits, code, CONFIRM], separators=(",", ":")).encode()).hexdigest()
 
 def kept_verdict(proj, tid):
     """The task's kept verdict, or None when there is none it can read."""
@@ -135,25 +155,14 @@ def jev_acceptance(cfg, proj, diff, repo=None, fresh=False):
         return {"pass": False, "criteria": [], "failed": [], "unclear": [], "note": "no acceptance criteria to judge"}
     judged = [r for r in rows if not r.get("reused") and r["task"] in states]  # a reused row was confirmed, re-asked, and matched to its test last time
     suspects = [r for r in rows if r["p_not_met"] >= threshold]
-    # Jev is a fast classifier; long compound criteria produce false NOT_MET. A second model must quote the violation.
-    budget, budget_lock = {}, threading.Lock()
+    # Jev is a fast classifier; long compound criteria produce false NOT_MET. A second model must quote the violation, in the code the judge read:
+    # the task's own hunks (task_code), never its files as a later task has grown them.
     def confirm(r):
-        task_files = next((m for m in fc_tasks.load_tasks(proj) if m["id"] == r["task"]), {"files": [], "protected": []})
-        with budget_lock:
-            remaining = budget.setdefault(r["task"], 60000)
-            if remaining <= 0:
-                r["confirmed"], r["evidence"] = False, "confirm budget spent"
-                return r
-            code = "\n\n".join(f"==== {f} ====\n{(repo / f).read_text()}" for f in task_files["files"] + task_files["protected"]
-                                if repo and (repo / f).is_file())
-            sent = code[:remaining]
-            budget[r["task"]] = remaining - len(sent)
+        code = states[r["task"]]["code"]
         try:
-            r["confirmed"], r["evidence"] = fc_models.confirm_call(
-                env, "You are verifying whether code VIOLATES one acceptance criterion. Quote the exact lines that prove "
-                "a violation. If every part of the criterion is satisfied, or you cannot show a concrete violation, "
-                'answer confirmed=false. Return JSON {"confirmed": bool, "evidence": str}.',
-                f"CRITERION: {r['criterion']}\n\nCODE:\n{sent}")
+            r["confirmed"], r["evidence"] = fc_models.confirm_call(env, CONFIRM, f"CRITERION: {r['criterion']}\n\nCODE:\n{code}", key="violated")
+            if r["confirmed"] and not quotes_code(r["evidence"], code):
+                r["confirmed"], r["evidence"] = False, "no line of the code is quoted as the violation: " + r["evidence"]
         except fc_models.PaymentRequired:
             raise
         except Exception as e:  # noqa: BLE001
