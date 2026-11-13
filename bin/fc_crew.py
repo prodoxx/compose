@@ -190,6 +190,8 @@ def cmd_crew(a):
             state = "ended" if last.get("state") not in (None, "done") and tab_closed(c, agents) else last.get("state", "-")
             status = "SUSPENDED" if live.get("pane_id") and fc_fleet.pane_suspended(live["pane_id"]) else live.get("agent_status", "closed")
             print(f"  {c['name']:32} {state:10} {status:8} {(c.get('model', 'claude') + (' ' + c['effort'] if c.get('effort') else '')):32} {c['title'][:30]:30} {last.get('message', '')[:70]}")
+            if status == "blocked":  # name the prompt it waits at, so the lead can answer it with `crew keys`
+                print(f"      waits at: {fc_fleet.dialog(live.get('name', c['name']))}")
         return
     if not a.role:
         sys.exit(f"usage: compose crew {a.action} --project {slug} --role <role>")

@@ -83,13 +83,18 @@ def herdr_error(*args, timeout=120):
     return out.get("result", out), None
 
 def herdr_text(*args, timeout=30):
-    """One herdr CLI call whose answer is plain text (`agent read`): the text, or "" outside herdr or when the call failed."""
+    """One herdr CLI call whose answer is plain text (`agent read`): the text, or "" outside herdr or when the call failed.
+    herdr will not read the history of a blocked agent (`agent_not_idle`: a fullscreen session's history can only be captured while
+    it is idle), so that one answer is retried for what is on its screen, which is the dialog it waits at."""
     if not herdr_env():
         return ""
     try:
         p = subprocess.run(herdr_argv(args), capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired):
         return ""
+    if p.returncode and "agent_not_idle" in (p.stdout or p.stderr) and "--source" in args and args[args.index("--source") + 1] != "visible":
+        i = args.index("--source") + 1
+        return herdr_text(*args[:i], "visible", *args[i + 1:], timeout=timeout)
     return p.stdout if p.returncode == 0 else ""
 
 SHELL_PROMPTS = (  # (pattern for the last visible line of a pane stopped before its command prompt, the key that declines it, "" when unknown)

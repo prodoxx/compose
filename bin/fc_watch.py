@@ -285,7 +285,9 @@ def watch_events(before, after, started=False):
                       + (f" branch={t['note']}" if t["note"] else "") + (f" linear={t['linear']}" if t["linear"] else "") + f" title={t['title']!r}")
     for n, st in after["agents"].items():
         if st == "blocked" and before["agents"].get(n) != "blocked":
-            ev.append(f"event agent={n} status=blocked  (read: compose crew read --project <slug> --agent {n} --lines 60; steer: compose crew prompt --project <slug> --agent {n} \"...\")")
+            ask = fc_fleet.dialog(n)  # what it waits at, so the lead can answer without a read
+            ev.append(f"event agent={n} status=blocked" + (f" waits-at={ask!r}" if ask != "unknown" else "")
+                      + f"  (read: compose crew read --project <slug> --agent {n} --lines 60; answer a dialog: compose crew keys --project <slug> --agent {n} <keys>; steer: compose crew prompt --project <slug> --agent {n} \"...\")")
     if before["run"] and not after["run"]:
         passed = sum(t["state"] in ("passed", "already_green", "merged") for t in after["tasks"].values())
         ev.append(f"event run=ended passed={passed}/{len(after['tasks'])}"

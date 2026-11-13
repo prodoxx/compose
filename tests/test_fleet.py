@@ -165,11 +165,15 @@ class InHerdr(unittest.TestCase):
             return None
         with mock.patch.object(fc_herdr, "herdr", herdr):
             self.assertEqual(fc_fleet.prompt("a", "hi"), (None, "refused"))
+        with mock.patch.object(fc_herdr, "herdr", herdr):
             with self.assertRaises(RuntimeError) as e:
                 fc_fleet.prompt("a", "hi", check=True)
         self.assertEqual(str(e.exception), "agent prompt a: agent_blocked")
         with mock.patch.object(fc_herdr, "herdr", lambda *a, **k: {"ok": 1}):
             self.assertEqual(fc_fleet.prompt("a", "hi"), ({"ok": 1}, None))
+        blocked = lambda *a, **k: {"agent": {"agent_status": "blocked"}} if a[:2] == ("agent", "get") else None  # #481: a refused prompt to a blocked agent says so
+        with mock.patch.object(fc_herdr, "herdr", blocked):
+            self.assertEqual(fc_fleet.prompt("a", "hi"), (None, "agent_blocked"))
         with mock.patch.object(fc_herdr, "herdr_error", return_value=({}, "timeout")) as he:
             self.assertEqual(fc_fleet.prompt("a", "hi", wait=True, timeout=10), ({}, "timeout"))
         self.assertEqual(he.call_args.args, ("agent", "prompt", "a", "hi", "--wait", "--timeout", "10000"))
@@ -257,8 +261,9 @@ class CrewPromptAndRead(unittest.TestCase):
         self.assertEqual([c.args for c in p.call_args_list], [("shop-orchestrator-2", "carry on"), ("shop-001", "stop"), ("shop-planner", "x")])
 
     def test_a_refusal_and_a_missing_target_or_text_exit_with_the_reason(self):
-        with mock.patch.object(fc_fleet, "prompt", return_value=(None, "agent_blocked")):
-            self.assertIn("did not take the prompt: agent_blocked (it waits at a dialog", self.crew(action="prompt", role="orchestrator", text="go")[1])
+        with mock.patch.object(fc_fleet, "prompt", return_value=(None, "agent_blocked")), mock.patch.object(fc_fleet, "dialog", return_value="Do you want to proceed? / 1. Yes / 4. No"):
+            msg = self.crew(action="prompt", role="orchestrator", text="go")[1]
+        self.assertIn("did not take the prompt: agent_blocked (it waits at a dialog: Do you want to proceed? / 1. Yes / 4. No; answer it with `compose crew keys --project shop --agent shop-orchestrator-2", msg)
         self.assertIn("usage: compose crew prompt --project shop (--role <role> | --agent <name>)", self.crew(action="prompt", text="go")[1])
         self.assertIn("needs the text", self.crew(action="prompt", role="orchestrator")[1])
         with mock.patch("sys.stdin", io.StringIO("from stdin")), mock.patch.object(fc_fleet, "prompt", return_value=({}, None)) as p:
@@ -279,6 +284,10 @@ class CrewPromptAndRead(unittest.TestCase):
         r.assert_called_once_with("shop-001", lines=20)
         with mock.patch.object(fc_fleet, "read", return_value=""), mock.patch.object(fc_fleet, "agent", return_value=None):
             self.assertEqual(self.crew(action="read", role="orchestrator")[1], "no live agent shop-orchestrator-2")
+        with mock.patch.object(fc_fleet, "read", return_value="\n"), mock.patch.object(fc_fleet, "agent", return_value={"name": "shop-001"}):  # never one empty line and exit 0 (#481)
+            out, err = self.crew(action="read", agent="shop-001")
+        self.assertEqual(out, "")
+        self.assertIn("shop-001 is live but its pane could not be read", err)
 
 
 if __name__ == "__main__":

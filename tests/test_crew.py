@@ -442,6 +442,19 @@ class Crew(unittest.TestCase):
                 fc.fc_crew.cmd_crew(type("A", (), {"action": "list"}))
             self.assertIn(shown, out.getvalue())
 
+    def test_list_names_the_dialog_a_blocked_teammate_waits_at(self):
+        """#481: `blocked` alone gives the lead nothing to answer."""
+        (fc.fc_crew.crew_dir(self.proj) / "shop-explore.json").write_text(json.dumps({"name": "shop-explore", "agent": "shop-explore", "title": "t", "space": "w9", "tab": "w9:t1"}))
+        agent = {"name": "shop-explore", "workspace_id": "w9", "agent_status": "blocked", "pane_id": "p1"}
+        out = io.StringIO()
+        with mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), mock.patch.object(fc.fc_herdr, "herdr", lambda *a, **k: {"agents": [agent]}), \
+                mock.patch.object(fc.fc_fleet, "pane_suspended", return_value=False), mock.patch.object(fc.fc_fleet, "dialog", return_value="Do you want to proceed? / 1. Yes / 4. No"), \
+                mock.patch("sys.stdout", out):
+            fc.fc_crew.cmd_crew(type("A", (), {"action": "list"}))
+        lines = out.getvalue().splitlines()
+        self.assertIn("blocked", lines[0])
+        self.assertEqual(lines[1].strip(), "waits at: Do you want to proceed? / 1. Yes / 4. No")
+
     def test_list_shows_ended_for_a_closed_teammate_whose_last_report_is_not_done(self):
         d = fc.fc_crew.crew_dir(self.proj)
         teammates = {  # name: (reports oldest first, open as (agent name, space) or None)

@@ -653,6 +653,57 @@ class HerdrPromptSession(unittest.TestCase):
         self.assertEqual(self.call("sys.exit(3)", "agent", "prompt", "a", "hi"), (None, "error"))
 
 
+class BlockedAgent(unittest.TestCase):
+    """#481: herdr refuses a blocked fullscreen session's history (`agent_not_idle`) and its prompt (`agent_blocked`); compose must
+    show the dialog it waits at and name the refusal instead of printing nothing or saying "refused"."""
+    SCREEN = "Do you want to proceed?\n 1. Yes\n 4. No\n"
+    FAKE = ("import json, sys\n"
+            "a = sys.argv[1:]\n"
+            "if a[:2] == ['agent', 'read']:\n"
+            "    if a[a.index('--source') + 1] == 'visible':\n"
+            "        sys.stdout.write(%r)\n"
+            "    else:\n"
+            "        print(json.dumps({'error': {'code': 'agent_not_idle', 'message': 'blocked'}})); sys.exit(1)\n"
+            "if a[:2] == ['agent', 'prompt']:\n"
+            "    print(json.dumps({'error': {'code': 'agent_blocked'}})); sys.exit(1)\n"
+            "if a[:2] == ['agent', 'get']:\n"
+            "    print(json.dumps({'result': {'agent': {'name': a[2], 'agent_status': 'blocked'}}}))\n")
+
+    def setUp(self):
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d, True)
+        (d / "herdr").write_text(f"#!{sys.executable}\n" + self.FAKE % self.SCREEN)
+        (d / "herdr").chmod(0o755)
+        env = mock.patch.dict(os.environ, {"PATH": f"{d}{os.pathsep}{os.environ['PATH']}", "HERDR_ENV": "1", "HERDR_SOCKET_PATH": "/s", "COMPOSE_NO_HERDR": "", "COMPOSE_HOST": ""})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def test_a_read_of_a_blocked_agents_history_answers_its_screen(self):
+        self.assertEqual(fc.fc_fleet.read("shop-001", lines=60), self.SCREEN)
+        self.assertEqual(fc.fc_fleet.read("shop-001", lines=60, source="visible"), self.SCREEN)
+
+    def test_a_blocked_agents_prompt_refusal_is_named_agent_blocked(self):
+        self.assertEqual(fc.fc_fleet.prompt("shop-001", "hi"), (None, "agent_blocked"))
+        with self.assertRaises(RuntimeError) as e:
+            fc.fc_fleet.prompt("shop-001", "hi", check=True)
+        self.assertIn("agent_blocked", str(e.exception))
+
+    def test_a_dashed_permission_prompt_is_named_with_its_command_and_choices(self):
+        screen = "\n".join(["─" * 40, " Bash command", "╌" * 40, " rm -rf ./victim", "╌" * 40, " Do you want to proceed?", " ❯ 1. Yes", "   4. No", "", " Esc to cancel · Tab to amend"])
+        with mock.patch.object(fc.fc_fleet, "read", return_value=screen):
+            self.assertEqual(fc.fc_fleet.dialog("shop-001"), "Bash command / rm -rf ./victim / Do you want to proceed? / 1. Yes / 4. No")
+
+    def test_the_blocked_event_names_what_the_agent_waits_at(self):
+        before = {"tasks": {}, "agents": {}, "run": False, "verify": None}
+        after = {**before, "agents": {"shop-001": "blocked"}}
+        with mock.patch.object(fc.fc_fleet, "dialog", return_value="Do you want to proceed? / 1. Yes / 4. No"):
+            (ev,) = fc.fc_watch.watch_events(before, after)
+        self.assertIn("agent=shop-001 status=blocked waits-at='Do you want to proceed? / 1. Yes / 4. No'", ev)
+        with mock.patch.object(fc.fc_fleet, "dialog", return_value="unknown"):
+            (ev,) = fc.fc_watch.watch_events(before, after)
+        self.assertNotIn("waits-at", ev)
+
+
 class PromptRecord(unittest.TestCase):
     """Every `agent prompt` herdr() sends is logged as a typed prompt, so the compactor can tell it from the product owner's."""
 

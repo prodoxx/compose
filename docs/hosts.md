@@ -23,12 +23,12 @@ The commands below do the host's work and read the same in each:
 | Command | What it does |
 |---|---|
 | `compose crew prompt --project <slug> --role <role> "<text>"` | types a prompt into a teammate, as the product owner would; `--agent <name>` reaches any live agent of the host (an implementer `<slug>-NNN`, a test writer) |
-| `compose crew read --project <slug> --role <role> [--lines N]` | prints the last lines of its pane (60 by default) |
+| `compose crew read --project <slug> --role <role> [--lines N]` | prints the last lines of its pane (60 by default); an agent blocked on a dialog shows its screen, the dialog included |
 | `compose crew keys --project <slug> --role <role> esc` | presses keys in it, `esc` to stop its turn |
 | `compose crew focus --project <slug> --role <role>` | takes you to its pane |
-| `compose crew list --project <slug>` | every teammate with its last report and the status the host reports |
+| `compose crew list --project <slug>` | every teammate with its last report and the status the host reports; a blocked one gets a `waits at:` line naming its dialog |
 
-A refusal names the reason: `agent_blocked` when the agent waits at a dialog (answer it in its pane first), `agent_not_found` when nothing of that name is live.
+A refusal names the reason: `agent_blocked` when the agent waits at a dialog (the message names the dialog; answer it with `crew keys` first), `agent_not_found` when nothing of that name is live.
 Inside herdr you may still use `herdr agent prompt <name> "..."` and `herdr agent read <name>` directly; inside the Herdr app `hc send <name> "..."` and `hc read <name>`; inside Rex `rex send` and `rex capture`.
 Read the host's own guide before that: `~/.claude/skills/herdr/SKILL.md`, `hc --skill`, or `rex skill show`.
 

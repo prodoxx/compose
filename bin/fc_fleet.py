@@ -100,7 +100,8 @@ def prompt(name, text, wait=False, timeout=None, check=False):
             result, err = None, str(e).rsplit(": ", 1)[-1] or "error"
     else:
         result = fc_herdr.herdr("agent", "prompt", name, text)
-        err = None if result is not None else "refused"
+        # herdr refuses a blocked agent with agent_blocked, and herdr() keeps no code: its status says it again (#481)
+        err = None if result is not None else "agent_blocked" if agent_status(name) == "blocked" else "refused"
     if err and check:
         raise RuntimeError(f"agent prompt {name}: {err}")
     return result, err
@@ -358,7 +359,7 @@ def dialog(name):
     lines = read(name, lines=40, source="visible").splitlines()
     rules = [i for i, ln in enumerate(lines) if ln.strip() and set(ln.strip()) <= set("─━-")]
     body = [ln.strip().removeprefix("❯").strip() for ln in lines[rules[-1] + 1 if rules else 0:]]
-    text = " / ".join(ln for ln in body if ln and not ln.startswith(("Enter to confirm", "Esc to")))
+    text = " / ".join(ln for ln in body if ln and not set(ln) <= set("─━╌-") and not ln.startswith(("Enter to confirm", "Esc to")))  # a permission prompt frames its command in dashed rules
     return text[:400] or "unknown"
 
 def login_screen(name):

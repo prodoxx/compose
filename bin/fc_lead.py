@@ -160,8 +160,8 @@ def steer(a):
         target = (c or {}).get("agent") or fc_herdr.agent_ref(proj.name, a.role)
     if a.action == "read":
         text = fc_fleet.read(target, lines=getattr(a, "lines", None) or 60)
-        if not text and not fc_fleet.agent(target):
-            sys.exit(f"no live agent {target}")
+        if not text.strip():  # never a bare empty line with exit 0: say which of the two it is
+            sys.exit(f"no live agent {target}" if not fc_fleet.agent(target) else f"{target} is live but its pane could not be read, or shows nothing")
         print(text)
         return
     if a.action == "keys":
@@ -177,7 +177,8 @@ def steer(a):
         sys.exit("crew prompt needs the text to send (or - with it on stdin)")
     _, err = fc_fleet.prompt(target, text)
     if err:
-        sys.exit(f"{target} did not take the prompt: {err}" + (" (it waits at a dialog: answer it in its pane first)" if err == "agent_blocked" else ""))
+        sys.exit(f"{target} did not take the prompt: {err}" + (f" (it waits at a dialog: {fc_fleet.dialog(target)}; answer it with `compose crew keys --project {proj.name} --agent {target} <keys>`, "
+                                                                f"see it with `compose crew read --project {proj.name} --agent {target}`)" if err == "agent_blocked" else ""))
     print(f"prompted {target}")
 
 def cmd_crew(a):
