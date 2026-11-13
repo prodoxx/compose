@@ -163,6 +163,58 @@ class Chain(unittest.TestCase):
         self.assertIn("b4 conflicts when rebased onto b1 in x.py", L.STACK_STOP)
 
 
+class AlreadyApplied(unittest.TestCase):
+    """A commit whose change the layer holds already is left out of it; git stops on such a pick with nothing in conflict (#472)."""
+    def pick(self, conflicted, clean_tree):
+        calls = []
+        def sh(cmd, cwd=None, check=True, env=None, **kw):
+            calls.append(cmd[1:])
+            out, rc = "", 0
+            if cmd[1] == "show":
+                out = "t\nt@t\n2030-01-01T00:00:00+00:00\n"
+            elif cmd[1] == "cherry-pick" and "--abort" not in cmd:
+                rc = 1
+            elif cmd[1] == "diff" and "--name-only" in cmd:
+                out = "a.py\n" if conflicted else ""
+            elif cmd[1] == "diff" and "--quiet" in cmd:
+                rc = 0 if clean_tree else 1
+            return subprocess.CompletedProcess(cmd, rc, out, "")
+        with mock.patch.object(fc.fc_layers.fc_core, "sh", sh):
+            return fc.fc_layers.cherry_pick_same(Path("."), "abc"), calls
+
+    def test_a_pick_that_becomes_empty_says_the_change_is_already_there_and_a_real_conflict_still_names_its_files(self):
+        self.assertEqual(self.pick(False, True)[0], fc.fc_layers.ALREADY)
+        self.assertEqual(self.pick(True, False)[0], ["a.py"])
+        self.assertEqual(self.pick(False, False)[0], [])  # no file, but the tree changed: a failure git does not explain
+        self.assertEqual(self.pick(False, True)[1][-1], ["cherry-pick", "--abort"])
+
+    def test_a_layer_leaves_out_a_commit_the_base_holds_and_a_layer_left_empty_is_not_one(self):
+        L = fc.fc_layers
+        units = [{"name": "001", "key": "001", "commits": ["t1", "c1"], "lines": 3, "generated": {}}]
+        placed = []
+        def pick(wt, c, message=None):
+            placed.append(c)
+            return L.ALREADY if c == "t1" else None
+        said, same = [], []
+        def sh(cmd, cwd=None, check=True, env=None, **kw):
+            out = {"rev-parse": "H\n", "show": "the subject\n"}.get(cmd[1], "")
+            if cmd[1] == "rev-parse" and len(cmd) == 4:  # HEAD and the layer below
+                out = "H\nH\n" if same else "H\nB\n"
+            return subprocess.CompletedProcess(cmd, 0, out, "")
+        def build():
+            return L.build_layers(Path("."), Path(tempfile.mkdtemp()), "main", "trunk", ["p-001"], Path("."), 300)
+        with mock.patch.object(L, "review_units", return_value=units), mock.patch.object(L, "cherry_pick_same", pick), mock.patch.object(L.fc_core, "sh", sh), \
+             mock.patch.object(L.fc_core, "say", said.append), mock.patch.object(L, "layer_message", return_value=None), mock.patch.object(L, "layer_prefix", return_value="p-"), \
+             mock.patch.object(L.fc_core, "project_config", return_value={"layer_prefix": "p-"}), mock.patch.object(L.fc_core, "commit_convention", return_value=None), \
+             mock.patch.object(L, "differing_files", return_value=[]), mock.patch.object(L.fc_tasks, "load_tasks", return_value=[]), mock.patch.object(L, "layer_branches", return_value=[]):
+            layers = build()
+            self.assertEqual(placed, ["t1", "c1"])
+            self.assertEqual([l["commits"] for l in layers], [["H"]])  # c1 is the layer's only commit
+            self.assertEqual(said, ["stack  note  t1 'the subject' is on layer 1's base already; left out of the layer"])
+            units[0]["commits"], same[:] = ["t1"], [1]  # nothing of its own and the tree is the layer below: the base holds it all
+            self.assertEqual(build(), [])
+
+
 class SetAside(unittest.TestCase):
     """replace_branch sets a task branch aside for its rebuild; restore_branch puts it back when the rebuild never started."""
     def sh(self, cmd, cwd=None, check=True, **kw):

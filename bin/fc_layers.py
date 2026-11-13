@@ -394,10 +394,13 @@ def layer_message(repo, proj, c, conv=None):
     files = fc_core.sh(["git", "show", "--name-only", "--no-renames", "--format=", c], repo).stdout.split()
     return scrub_message(own, files, conv), why
 
+ALREADY = "already in the layer"
+
 def cherry_pick_same(wt, c, message=None):
     """Cherry-pick keeping the original committer and date, so a layer rebuilt from unchanged commits gets the same hashes and
     a resubmit pushes nothing new; `message` replaces the commit's own. None when it applied, else the files it conflicts in
-    (aborted, so the tree is as before)."""
+    (aborted, so the tree is as before). ALREADY when the commit has a change but the layer holds that change already: git stops
+    on a pick that becomes empty with nothing in conflict, and the tree is as before."""
     who = fc_core.sh(["git", "show", "-s", "--format=%cn%n%ce%n%cI", c], wt).stdout.splitlines()
     env = {**os.environ, "GIT_COMMITTER_NAME": who[0], "GIT_COMMITTER_EMAIL": who[1], "GIT_COMMITTER_DATE": who[2]}
     p = fc_core.sh(["git", "cherry-pick", "--allow-empty", c], wt, check=False, env=env)
@@ -406,8 +409,9 @@ def cherry_pick_same(wt, c, message=None):
             fc_core.sh(["git", "commit", "--amend", "--allow-empty", "-q", "-m", message], wt, env=env)
         return None
     conflicts = fc_core.sh(["git", "diff", "--name-only", "--diff-filter=U"], wt, check=False).stdout.split()
+    empty = not conflicts and fc_core.sh(["git", "diff", "--quiet", "HEAD"], wt, check=False).returncode == 0
     fc_core.sh(["git", "cherry-pick", "--abort"], wt, check=False)
-    return conflicts
+    return ALREADY if empty else conflicts
 
 def record_layers(proj, layers):
     """Remember which tasks each layer holds once the stack is submitted: from then on a layer has a PR, so its tasks stay in it.
@@ -484,7 +488,7 @@ def build_layers(repo, proj, base, trunk, chain, wt, budget, max_prs=None, held=
     for i, (rec_branch, g, folded) in enumerate(groups, 1):  # a new layer is numbered above the landed ones, and never takes a recorded name
         branch = rec_branch or next(f"{prefix}layer-{n:02d}" for n in range(i + len(landed), 1000) if f"{prefix}layer-{n:02d}" not in recorded)
         fc_core.sh(["git", "checkout", "-q", "--detach", prev], wt)
-        units = []
+        units, left_out = [], False
         for u in g:
             units.append([])
             for c in u["commits"]:
@@ -492,6 +496,10 @@ def build_layers(repo, proj, base, trunk, chain, wt, budget, max_prs=None, held=
                 if message:
                     fc_core.say(f"stack  note  {c[:7]} message: {first_line(c)!r} becomes {message.splitlines()[0]!r}: {why}")
                 conflicts = cherry_pick_same(wt, c, message)
+                if conflicts == ALREADY:  # its change is in the layer below or in this layer already: nothing to place
+                    fc_core.say(f"stack  note  {c[:7]} {first_line(c)!r} is on layer {i}'s base already; left out of the layer")
+                    left_out = True
+                    continue
                 if conflicts is not None:
                     files = ", ".join(conflicts) or "no file git names"
                     if fc_core.sh(["git", "merge-base", "--is-ancestor", base, trunk], repo, check=False).returncode:  # trunk is behind base
@@ -502,7 +510,7 @@ def build_layers(repo, proj, base, trunk, chain, wt, budget, max_prs=None, held=
                         stop(f"{c[:7]} does not apply on layer {i} (conflicts in {files}); {kept}")
                     return None
                 units[-1].append(fc_core.sh(["git", "rev-parse", "HEAD"], wt).stdout.strip())
-        if landed and len(set(fc_core.sh(["git", "rev-parse", "HEAD", prev], wt).stdout.split())) == 1:  # nothing over the layer below: the base holds it
+        if (landed or left_out) and len(set(fc_core.sh(["git", "rev-parse", "HEAD", prev], wt).stdout.split())) == 1:  # nothing over the layer below: the base holds it
             continue
         gen = {}
         for u in g:
