@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import importlib.machinery, importlib.util, json, os, tempfile, unittest
+import importlib.machinery, importlib.util, json, os, tempfile, time, unittest
 from types import SimpleNamespace
 from pathlib import Path
 from unittest import mock
@@ -124,16 +124,18 @@ class UnprovenRun(unittest.TestCase):
         for flow in ("test-first", IMPL, None):
             self.assertEqual(events(flow, "unproven"), [self.ev(p, "unproven" if p == "final" else "passed") for p in ("red", "green", "final")])
 
-    def run_tasks(self, specs, statuses, on_start=None):
-        """Runs tasks (id, after) whose run_task answers `statuses` and calls on_start(proj, task id) first; returns (say lines, {id: status} of the rows, exit code, record_task (issue, events) calls)."""
+    def run_tasks(self, specs, statuses, on_start=None, parallel=1, plan=()):
+        """Runs tasks (id, after) whose run_task answers `statuses` and calls on_start(proj, task id) first; `plan` is the (id, after) of the tasks the last sync stored besides; returns (say lines, {id: status} of the rows, exit code, record_task (issue, events) calls)."""
         repo = Path(tempfile.mkdtemp()).resolve(); proj = repo / ".compose" / "p"; (proj / "results").mkdir(parents=True)
+        if plan:
+            (proj / "results" / "tasks.json").write_text(json.dumps({"feature": {}, "tasks": [{"id": t, "after": after, "files": [], "protected": [], "test": "true", "model": "m"} for t, after in plan]}))
         self.started = []
         tasks = [{"id": t, "title": t, "after": after, "files": [], "protected": [], "test": "true", "model": "m", "linear": f"ENG-{t}"} for t, after in specs]
         def run_task(repo, proj, task, attempts):
             self.started.append(task["id"])
             on_start and on_start(proj, task["id"])
             return {"id": task["id"], "title": task["id"], "status": statuses[task["id"]], "attempts": 1, "seconds": 0.0, "cost": 0.0, "branch": "b", "log": []}
-        a = mock.Mock(trunk="trunk", attempts=1, parallel=1, no_stack=True, redo=False)
+        a = mock.Mock(trunk="trunk", attempts=1, parallel=parallel, no_stack=True, redo=False)
         with mock.patch.object(fc.fc_core, "say") as say, mock.patch.object(fc.fc_run, "preflight", lambda m: None), mock.patch.object(fc.fc_herdr, "herdr_space", lambda p: None), \
              mock.patch.object(fc.fc_run, "triage", lambda *x: None), mock.patch.object(fc.fc_run, "reflect_task"), mock.patch.object(fc.fc_linear, "linear_reconcile"), \
              mock.patch.object(fc.fc_implement, "run_task", run_task), mock.patch.object(fc_fast, "run_events", side_effect=lambda proj, repo, meta, r: [meta["id"], r["status"]]), \
@@ -161,6 +163,39 @@ class UnprovenRun(unittest.TestCase):
         self.assertEqual((rows, code), ({"001": "passed", "002": "passed", "003": "passed"}, 0))
         self.assertLess(self.started.index("001"), self.started.index("002"))
         self.assertEqual([l for l in say if " joined " in l], ["002 joined  added to the run while it goes on", "003 joined  added to the run while it goes on"])
+
+    def queue_file(self, proj, t, after):
+        (proj / "results" / "run-queue").mkdir(exist_ok=True)
+        fc.fc_core.atomic_write(proj / "results" / "run-queue" / f"{t}.json", json.dumps({"id": t, "title": t, "after": after, "files": [], "protected": [], "test": "true", "model": "m", "linear": f"ENG-{t}"}))
+
+    def test_a_task_that_joins_before_its_after_task_waits_for_it_to_join_and_pass(self):
+        """`compose run --only 002` (after 001) while 001 is not in the run: 002 must not start on a stub of what 001 builds (#459)."""
+        before = []
+        def queue(proj, tid):
+            if tid == "900":
+                self.queue_file(proj, "002", "001")
+                time.sleep(0.6)  # the loop adopts it within a poll, and a free slot is open for it
+                before.extend(self.started)
+                self.queue_file(proj, "001", "")
+        mock.patch.object(fc.fc_run, "QUEUE_POLL", 0.05).start()
+        say, rows, code, _ = self.run_tasks([("900", "")], {t: "passed" for t in ("900", "001", "002")}, queue, parallel=3, plan=[("900", ""), ("001", ""), ("002", "001")])
+        self.assertEqual(before, ["900"])  # 002 had not started although the run had a free slot
+        self.assertEqual(self.started, ["900", "001", "002"])
+        self.assertEqual((rows, code), ({"900": "passed", "001": "passed", "002": "passed"}, 0))
+        self.assertIn("002 joined  added to the run while it goes on; waits for 001, not in the run yet", say)
+
+    def test_a_task_that_joins_after_a_task_that_passed_earlier_does_not_wait_and_one_whose_after_task_never_joins_is_held_not_blocked(self):
+        def queue(proj, tid):
+            if tid == "900":
+                (proj / "results" / "001.json").write_text(json.dumps({"id": "001", "status": "passed"}))
+                self.queue_file(proj, "002", "001")
+                self.queue_file(proj, "003", "004")  # 004 has not passed and is never queued
+        mock.patch.object(fc.fc_run, "QUEUE_POLL", 0.05).start()
+        plan = [("900", ""), ("001", ""), ("002", "001"), ("003", "004"), ("004", "")]
+        say, rows, code, _ = self.run_tasks([("900", "")], {t: "passed" for t in ("900", "002", "003")}, queue, parallel=3, plan=plan)
+        self.assertEqual(sorted(self.started), ["002", "900"])
+        self.assertEqual((rows, code), ({"900": "passed", "002": "passed"}, 0))  # no blocked_by row for 003
+        self.assertIn("003 held    after 004, which is not in the run: run it (compose run --only 004), then run 003 again", say)
 
     def test_run_only_on_a_project_with_a_live_run_queues_its_tasks_there_and_the_lock_stays_for_everything_else(self):
         repo = Path(tempfile.mkdtemp()).resolve(); proj = repo / ".compose" / "p"; (proj / "results").mkdir(parents=True)

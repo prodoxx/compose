@@ -201,6 +201,13 @@ def preflight(models):
         sys.exit("preflight failed; nothing was cloned or run. Fix the model id or preset in "
                  f"{fc_config.CONFIG_PATH} (`models`) or the task's `model:`:\n  " + "\n  ".join(bad))
 
+def unfinished_outside(proj, after, ids):
+    """The `after` task ids a task that joins a live run waits on although the run does not hold them yet: tasks of the plan that
+    have not passed (task_finished), or were left out. A first run reads an `after` task outside its set as done; a live run may be
+    handed it next, and the task must not start on a stub of what it consumes before then."""
+    known = {m["id"]: m for m in fc_tasks.runnable(fc_tasks.load_tasks(proj))}
+    return [d for d in after if d not in ids and d in known and not fc_tasks.task_finished(proj, known[d])]
+
 def claude_capped(ready, running_models, free, metas):
     """The ready task ids to start now: at most `free`, and no more Claude Code tasks than `claude_parallel` allows beside the ones
     running (`running_models`), whatever `parallel` says. A task past the cap waits for a running one to end, the others go ahead."""
@@ -280,11 +287,13 @@ def run_tasks(repo, proj, tasks, a):
                 tasks.append(m)
                 metas[m["id"]] = m
                 ids.add(m["id"])
-                deps[m["id"]] = [d for d in (x.strip() for x in str(m.get("after") or "").split(",")) if d in ids]
-                pending[m["id"]] = [d for d in deps[m["id"]] if d not in settled or d in failed_ids or d in unproven]
+                after = [x for x in (x.strip() for x in str(m.get("after") or "").split(",")) if x]
+                absent = unfinished_outside(proj, after, ids)  # an `after` task that has not joined yet, and has not passed: it may be queued next
+                deps[m["id"]] = [d for d in after if d in ids or d in absent]
+                pending[m["id"]] = [d for d in deps[m["id"]] if d in absent or d not in settled or d in failed_ids or d in unproven]
                 waits.update(fc_tasks.waiting([m], released))
                 write_marker()
-                fc_core.say(f"{m['id']} joined  added to the run while it goes on")
+                fc_core.say(f"{m['id']} joined  added to the run while it goes on" + (f"; waits for {','.join(absent)}, not in the run yet" if absent else ""))
                 joined = True
             return joined
         held_before = False
@@ -327,12 +336,14 @@ def run_tasks(repo, proj, tasks, a):
                 break  # a payment halt: leave the rest pending, do not mark them blocked
             if not running:
                 stuck = fc_tasks.held_behind(pending, hold, failed_ids)
-                behind = {p for p in pending if set(pending[p]) & unproven}
+                missing = {p for p in pending if set(pending[p]) - ids and not set(pending[p]) & failed_ids}  # waits on a task that never joined
+                behind = {p for p in pending if set(pending[p]) & unproven} | missing
                 while more := {p for p in pending if set(pending[p]) & behind} - behind:
                     behind |= more
                 for p in pending:
                     if p in stuck or p in behind:  # left pending for the run after the re-plan, not blocked
-                        fc_core.say(f"{p} held    " + (hold[p]["reason"] if p in hold else "after unproven " + ",".join(sorted(set(pending[p]) & unproven)) if set(pending[p]) & unproven else "after held " + ",".join(sorted(set(pending[p]) & (stuck | behind)))))
+                        fc_core.say(f"{p} held    " + (hold[p]["reason"] if p in hold else f"after {(gone := ','.join(sorted(set(pending[p]) - ids)))}, which is not in the run: run it (compose run --only {gone}), then run {p} again" if p in missing
+                                                         else "after unproven " + ",".join(sorted(set(pending[p]) & unproven)) if set(pending[p]) & unproven else "after held " + ",".join(sorted(set(pending[p]) & (stuck | behind)))))
                         continue
                     results.append({"id": metas[p]["id"], "title": metas[p].get("title"), "status": "blocked_by_" + ",".join(deps[p]),
                                     "attempts": 0, "seconds": 0.0, "cost": 0.0, "branch": "-"})  # it waits on something that failed
