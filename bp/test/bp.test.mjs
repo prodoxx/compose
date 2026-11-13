@@ -19,7 +19,7 @@ const stopChrome = async (chrome, profile, grace = 5000) => {
     const timer = setTimeout(() => chrome.kill('SIGKILL'), grace);
     await exited; clearTimeout(timer);
   }
-  rmSync(profile, { recursive: true, force: true });
+  rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });  // helper processes may still write into it for a moment after the browser exits
 };
 
 test('stopChrome removes the profile only after the browser exits, and SIGKILLs one that ignores SIGTERM', async () => {
@@ -168,4 +168,65 @@ test("goal reads config.json and auth.json from $COMPOSE_CONFIG's directory, not
   const decoy = { typesafe: 'ts-decoy', workspaces: { default: { openrouter: 'sk-or-decoy' } } };
   const files = { '.compose/config.json': {}, '.compose/auth.json': decoy, 'alt/config.json': { workspace: 'acme' }, 'alt/auth.json': auth };
   assert.deepEqual(goalEnv(files, { COMPOSE_CONFIG: '$DIR/alt/config.json' }), all('sk-or-acme'));
+});
+
+// A browser that comes up and answers everything but Page.captureScreenshot, as Chrome for Testing 149 on macOS did. bp/fixtures/fake-chromium.mjs
+// stands in for it: `fakeBrowser` writes an executable that runs it, replying to screenshots (`ok`) or never (`hang`).
+const FAKE = path.resolve(import.meta.dirname, '../fixtures/fake-chromium.mjs');
+const fakeBrowser = (file, shot, product) => {
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, `#!/bin/sh\nFAKE_SHOT=${shot} FAKE_PRODUCT=${product} exec "${process.execPath}" "${FAKE}" "$@"\n`); chmodSync(file, 0o755);
+};
+const freePort = () => new Promise((resolve) => { const s = createServer(); s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(String(port))); }); });
+const portAnswers = (port) => fetch(`http://127.0.0.1:${port}/json/version`).then(() => true, () => false);
+const stopFake = async (port, out = '') => { const pid = out.match(/pid (\d+)/)?.[1]; if (pid) try { process.kill(-pid, 'SIGKILL'); } catch {} for (let i = 0; i < 40 && await portAnswers(port); i++) await new Promise((r) => setTimeout(r, 50)); };
+const bpAsync = (args, env, cwd = tmpdir()) => new Promise((resolve) => {
+  const c = spawn(process.execPath, [BP, ...args], { cwd, env: { ...process.env, ...env } }); let stdout = '', stderr = '';
+  c.stdout.on('data', (d) => { stdout += d; }); c.stderr.on('data', (d) => { stderr += d; }); c.on('exit', (status) => resolve({ status, stdout, stderr }));
+});
+
+test('shot stops with a message naming the browser when it never answers Page.captureScreenshot, and writes a png when it does', async (t) => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'bp-shot-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
+  for (const [mode, product] of [['hang', 'FakeChrome/149'], ['ok', 'FakeChrome/157']]) {
+    const port = await freePort(); const browser = path.join(dir, `chrome-${mode}`); fakeBrowser(browser, mode, product);
+    const child = spawn(browser, [`--remote-debugging-port=${port}`], { stdio: 'ignore' }); t.after(() => child.kill('SIGKILL'));
+    for (let i = 0; i < 40 && !await portAnswers(port); i++) await new Promise((r) => setTimeout(r, 50));
+    const out = path.join(dir, `${mode}.png`); const started = Date.now();
+    const r = await bpAsync(['shot', 'about:blank', out], { BP_PORT: port, BP_SHOT_TIMEOUT: '700' });
+    if (mode === 'hang') {
+      assert.equal(r.status, 1, r.stdout);
+      assert.match(r.stderr, /FakeChrome\/149 never answered Page\.captureScreenshot in 0\.7s, so it cannot take screenshots/);
+      assert.match(r.stderr, /BP_CHROME=<path>/);
+      assert.ok(!existsSync(out) && Date.now() - started < 10000);
+    } else {
+      assert.equal(r.status, 0, r.stderr);
+      assert.equal(readFileSync(out).subarray(1, 4).toString(), 'PNG');
+    }
+  }
+});
+
+test('launch does not report up for a browser that cannot take a screenshot, and stops it', async (t) => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'bp-nosnap-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const port = await freePort(); const browser = path.join(dir, 'chrome'); fakeBrowser(browser, 'hang', 'FakeChrome/149');
+  const r = await bpAsync(['launch', '--headless', '--profile', path.join(dir, 'profile')], { BP_PORT: port, BP_CHROME: browser, BP_SHOT_TIMEOUT: '700', HOME: dir });
+  t.after(() => stopFake(port, r.stdout));
+  assert.equal(r.status, 1);
+  assert.doesNotMatch(r.stdout, /up on/);
+  assert.match(r.stderr, /no Chromium came up able to take a screenshot/);
+  assert.ok(r.stderr.includes(`${browser}: FakeChrome/149 never answered Page.captureScreenshot`), r.stderr);
+  assert.equal(await portAnswers(port), false, 'the browser that cannot take a screenshot was left running');
+});
+
+test('launch falls back to the next Playwright build when the newest cannot take a screenshot', async (t) => {
+  const home = mkdtempSync(path.join(tmpdir(), 'bp-fallback-')); t.after(() => rmSync(home, { recursive: true, force: true }));
+  const build = (n) => path.join(home, 'Library/Caches/ms-playwright', `chromium-${n}`, `chrome-mac-${process.arch === 'arm64' ? 'arm64' : 'x64'}`, 'Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing');
+  fakeBrowser(build(1300), 'hang', 'FakeChrome/160'); fakeBrowser(build(1248), 'ok', 'FakeChrome/156'); fakeBrowser(build(1228), 'hang', 'FakeChrome/149');
+  const port = await freePort();
+  const r = await bpAsync(['launch', '--profile', path.join(home, 'profile')], { BP_PORT: port, BP_CHROME: undefined, BP_SHOT_TIMEOUT: '700', HOME: home });
+  t.after(() => stopFake(port, r.stdout));
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /up on :\d+ pid \d+ profile .* browser FakeChrome\/156/);
+  assert.match(r.stderr, /chromium-1300.*FakeChrome\/160 never answered Page\.captureScreenshot.*trying the next Chromium/s);
+  const s = await bpAsync(['shot', 'about:blank', path.join(home, 'a.png')], { BP_PORT: port, BP_SHOT_TIMEOUT: '700' });
+  assert.equal(s.status, 0, s.stderr);
 });

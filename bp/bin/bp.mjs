@@ -9,9 +9,18 @@ import path from 'node:path';
 // No default port: a shared default let a teammate attach to the product owner's own browser. Every command names its own port.
 const PORT = process.env.BP_PORT;
 const needPort = () => { if (!/^\d+$/.test(PORT || '')) throw new Error('set BP_PORT to a debugging port only you use (a browser you did not launch on it is not yours to attach to)'); };
-// Newest Playwright Chromium on macOS; Chrome 154+ ignores --load-extension, so the branded browser cannot be used.
-const playwrightChromium = () => { const dir = `${process.env.HOME}/Library/Caches/ms-playwright`; const v = existsSync(dir) ? readdirSync(dir).filter((d) => /^chromium-\d+$/.test(d)).sort((a, b) => b.slice(9) - a.slice(9))[0] : null;
-  return v ? `${dir}/${v}/chrome-mac-${process.arch === 'arm64' ? 'arm64' : 'x64'}/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing` : `${dir}/chromium-*`; };
+// Playwright's builds on macOS, newest first. Chrome 154+ ignores --load-extension, so the branded browser cannot be used for extension runs.
+const pwDir = () => `${process.env.HOME}/Library/Caches/ms-playwright`;
+const pwBuilds = (prefix) => (existsSync(pwDir()) ? readdirSync(pwDir()).filter((d) => d.startsWith(`${prefix}-`) && /^\d+$/.test(d.slice(prefix.length + 1))).sort((a, b) => b.slice(prefix.length + 1) - a.slice(prefix.length + 1)) : []);
+const pwArch = () => (process.arch === 'arm64' ? 'arm64' : 'x64');
+// Every browser a launch may try, in order. BP_CHROME is the one explicit choice and the only candidate. Otherwise a build that cannot
+// take a screenshot is followed by the next one, so one broken Chromium build does not stop every shot on the machine. The headless
+// shell loads no extension and shows no window, so it is a candidate only for a headless launch without --ext.
+const candidates = ({ headless, ext }) => {
+  if (process.env.BP_CHROME) return [{ bin: process.env.BP_CHROME, shell: false }];
+  return [...pwBuilds('chromium').map((v) => ({ bin: `${pwDir()}/${v}/chrome-mac-${pwArch()}/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing`, shell: false })),
+    ...(headless && !ext ? pwBuilds('chromium_headless_shell').map((v) => ({ bin: `${pwDir()}/${v}/chrome-headless-shell-mac-${pwArch()}/chrome-headless-shell`, shell: true })) : [])].filter((c) => existsSync(c.bin));
+};
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function connect() {
@@ -19,7 +28,10 @@ async function connect() {
   const v = await (await fetch(`http://127.0.0.1:${PORT}/json/version`)).json();
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(v.webSocketDebuggerUrl); let id = 0; const pending = new Map();
-    ws.onopen = () => resolve({ send: (method, params = {}, sessionId) => new Promise((res, rej) => { const msg = { id: ++id, method, params }; if (sessionId) msg.sessionId = sessionId; pending.set(msg.id, { res, rej }); ws.send(JSON.stringify(msg)); }), close: () => ws.close() });
+    // `timeout` (ms) rejects with `timedOut` set when the browser never answers; a call without one waits as long as the browser does.
+    ws.onopen = () => resolve({ send: (method, params = {}, sessionId, timeout) => new Promise((res, rej) => { const msg = { id: ++id, method, params }; if (sessionId) msg.sessionId = sessionId;
+      const timer = timeout && setTimeout(() => { pending.delete(msg.id); rej(Object.assign(new Error(`${method} got no answer in ${timeout / 1000}s`), { timedOut: true })); }, timeout);
+      pending.set(msg.id, { res: (v) => { clearTimeout(timer); res(v); }, rej: (e) => { clearTimeout(timer); rej(e); } }); ws.send(JSON.stringify(msg)); }), close: () => ws.close() });
     ws.onerror = reject;
     ws.onmessage = (m) => { const d = JSON.parse(m.data); if (d.id && pending.has(d.id)) { const p = pending.get(d.id); pending.delete(d.id); d.error ? p.rej(new Error(JSON.stringify(d.error))) : p.res(d.result); } };
   });
@@ -33,7 +45,23 @@ async function target(b, sel) {
   return { t, s: sessionId };
 }
 const evalIn = async (b, s, expression) => { const r = await b.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, s); if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description || 'eval error'); return r.result.value; };
-const shot = async (b, s, file) => { mkdirSync(path.dirname(file), { recursive: true }); const { data } = await b.send('Page.captureScreenshot', { format: 'png' }, s); writeFileSync(file, Buffer.from(data, 'base64')); return file; };
+// A browser that never answers Page.captureScreenshot (Chrome for Testing 149 on macOS did not) must not hold the caller until something kills it.
+const SHOT_MS = () => Number(process.env.BP_SHOT_TIMEOUT) || 15000;
+const capture = async (b, s, timeout = SHOT_MS()) => {
+  try { return (await b.send('Page.captureScreenshot', { format: 'png' }, s, timeout)).data; } catch (e) {
+    if (!e.timedOut) throw e;
+    const product = await b.send('Browser.getVersion', {}, undefined, 3000).then((v) => v.product, () => 'this browser');
+    throw Object.assign(new Error(`${product} never answered Page.captureScreenshot in ${timeout / 1000}s, so it cannot take screenshots`), { noShots: true });
+  }
+};
+const shot = async (b, s, file) => {
+  mkdirSync(path.dirname(file), { recursive: true });
+  try { writeFileSync(file, Buffer.from(await capture(b, s), 'base64')); } catch (e) {
+    if (e.noShots) e.message += `: launch another build with BP_CHROME=<path> (a branded Chrome works for shots that need no extension), or raise BP_SHOT_TIMEOUT (ms) if the page is only slow`;
+    throw e;
+  }
+  return file;
+};
 
 // Snapshot of interactive elements, walking open shadow roots and same-origin iframes.
 const SNAP_JS = (hostSel) => `(() => {
@@ -60,19 +88,47 @@ const HOSTS_JS = (min) => `(() => { const hs = [...document.querySelectorAll('*'
     return { i, host: h.tagName.toLowerCase() + (h.id ? '#' + h.id : '') + (typeof h.className === 'string' && h.className ? '.' + h.className.split(' ')[0] : ''), box: Math.round(rc.x) + ',' + Math.round(rc.y) + ' ' + Math.round(rc.width) + 'x' + Math.round(rc.height), text: text.slice(0, 2500), els }; }).filter(Boolean); })()`;
 const printEls = (els) => els.forEach((e) => console.log(String(e.i ?? '').padStart(3), e.tag.padEnd(8), String(e.type).padEnd(9), `(${e.x},${e.y})`, JSON.stringify(e.text), e.id ? '#' + e.id : '', e.checked != null ? '[' + e.checked + ']' : ''));
 
+// Stops a browser `launch` started, helpers and all (it leads its own process group), and returns once it has exited: SIGKILL after 3s.
+const stopBrowser = async (child, exited) => {
+  for (const [sig, ms] of [['SIGTERM', 3000], ['SIGKILL', 3000]]) {
+    try { process.kill(-child.pid, sig); } catch {}
+    if (await Promise.race([exited.then(() => true), sleep(ms).then(() => false)])) return;
+  }
+};
+
 const cmds = {
   async launch([url], flags) {
     const ext = flags.ext || process.env.BP_EXT; const profile = flags.profile || process.env.BP_PROFILE || `/tmp/bp-profile-${PORT}`;
-    const bin = process.env.BP_CHROME || playwrightChromium();
-    if (!existsSync(bin)) throw new Error(`Chromium not found at ${bin}; set BP_CHROME. Chrome 154+ ignores --load-extension, use Playwright's build.`);
+    const headless = !!(flags.headless || process.env.BP_HEADLESS === '1');
+    const tries = candidates({ headless, ext });
+    if (!tries.length || !existsSync(tries[0].bin)) throw new Error(`Chromium not found at ${tries[0]?.bin || `${pwDir()}/chromium-*`}; set BP_CHROME. Chrome 154+ ignores --load-extension, use Playwright's build.`);
     needPort();
     if (await fetch(`http://127.0.0.1:${PORT}/json/version`).then(() => true, () => false)) throw new Error(`a browser is already on :${PORT}; it is not yours to reuse, pick a free BP_PORT`);
     const vp = flags.viewport === undefined ? null : String(flags.viewport).match(/^(\d+)x(\d+)$/);
     if (flags.viewport !== undefined && !vp) throw new Error('--viewport takes WIDTHxHEIGHT, for example 390x844');
-    const args = [`--user-data-dir=${profile}`, '--no-first-run', `--remote-debugging-port=${PORT}`]; if (ext) args.push(`--load-extension=${ext}`); if (vp) args.push(`--window-size=${vp[1]},${vp[2]}`); if (flags.headless || process.env.BP_HEADLESS === '1') args.push('--headless=new'); args.push(url || 'about:blank');
-    const child = spawn(bin, args, { detached: true, stdio: 'ignore' }); child.unref();
-    for (let i = 0; i < 40; i++) { try { await fetch(`http://127.0.0.1:${PORT}/json/version`); console.log(`up on :${PORT} pid ${child.pid} profile ${profile}${ext ? ' ext ' + ext : ''}`); return; } catch { await sleep(250); } }
-    throw new Error('Chromium did not open the debug port');
+    // A browser is up only once it has taken a screenshot of its first page: the debug port answering proves nothing about the compositor,
+    // and a build that never answers Page.captureScreenshot would pass every other command and hang the first shot. One that fails is
+    // stopped and the next candidate tried; each reason is kept for the error when none works.
+    const failed = [];
+    for (const c of tries) {
+      const args = [`--user-data-dir=${profile}`, '--no-first-run', `--remote-debugging-port=${PORT}`]; if (ext) args.push(`--load-extension=${ext}`); if (vp) args.push(`--window-size=${vp[1]},${vp[2]}`); if (headless && !c.shell) args.push('--headless=new'); args.push(url || 'about:blank');
+      const child = spawn(c.bin, args, { detached: true, stdio: 'ignore' }); child.unref();
+      let gone = false; const exited = new Promise((r) => child.once('exit', () => { gone = true; r(); }));
+      let reason = 'did not open the debug port';
+      for (let i = 0; i < 40 && !gone; i++) {
+        if (await fetch(`http://127.0.0.1:${PORT}/json/version`).then(() => true, () => false)) {
+          reason = null;
+          try { const b = await connect(); const { s } = await target(b); const product = await b.send('Browser.getVersion', {}, undefined, 3000).then((v) => v.product, () => path.basename(c.bin)); await capture(b, s); b.close();
+            console.log(`up on :${PORT} pid ${child.pid} profile ${profile}${ext ? ' ext ' + ext : ''} browser ${product}`); return; } catch (e) { reason = e.message; }
+          break;
+        }
+        await sleep(250);
+      }
+      await stopBrowser(child, exited);
+      failed.push(`${c.bin}: ${reason}`);
+      if (c !== tries[tries.length - 1]) console.error(`bp: ${failed[failed.length - 1]}; trying the next Chromium`);
+    }
+    throw new Error(`no Chromium came up able to take a screenshot:\n  ${failed.join('\n  ')}\nSet BP_CHROME=<path> to another build (a branded Chrome works for shots that need no extension)`);
   },
   async list() { const b = await connect(); const { targetInfos } = await b.send('Target.getTargets'); for (const t of targetInfos) console.log(t.type.padEnd(14), t.targetId.slice(0, 8), t.url.slice(0, 100), t.title ? '| ' + t.title.slice(0, 50) : ''); b.close(); },
   async open([url], flags) { const b = await connect(); const { targetId } = await b.send('Target.createTarget', { url }); await sleep(Number(flags.wait || 5000)); if (flags.out) { const { sessionId } = await b.send('Target.attachToTarget', { targetId, flatten: true }); console.log('shot', await shot(b, sessionId, flags.out)); } console.log('target', targetId.slice(0, 8)); b.close(); },
@@ -105,7 +161,7 @@ const cmds = {
   async reload([sel], flags) { const b = await connect(); const { s } = await target(b, sel); await b.send('Page.reload', {}, s); await sleep(Number(flags.wait || 5000)); console.log('reloaded'); b.close(); },
   async form([sel]) { const b = await connect(); const { s } = await target(b, sel); console.log(await evalIn(b, s, `(() => { const f=[...document.querySelectorAll('input,textarea,select')].filter(e=>e.type!=='hidden'&&e.getBoundingClientRect().height>0); const filled=f.filter(e=>e.type==='checkbox'||e.type==='radio'?e.checked:(e.value||'').length>0); return 'fields '+f.length+' filled '+filled.length+'\\n'+f.map(e=>(e.type||e.tagName)+' '+JSON.stringify((e.labels&&e.labels[0]&&e.labels[0].innerText||e.placeholder||e.name||e.id||'').slice(0,50))+' => '+((e.type==='checkbox'||e.type==='radio')?e.checked:((e.value||'').length?'[filled '+(e.value||'').length+']':'[empty]'))).join('\\n'); })()`)); b.close(); },
   async cookies([sel, action], flags) { const b = await connect(); const { s } = await target(b, sel); const urls = (flags.urls || '').split(',').filter(Boolean); const { cookies } = await b.send('Network.getCookies', urls.length ? { urls } : {}, s); if (action === 'clear') { for (const c of cookies) await b.send('Network.deleteCookies', { name: c.name, domain: c.domain }, s); console.log('cleared', cookies.length); } else console.log(cookies.map((c) => c.name + '@' + c.domain + (c.httpOnly ? '(httpOnly)' : '')).join('\n')); b.close(); },
-  async record([sel, dir], flags) { mkdirSync(dir, { recursive: true }); const b = await connect(); let last = ''; let n = 0; const skip = flags.exclude ? new RegExp(flags.exclude) : null; console.log('recording', sel, '→', dir, '(Ctrl-C to stop)'); for (;;) { try { const { targetInfos } = await b.send('Target.getTargets'); const cands = targetInfos.filter((x) => x.type === 'page' && x.url.includes(sel) && !(skip && skip.test(x.url))).sort((a, c) => c.url.length - a.url.length); const t = cands[0]; if (t) { const { sessionId } = await b.send('Target.attachToTarget', { targetId: t.targetId, flatten: true }); const { data } = await b.send('Page.captureScreenshot', { format: 'png' }, sessionId); const h = createHash('md5').update(data).digest('hex').slice(0, 10); if (h !== last) { last = h; n++; const f = path.join(dir, String(n).padStart(3, '0') + '.png'); writeFileSync(f, Buffer.from(data, 'base64')); const line = `${new Date().toISOString().slice(11, 19)} ${path.basename(f)} ${t.url.slice(0, 100)} | ${(t.title || '').slice(0, 60)}`; console.log(line); appendFileSync(path.join(dir, 'index.md'), line + '\n'); } await b.send('Target.detachFromTarget', { sessionId }); } } catch {} await sleep(Number(flags.interval || 2000)); } },
+  async record([sel, dir], flags) { mkdirSync(dir, { recursive: true }); const b = await connect(); let last = ''; let n = 0; const skip = flags.exclude ? new RegExp(flags.exclude) : null; console.log('recording', sel, '→', dir, '(Ctrl-C to stop)'); for (;;) { try { const { targetInfos } = await b.send('Target.getTargets'); const cands = targetInfos.filter((x) => x.type === 'page' && x.url.includes(sel) && !(skip && skip.test(x.url))).sort((a, c) => c.url.length - a.url.length); const t = cands[0]; if (t) { const { sessionId } = await b.send('Target.attachToTarget', { targetId: t.targetId, flatten: true }); const data = await capture(b, sessionId); const h =createHash('md5').update(data).digest('hex').slice(0, 10); if (h !== last) { last = h; n++; const f = path.join(dir, String(n).padStart(3, '0') + '.png'); writeFileSync(f, Buffer.from(data, 'base64')); const line = `${new Date().toISOString().slice(11, 19)} ${path.basename(f)} ${t.url.slice(0, 100)} | ${(t.title || '').slice(0, 60)}`; console.log(line); appendFileSync(path.join(dir, 'index.md'), line + '\n'); } await b.send('Target.detachFromTarget', { sessionId }); } } catch {} await sleep(Number(flags.interval || 2000)); } },
   async close([sel]) { const b = await connect(); const { t } = await target(b, sel); await b.send('Target.closeTarget', { targetId: t.targetId }); console.log('closed', t.url.slice(0, 80)); b.close(); },
   async goal([url, ...goals], flags) {
     needPort();
@@ -138,7 +194,7 @@ const cmds = {
     });
   },
   async kill() { needPort(); spawn('pkill', ['-f', `remote-debugging-port=${PORT}`]); console.log('killed Chromium on', PORT); },
-  async help() { console.log(`bp - drive Chromium over CDP. Env: BP_PORT (required, a port only you use), BP_EXT, BP_PROFILE, BP_CHROME.
+  async help() { console.log(`bp - drive Chromium over CDP. Env: BP_PORT (required, a port only you use), BP_EXT, BP_PROFILE, BP_CHROME, BP_SHOT_TIMEOUT (ms a screenshot may take, default 15000).
   launch [url] [--profile <dir>] [--headless] [--viewport WxH] [--ext <dir>]   start Chromium with its debug port on (--headless or BP_HEADLESS=1: no window; --viewport 390x844: window size, for mobile shots; refuses a port that already has a browser)
   list                                         targets (pages, workers, iframes); page ids are the <sel> below
   open <url> [--wait ms] [--out shot.png]      new tab

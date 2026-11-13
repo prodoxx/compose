@@ -14,6 +14,11 @@ ln -s "$PWD/bp/bin/bp.mjs" ~/.local/bin/bp      # from the compose checkout
 It needs Node 22+ and Playwright's Chromium (`npx playwright install chromium`).
 Set `BP_CHROME` to use another build.
 
+`bp launch` prints `up` only after the browser has taken a screenshot of its first page, because the debug port answering says nothing about the compositor: one Chromium build (Chrome for Testing 149 on macOS) answered every call except `Page.captureScreenshot`, and every `bp shot` hung.
+A build that cannot is stopped and the next Playwright build is tried (and, for a headless launch without `--ext`, Playwright's headless shell); the launch fails with each reason when none works.
+`BP_CHROME` names the only build to try.
+A screenshot that gets no answer within `BP_SHOT_TIMEOUT` ms (default 15000) fails with the browser's name and version instead of waiting for ever.
+
 ## A typical session
 
 ```sh
