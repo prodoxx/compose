@@ -1,5 +1,23 @@
-import atexit, fcntl, hashlib, json, os, re, shutil, subprocess, sys, tempfile, threading, time
+import argparse, atexit, fcntl, hashlib, json, os, re, shutil, subprocess, sys, tempfile, threading, time
 from pathlib import Path
+
+
+# ---------- the command line ----------
+
+class SubParser(argparse.ArgumentParser):
+    """A command's parser that takes its positionals anywhere among its options. Python before 3.13 matches positionals in one
+    chunk before the first option, so an optional one (`text` of `crew prompt`, `id` of `change`) is taken as empty there and the
+    word after the options is an "unrecognized argument": `crew prompt --project x --role y "hi"`, the form every doc prints."""
+    _intermixed = False
+
+    def parse_known_args(self, args=None, namespace=None):
+        if self._intermixed:  # parse_known_intermixed_args calls this method for its two passes
+            return super().parse_known_args(args, namespace)
+        self._intermixed = True
+        try:
+            return self.parse_known_intermixed_args(args, namespace)
+        finally:
+            self._intermixed = False
 
 
 # ---------- output and cost ledger ----------

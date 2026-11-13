@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import contextlib, io, json, os, tempfile, unittest
+import contextlib, io, json, os, sys, tempfile, unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -203,6 +203,33 @@ class InHerdr(unittest.TestCase):
         with tty, mock.patch.dict(os.environ, {"HC_TERMINAL_ID": "t1"}), mock.patch.object(fc_host, "installed") as inst:
             fc_fleet.attach()  # inside a host already: nothing to open
         inst.assert_not_called()
+
+
+class CrewCommandLine(unittest.TestCase):
+    """The real parser, not a hand-built namespace: the documented form puts the text after the options (#462)."""
+    def parse(self, *argv):
+        seen = []
+        with mock.patch.object(sys, "argv", ["compose", "crew", *argv]), mock.patch.object(fc_lead, "cmd_crew", seen.append), \
+                mock.patch.object(fc.fc_config, "apply_config", return_value="default"), mock.patch.object(fc_core, "session_id", return_value=""):
+            fc.main()
+        return seen[0]
+
+    def test_the_text_after_the_options_reaches_the_command_as_it_does_before_them(self):
+        for argv in (("prompt", "--project", "shop", "--role", "designer", "hello there"), ("prompt", "hello there", "--project", "shop", "--role", "designer"),
+                     ("prompt", "--project", "shop", "--role", "designer", "--", "hello there")):
+            a = self.parse(*argv)
+            self.assertEqual((a.action, a.text, a.project, a.role), ("prompt", "hello there", "shop", "designer"), argv)
+        a = self.parse("keys", "--project", "shop", "--agent", "shop-001", "esc")
+        self.assertEqual((a.action, a.text, a.agent), ("keys", "esc", "shop-001"))
+        a = self.parse("read", "--project", "shop", "--role", "designer", "--lines", "20")
+        self.assertEqual((a.action, a.text, a.lines), ("read", None, 20))
+
+    def test_a_word_no_option_or_positional_takes_is_still_refused(self):
+        with mock.patch.object(sys, "argv", ["compose", "crew", "list", "--project", "shop", "a", "b"]), contextlib.redirect_stderr(io.StringIO()) as err:
+            with self.assertRaises(SystemExit) as e:
+                fc.main()
+        self.assertEqual(e.exception.code, 2)
+        self.assertIn("unrecognized arguments: b", err.getvalue())
 
 
 class CrewPromptAndRead(unittest.TestCase):

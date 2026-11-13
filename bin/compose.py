@@ -80,7 +80,7 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == "timed":
         return fc_implement.cmd_timed(sys.argv[2:])
     ap = argparse.ArgumentParser(prog="compose", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    sub = ap.add_subparsers(dest="cmd", required=True, metavar="<command>")
+    sub = ap.add_subparsers(dest="cmd", required=True, metavar="<command>", parser_class=fc_core.SubParser)
     for name, fn, help_ in (("doctor", fc_init.cmd_doctor, "check every tool and skill file compose depends on; one MISSING line each, exit 1 when a required one is absent"),
                             ("setup", fc_setup.cmd_setup, "install and configure everything compose needs, one question at a time on a terminal; --yes takes every default and never prompts"),
                             ("update", fc_update.cmd_update, "pull this checkout --ff-only (rebasing commits only it has), relink the links compose owns, run doctor; refused while a run or verify is live"),
