@@ -98,6 +98,15 @@ class SpecCheck(unittest.TestCase):
             ok, level, gaps = check([task("ENG-3", "001")], desc)["ENG-1"]
             self.assertEqual((ok, level, len(gaps), has(gaps, kw)), (False, "feature", 1, True), desc)
 
+    def test_a_task_with_two_compose_blocks_fails_naming_their_ids(self):
+        # a --section write that held a block put a second above the old one (#454); `compose tasks` reads only the first
+        t = task("ENG-3", "001")
+        twice = {**t, "description": t["description"] + "\n" + t["description"].split("\n\n", 1)[1].replace("001", "001b")}
+        ok, _, gaps = check([twice])["ENG-3"]
+        self.assertFalse(ok)
+        self.assertTrue(has(gaps, "2 `compose` blocks (ids 001, 001b)"), gaps)
+        self.assertEqual(check([t])["ENG-3"][2], [])
+
     def test_none_in_not_yet_specified_ignores_case_period_and_whitespace(self):
         for none in ("None.", "none", "NONE.", "  None  ", "None ."):
             ok, level, gaps = check([task("ENG-3", "001")], SETTLED.replace("None", none, 1))["ENG-1"]

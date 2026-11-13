@@ -308,6 +308,9 @@ def spec_check(data, checks=(), defined=None, scripts=None):
         bullets = fc_tasks.parse_criteria(desc)
         if meta:
             gaps = []
+            if len(blocks := fc_tasks.TASK_BLOCK.findall(desc)) > 1:  # `compose tasks` reads the first; a section write that held a block once added another
+                ids = ", ".join(re.findall(r"(?m)^id:[ \t]*(\S+)", "\n".join(blocks)))
+                gaps.append(f"{len(blocks)} `compose` blocks (ids {ids}): a task has one, and only the first is read; keep one and write the whole body with `compose linear update <id> --description`")
             if too_big(meta):
                 gaps.append(f"too big: {too_big(meta)}")
             if len(bullets) > 5:

@@ -225,6 +225,10 @@ class LinearGet(unittest.TestCase):
         self.assertEqual(self.get("ENG-7", comments=True), [line] + ann + bob)
         self.assertEqual(self.get("ENG-7", body=True), [line, "Steps here."])
 
+    def test_body_says_the_compose_block_is_no_sections(self):
+        self.issue["description"] = "## Goal\n\ng\n\n## Notes\n\nn\n\n```compose\nid: 001\ntest: t\n```\n"
+        self.assertEqual(self.get("ENG-7", body=True)[-1], "(the task's compose block belongs to no section: --section keeps it wherever it sits, --description changes it)")
+
     def test_body_lists_each_heading_with_its_section_hash_before_the_comments(self):
         self.issue["description"] = "## Goal\n\ngoal\n\n## Notes\n\nspec line\n\n### Codebase brief\n\nwhere things live\n\n```sh\n# not a heading\n```\n"
         hash_of = lambda h: fc_plan.section_hash(self.issue["description"], h)
@@ -467,6 +471,50 @@ class LinearUpdate(unittest.TestCase):
         sent = [v for q, v in self.calls if self.UPDATE in q]  # at most one; none when only the blockers change
         self.assertLessEqual(len(sent), 1); self.assertTrue(all(s["id"] in ("iid", "ENG-7") for s in sent))
         return (sent[0]["in"] if sent else None), issue, blocked
+
+    TASK = "## Goal\n\ng\n\n## Constraints\n\nold\n\n```compose\nid: t1\nfiles: a.py\ntest: t\n```\n\n## Route\n\nroute\n"
+
+    def write(self, body, **kw):
+        """verb_update with `body` as the file: (exit code or 0, what it said, the description it sent or None)."""
+        self.calls.clear()
+        (self.repo / "body.md").write_text(body)
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(fc.fc_linear, "linear_issue", return_value={"id": "parent-id"}), redirect_stdout(out), redirect_stderr(err):
+            try:
+                fc.fc_linear_cmd.verb_update(self.args("update", "ENG-7", file=str(self.repo / "body.md"), **kw))
+                code = 0
+            except SystemExit as e:
+                code = 1 if isinstance(e.code, str) else e.code
+                err.write(e.code if isinstance(e.code, str) else "")
+        sent = [v["in"]["description"] for q, v in self.calls if self.UPDATE in q and "description" in v["in"]]
+        return code, (out.getvalue() + err.getvalue()).strip(), (sent or [None])[0]
+
+    def test_a_section_write_whose_text_holds_a_compose_block_refuses_when_the_issue_has_one(self):
+        # the corrected block went in above the old one and the issue ended with two (#454)
+        self.issue["description"] = self.TASK
+        code, said, sent = self.write("## Constraints\n\nold\n\n```compose\nid: t1\nfiles: b.py\ntest: t\n```\n", section="## Constraints")
+        self.assertEqual((code, sent), (1, None))
+        self.assertEqual(said, "## Constraints: the text holds a compose block and the issue already has one, and a section write leaves the task's block where it is: "
+                               "nothing written; take the block out of the text, or write the whole body with --description, keeping exactly one block")
+        self.issue["description"] = "## Goal\n\ng\n"  # an issue with no block may take one
+        self.assertEqual(self.write("## Constraints\n\nc\n\n```compose\nid: t1\ntest: t\n```\n", section="## Constraints")[0], 0)
+
+    def test_a_section_write_keeps_a_compose_block_that_sits_inside_it_and_says_so(self):
+        # the block sat in Constraints, the text left it out, and nothing told the writer the block stayed (#475)
+        self.issue["description"] = self.TASK
+        kept = "the task's compose block sits in ## Constraints and was kept: --section never changes it; --description writes the whole body, block included"
+        code, said, sent = self.write("## Constraints\n\nold\n", section="## Constraints")
+        self.assertEqual((code, said, sent), (0, "unchanged ENG-7: the body already reads as written, so nothing was sent\n" + kept, None))
+        code, said, sent = self.write("## Constraints\n\nnew\n", section="## Constraints")
+        self.assertEqual((code, said), (0, "updated ENG-7\n" + kept))
+        self.assertEqual(sent, self.TASK.replace("old", "new"))
+        code, said, _ = self.write("## Route\n\nroute 2\n", section="## Route")  # the block is not inside Route: no line about it
+        self.assertEqual(said, "updated ENG-7")
+
+    def test_an_unchanged_body_write_says_so_instead_of_updated(self):
+        code, said, sent = self.write("## Plan\n\nold\n", section="## Plan")
+        self.assertEqual((code, said, sent), (0, "unchanged ENG-7: the body already reads as written, so nothing was sent", None))
+        self.assertEqual(self.write("## Plan\n\nold\n", section="## Plan", title="T")[1:], ("updated ENG-7", None))
 
     def test_replace_section_swaps_only_that_section_or_appends_it(self):
         rs, body, want = fc_plan.replace_section, "# Cart\n\n## Plan\n\nold\n\n### Steps\n\n1. a\n\n## Notes\n\nkeep\n", "# Cart\n\n## Plan\n\nnew\n\n## Notes\n\nkeep\n"

@@ -104,13 +104,17 @@ def priority(a):
     return {"priority": n}
 
 def print_body(body):
-    """The body, then each heading's section hash, which a section write passes back to --expect."""
+    """The body, then each heading's section hash, which a section write passes back to --expect, and a line for what a hash list
+    does not show: the task's compose block belongs to no section."""
     print((body or "").rstrip("\n"))
+    lines = (body or "").split("\n")
     marks = fc_plan.section_hashes(body or "")
     if marks:
         print('--- section hashes (--section "<heading>" --expect <hash>)')
         for heading, h in marks:
             print(f"{h} {heading}")
+        if fc_plan.compose_block_start(lines) is not None:
+            print("(the task's compose block belongs to no section: --section keeps it wherever it sits, --description changes it)")
 
 def writes_body(a, verb):
     """Whether the verb writes the body; refuses a flag mix that would write something other than what the caller meant."""
@@ -125,6 +129,15 @@ def writes_body(a, verb):
         sys.exit(f"{verb} --file needs --section, --append, or --description")
     return writes
 
+def section_body(a, old, text):
+    """The body with `--section` written from `text`. A section write never changes the task's compose block, so it refuses text
+    that holds a block when the issue already has one."""
+    heading = a.section
+    if fc_plan.compose_block_start(text.strip().split("\n")) is not None and fc_plan.compose_block_start(old.split("\n")) is not None:
+        sys.exit(f"{heading}: the text holds a compose block and the issue already has one, and a section write leaves the task's block where it is: "
+                 "nothing written; take the block out of the text, or write the whole body with --description, keeping exactly one block")
+    return fc_plan.replace_section(old, heading, text)
+
 def new_body(a, old):
     old = old or ""
     if a.expect and (now := fc_plan.section_hash(old, a.section)) != a.expect:
@@ -132,10 +145,15 @@ def new_body(a, old):
                  + ("read the body again and write from it" if now is None else "read it again, keep what changed, and write it back with the hash it shows now"))
     body = read_body(a)
     if a.section:
-        return fc_plan.replace_section(old, a.section, body)
+        return section_body(a, old, body)
     if a.append:
         return old.rstrip("\n") + "\n\n" + body.strip() + "\n"
     return body
+
+def block_kept(a, old):
+    """The line that says a section write left the task's compose block where it sat inside the section, else None."""
+    if a.section and fc_plan.block_inside(old or "", a.section):
+        return f"the task's compose block sits in {a.section} and was kept: --section never changes it; --description writes the whole body, block included"
 
 SETTLE_SECONDS, SETTLE_POLL = 30, 0.5
 
@@ -334,18 +352,27 @@ def verb_update(a):
     inp.update(state_and_labels(issue["team"], a))
     inp.update(label_changes(issue["team"], a))
     inp.update(prio)
+    same = False
     if writes:
-        inp["description"] = new_body(a, issue["description"])
+        body = new_body(a, issue["description"])
+        same = body.strip() == (issue["description"] or "").strip()  # a write of what is already there changes nothing: Linear keeps the old text
+        if not same:
+            inp["description"] = body
     if inp:  # empty only when the blockers are the one change
         fc_linear.linear_gql("mutation($id: String!, $in: IssueUpdateInput!) { issueUpdate(id: $id, input: $in) { success } }", {"id": issue["id"], "in": inp})
-        if writes:
+        if "description" in inp:
             await_write(lambda: fc_linear.linear_gql("query($id: String!) { issue(id: $id) { description } }", {"id": issue["id"]})["issue"]["description"], issue["description"], inp["description"])
     dropped = []
     if a.blocked_by is not None:
         dropped = fc_linear.linear_blocked_by(issue, ids(a.blocked_by))
     elif add or drop:
         fc_linear.linear_blocked_by(issue, None, add=add, drop=drop)
-    print(f"updated {issue['identifier']}")
+    if same and not (inp or a.blocked_by is not None or add or drop):
+        print(f"unchanged {issue['identifier']}: the body already reads as written, so nothing was sent")
+    else:
+        print(f"updated {issue['identifier']}")
+    if note := block_kept(a, issue["description"]):
+        print(note)
     if dropped:  # --blocked-by sets the whole list: say what it took away, in case the caller meant to add
         print(f"no longer blocked by: {', '.join(dropped)} (--add-blocked-by adds and keeps the rest)")
 
