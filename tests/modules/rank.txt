@@ -48,6 +48,7 @@ fc_route
 fc_quick
 fc_herdr
 fc_fleet
+fc_installs
 fc_worktree
 fc_checks
 fc_pi

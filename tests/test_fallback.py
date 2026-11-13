@@ -173,8 +173,9 @@ class ReadyCheckout(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp()); self.addCleanup(shutil.rmtree, self.root, True)
         self.repo, self.wt = self.root / "repo", self.root / "wt"
         self.repo.mkdir(); self.wt.mkdir()
-        self.excluded, self.installs, self.locks = [], [], []
+        self.excluded, self.installs, self.locks, self.ran = [], [], [], []
         def sh(cmd, cwd=None, *a, **k):
+            self.ran.append((cmd, Path(cwd)))
             if isinstance(cmd, str):
                 self.installs.append((cmd, Path(cwd)))
                 return mock.Mock(stdout="", returncode=0)
@@ -258,6 +259,48 @@ class ReadyCheckout(unittest.TestCase):
         self.assertTrue((self.repo / "node_modules" / "new").is_dir())
         self.assertFalse((self.repo / "node_modules" / "old").exists())
         self.assertFalse((self.repo / "node_modules").is_symlink())
+
+
+    def uv_project(self, venv=".venv"):
+        """The project worktree has a venv, and the clone the uv.lock beside it."""
+        (self.repo / venv).mkdir(parents=True); (self.repo / venv / "pyvenv.cfg").write_text("home = /usr/bin\n")
+        (self.wt / Path(venv).parent).mkdir(parents=True, exist_ok=True); (self.wt / Path(venv).parent / "uv.lock").write_text("version = 1\n")
+
+    def test_a_uv_projects_venv_is_made_in_each_checkout_and_never_linked(self):
+        # #477: a linked venv runs the project worktree's Python, and a `uv run` through it points the editable install at whichever clone ran last
+        self.uv_project()
+        (self.wt / ".venv").symlink_to(self.repo / ".venv")  # a link an earlier borrow left
+        with mock.patch.object(fc.fc_worktree.fc_installs.shutil, "which", return_value="/bin/uv"):
+            for borrow in (True, False):  # a lockfile task's clone gets its own venv too
+                self.ready(deps=[".venv"], borrow=borrow)
+                self.assertFalse((self.wt / ".venv").is_symlink())
+                self.assertEqual([c for c in self.ran if c[0][:2] == ["uv", "sync"]][-1], (["uv", "sync", "--frozen", "--quiet"], self.wt))
+
+    def test_a_nested_uv_venv_is_synced_where_its_lockfile_is(self):
+        self.uv_project("py/.venv")
+        with mock.patch.object(fc.fc_worktree.fc_installs.shutil, "which", return_value="/bin/uv"):
+            self.ready(deps=["py/.venv"])
+        self.assertIn((["uv", "sync", "--frozen", "--quiet"], self.wt / "py"), self.ran)
+
+    def test_a_venv_without_uv_or_a_uv_lock_is_still_linked(self):
+        self.uv_project()
+        with mock.patch.object(fc.fc_worktree.fc_installs.shutil, "which", return_value=None):  # no uv installed
+            self.ready(deps=[".venv"])
+        self.assertTrue((self.wt / ".venv").is_symlink())
+        (self.wt / ".venv").unlink(); (self.wt / "uv.lock").unlink()  # no lockfile: not a uv project
+        with mock.patch.object(fc.fc_worktree.fc_installs.shutil, "which", return_value="/bin/uv"):
+            self.ready(deps=[".venv"])
+        self.assertTrue((self.wt / ".venv").is_symlink())
+        self.assertFalse([c for c in self.ran if c[0][:2] == ["uv", "sync"]])
+
+    def test_a_passed_lockfile_task_does_not_adopt_its_venv(self):
+        # #477: a copied venv still holds the clone's paths: its scripts run the clone's Python and its editable install imports the clone's code
+        self.uv_project()
+        (self.wt / ".venv").mkdir(); (self.wt / ".venv" / "pyvenv.cfg").write_text("home = /usr/bin\n"); (self.wt / ".venv" / "clone-only").write_text("x")
+        with mock.patch.object(fc.fc_worktree, "dep_dirs", return_value=[".venv"]):
+            fc.fc_worktree.adopt_installs(self.repo, self.wt)
+        self.assertFalse((self.repo / ".venv" / "clone-only").exists())
+        self.assertTrue((self.repo / ".venv" / "pyvenv.cfg").exists())
 
 
 class FixScope(unittest.TestCase):

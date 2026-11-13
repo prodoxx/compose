@@ -212,6 +212,9 @@ The absolute paths are there because project docs often name the original checko
 The dispatcher reverts and flags any write into the main checkout.
 Clones borrow the main checkout's git-ignored installs as symlinks, so `node_modules`, `vendor`, and `.venv` come along without a fresh install, and so do its git-ignored `.env` and `.env.*` files.
 A `node_modules` that holds Vite, Vitest or Storybook is copied (copy-on-write where possible) instead of linked, because Vite will not serve a file whose real path is outside the clone.
+A `.venv` of a uv project (a `uv.lock` beside it) is not shared at all: each checkout runs `uv sync --frozen` and gets its own, because a venv names its own path and its editable install of the project names the checkout it was made in.
+A linked one made every clone import whichever clone last ran `uv run`, and a task that rewrote `uv.lock` left the project worktree's venv pointing at that task's clone.
+A passed lockfile task never hands its venv to the project worktree for the same reason.
 A project whose build output depends on where `node_modules` lives sets `install` in verify.json, and each clone runs that command instead.
 
 ## Model choices
