@@ -70,6 +70,11 @@ Three more rules apply to the block and the issue around it:
   `run` prints the unblocked ids with that proof in its first lines, and the blockers still held with the reason.
 - The `model:` field picks another implementer for one task.
   Leave it unset unless the product owner decided otherwise.
+- The `reads:` field lists files the implementer may read, read-only, beyond its own `files:`, the `protected:` test and what trail ask finds.
+  Use it when the task calls a module's values or types (`reads: src/keywords.ts`) or ports data from an older commit (`reads: 940bd04:src/cases.ts`, the file as `git show 940bd04:src/cases.ts` prints it).
+  A `<commit>:<path>` entry is written into the clone as `.reads/<commit>/<path>`, kept out of git, and the prompt names where.
+  The implementer reads nothing else, so a fact that lives in another file or an older commit belongs here, not in the brief, which stays under 2500 characters.
+  `spec-check` fails an entry that is absolute, has `..` or a glob; `run` says on its log line when an entry names no file or no revision.
 - A task that removes or replaces tests has no test to write, so it leaves `protected:` empty.
   It lists the files it removes under `delete:` (and the replacement test under `files:`), and its `test:` is the command that proves the result.
   `run` removes the `delete:` paths even when `test:` passes before the change, so the task never ends `already_green` with nothing removed.

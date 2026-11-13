@@ -30,6 +30,13 @@ class TaskTier(unittest.TestCase):
                 task(tier=bad)
             self.assertEqual(str(e.exception), f"NEB-1: tier must be cheap, standard, frontier or no-frontier, not {bad}")
 
+class TaskReads(unittest.TestCase):
+    def test_reads_is_a_list_and_defaults_to_none(self):
+        # #451: the files a task consumes or ports from have no channel but the guard's allow list
+        self.assertEqual(task(reads="src/keywords.ts, 940bd04:src/cases.ts")["reads"], ["src/keywords.ts", "940bd04:src/cases.ts"])
+        self.assertEqual(task()["reads"], [])
+
+
 class ModelAuto(unittest.TestCase):
     def test_a_block_without_model_gets_the_default_and_model_auto(self):
         meta = task()

@@ -124,6 +124,15 @@ class ReadGuard(unittest.TestCase):
         self.assertIsNotNone(rg.refusal("Bash", {"command": "bun install"}, g))
         self.assertIsNotNone(rg.refusal("Bash", {"command": "bun install"}, self.g))  # the plain guard of setUp: no installers
 
+    def test_a_blocked_read_names_the_files_it_may_read_and_what_to_do_about_the_rest(self):
+        # #451: the generic text never said which files the model may read, so it asked for the wrong thing or gave up
+        reply = fc.fc_readguard.refusal("Read", {"file_path": "src/c.py"}, self.g)
+        for name in ("src/a.py", "tests/t.py", "lib/deep/x.py"):
+            self.assertIn(name, reply)
+        self.assertIn("CONTRADICTION: brief lacks", reply)
+        many = dict(self.g, allow=[str(self.wt / f"f{i}.py") for i in range(15)])
+        self.assertIn("and 3 more", fc.fc_readguard.refusal("Read", {"file_path": "x.py"}, many))
+
     def test_a_refused_package_manager_command_says_so_instead_of_the_read_only_text(self):
         rg = fc.fc_readguard
         none = rg.refusal("Bash", {"command": "bun install"}, self.g)

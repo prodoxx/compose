@@ -1,6 +1,6 @@
 import json, os, re, shlex, shutil, subprocess, sys, time, uuid
 from pathlib import Path
-import fc_core, fc_pause, fc_config, fc_providers, fc_readguard, fc_tasks, fc_linear, fc_claude, fc_models, fc_proc, fc_load, fc_harness, fc_herdr, fc_fleet, fc_worktree, fc_layers, fc_libapi, fc_green, fc_gate, fc_fast, fc_format, fc_started, fc_figma, fc_trailpack, fc_attempt, fc_reader, fc_retro
+import fc_core, fc_pause, fc_config, fc_providers, fc_readguard, fc_tasks, fc_linear, fc_claude, fc_models, fc_proc, fc_load, fc_harness, fc_herdr, fc_fleet, fc_worktree, fc_layers, fc_libapi, fc_reads, fc_green, fc_gate, fc_fast, fc_format, fc_started, fc_figma, fc_trailpack, fc_attempt, fc_reader, fc_retro
 
 def implementer(cwd, model, prompt, session=None, task=None, timeout=None):
     """Route a turn to the harness named by the model id: `pi:<provider/model>` runs pi (as a named herdr agent when the run
@@ -241,9 +241,12 @@ def run_task(repo, proj, task, attempts, model=None, reset_files=False, tag=""):
     words = "\n".join([goal.group(1) if goal else body] + [(wt / f).read_text() for f in meta["protected"] if (wt / f).exists()])
     section = fc_libapi.section(wt, meta["files"], words)
     pack = fc_trailpack.trail_pack(wt, f"{meta.get('title', '')}: {(goal.group(1) if goal else body)[:400]}", repo=repo, cap=12000 - len(section))
+    reads, unread = fc_reads.resolve(wt, meta.get("reads") or [])  # files the task consumes or ports from: readable, never editable
+    for line in unread:
+        fc_core.say(f"{tid} warning  reads: {line}")
     managers = fc_readguard.installers(wt, meta["files"])  # a task that lists a package file adds a dependency, and only it can install it
     fc_readguard.write_guard(wt, meta["files"] + meta["protected"] + (nodes := fc_figma.code_nodes(proj, wt, meta)), pack,
-                             extra=[proj / "results" / f"{tid}.test.log"], installs=managers)  # the retry prompt sends the model to read it
+                             extra=[proj / "results" / f"{tid}.test.log", *reads], installs=managers)  # the retry prompt sends the model to read it
     context = (f"CONTEXT PACK from the repo's trail graph (exact file:line, with source). Use it instead of exploring. "
                f"If you need more, run `trail ask \"<question>\"` or `trail callers <symbol>`; do not open unrelated files.\n{pack}\n\n"
                if pack else "")
@@ -258,7 +261,8 @@ def run_task(repo, proj, task, attempts, model=None, reset_files=False, tag=""):
               f"(for example the original checkout this task was cloned from); those are read-only references, never edit them.\n\n"
               f"{context}{body}\n\n"
               f"Files you may edit: {abs_files}.\n"
-              f"Files you must NOT edit: {abs_protected}.\n" + (f"Figma nodes this task builds, as Framelink JSON (read, never edit): {', '.join(nodes)}.\n" if nodes else "") +
+              f"Files you must NOT edit: {abs_protected}.\n" +
+              (f"Files this task reads, read-only (a `.reads/<rev>/` file is that path as of the commit): {', '.join(reads)}.\n" if reads else "") + (f"Figma nodes this task builds, as Framelink JSON (read, never edit): {', '.join(nodes)}.\n" if nodes else "") +
               f"Done means this command exits 0: {meta['test']}\n"
               "Do not run it, or any other test or build: compose runs the test after your turn ends and sends you what failed. "
               "Read the test file, edit, and end your turn.\n" +
@@ -403,9 +407,10 @@ def run_task(repo, proj, task, attempts, model=None, reset_files=False, tag=""):
         cost, reference_cost = fc_attempt.tally(cost, reference_cost, usage)
         found = None if cut else contradiction(reply)
         if found:  # the brief states something the code disproves: more attempts would only work around it
+            refused = fc_readguard.refused(wt) - ref_before
             log.append({"attempt": attempt, "seconds": round(time.time() - t0, 1), "tool_calls": tools, "usage": usage,
-                        "contradiction": found, "reply": reply[-1500:]})
-            fc_core.say(f"{tid} attempt {attempt} contradiction  {found[:160]}")
+                        "contradiction": found, "reply": reply[-1500:], "refused": refused})
+            fc_core.say(f"{tid} attempt {attempt} contradiction  {found[:160]}" + fc_attempt.reads_hint(refused))
             status = "contradiction"
             break
         sha = fc_green.tree_of(wt)

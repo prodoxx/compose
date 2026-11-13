@@ -53,6 +53,12 @@ class AttemptLoop(unittest.TestCase):
             self.assertEqual(fc.fc_implement.fc_attempt.error_step(True, fallback), "stop")
         self.assertEqual((fc.fc_implement.fc_attempt.error_step(False, BACKUP), fc.fc_implement.fc_attempt.error_step(False, None)), ("retry", "end"))
 
+    def test_a_contradiction_says_the_implementers_reads_were_restricted_only_when_the_guard_refused_some(self):
+        # #451: "the brief lacks X" read as a missing fact although X existed and the guard had refused the read
+        hint = fc.fc_implement.fc_attempt.reads_hint
+        self.assertEqual(hint(0), "")
+        self.assertIn("2 refused", hint(2)); self.assertIn("`reads:`", hint(2))
+
     def test_the_turn_limit_leaves_no_room_for_a_test_run_whatever_the_task_allows_its_test(self):
         for meta in ({}, {"test_timeout": 300}, {"test_timeout": 5}):
             self.assertEqual(fc.fc_implement.fc_attempt.turn_limit(meta), fc.fc_models.TURN_TIMEOUT)

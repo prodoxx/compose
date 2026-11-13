@@ -47,7 +47,7 @@ def task_from_issue(issue):
     meta = {k.strip(): v.strip() for k, v in (l.split(":", 1) for l in m.group(1).splitlines() if ":" in l)}
     if "id" not in meta or "test" not in meta:
         sys.exit(f"{issue['id']}: its compose block needs id and test")
-    for key in ("delete", "files", "protected", "nodes", "figma_nodes"):
+    for key in ("delete", "files", "protected", "reads", "nodes", "figma_nodes"):
         meta[key] = [f.strip() for f in meta.get(key, "").split(",") if f.strip()]
     if "figma" in meta:  # a design task's own file, a key or a url; else the project's stored key
         meta["figma"] = fc_core.figma_key(meta["figma"]) or sys.exit(f"{issue['id']}: figma is not a Figma file url or key: {meta['figma']}")

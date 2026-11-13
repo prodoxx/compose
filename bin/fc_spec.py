@@ -1,6 +1,6 @@
 import ast, json, re, sys
 from pathlib import Path
-import fc_core, fc_routerec, fc_tasks, fc_linear, fc_worktree, fc_change, fc_status
+import fc_core, fc_reads, fc_routerec, fc_tasks, fc_linear, fc_worktree, fc_change, fc_status
 
 
 def ordered(tasks, a, b):
@@ -323,6 +323,7 @@ def spec_check(data, checks=(), defined=None, scripts=None):
                     gaps.append("empty `files:`")
                 if not meta["protected"] and not meta["delete"] and meta.get("route") != "check-only" and meta["kind"] != "hand":  # no test to write: it deletes, its check is the proof, or it is built by hand
                     gaps.append("empty `protected:`")
+            gaps += [f"`reads:` {e} must be {fc_reads.invalid(e)}" for e in meta.get("reads") or [] if fc_reads.invalid(e)]
             gaps += missing_after_text({meta["id"]: loose[meta["id"]]} if meta["id"] in loose else {})
             after = next((t["after"] for t in tasks if t["id"] == meta["id"]), "")
             if meta["kind"] == "toolchain" and after:

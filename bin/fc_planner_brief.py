@@ -82,7 +82,7 @@ Cut only this ticket's feature. Teammates you start run in own panes; never do t
    test: <the check that shows the work exists>
    route: check-only
    ```
-   Keys: id, files, test, route; `protected: <the test path>` replaces `route:` on a policy-matched or requested test, with `test:` running only that test; leave `model:` unset. `after` (the blocked-by links) and `title` (the issue title) are not keys.
+   Keys: id, files, test, route; `protected: <the test path>` replaces `route:` on a policy-matched or requested test, with `test:` running only that test; leave `model:` unset. `reads: <paths, or rev:path>` only when the task calls another module's values or types, or ports data from an older commit: the implementer reads nothing but its own files and the context pack, so name the module (`src/keywords.ts`) or the old file (`940bd04:src/cases.ts`) there, never copy it into the brief. `after` (the blocked-by links) and `title` (the issue title) are not keys.
 
 5. After cutting, read the plan and the task issues once as the implementer will: every criterion has a step and a task,
    every named file is in the file map, one meaning per signature, the Review focus is covered by a test. Then `compose sync`

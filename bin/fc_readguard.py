@@ -211,6 +211,9 @@ def refusal(tool, args, guard):
            "For anything else, run trail ask \"<question>\".")
     tool = (tool or "").lower()
     root, allow = guard["root"], set(guard["allow"])
+    names = sorted(os.path.relpath(a, root) if a.startswith(root + os.sep) else a for a in allow)
+    why += (" The files you may read: " + ", ".join(names[:12]) + (f" and {len(names) - 12} more" if len(names) > 12 else "") + ". " if names else " ") + \
+        "A file or an older commit you need that is not among them is a fact the brief lacks: do not guess, end your reply with `CONTRADICTION: brief lacks <the file or fact>`."
     if guard.get("installers"):
         why += " This task may also run `{} install` and `{} add <package>`, each alone.".format(guard["installers"][0], guard["installers"][0])
     if tool == "bash":

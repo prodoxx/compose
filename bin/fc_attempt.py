@@ -88,3 +88,9 @@ def settled(verdict, tampered, cannot, only_delete, status):
 def miss_status(code, over, new_docs, stray, broke, status):
     """The status of a missed attempt: a test that passed names what else rejected the change, one that failed leaves the status as it was."""
     return ("rejected_size" if over else "rejected_docs" if new_docs else "rejected_scope" if stray else "rejected_regression" if broke else status) if code == 0 else status
+
+def reads_hint(refused):
+    """What a contradiction's line adds when the guard refused `refused` of the implementer's calls this attempt: "brief lacks X" may mean X exists
+    in the repo and its reads were restricted, so the user looks for the file before blaming the brief."""
+    return (f"  (its reads are restricted to the task's files, the context pack and `reads:`; {refused} refused: a file or data it says is missing may "
+            "exist in the repo, so name it under `reads:` in the task's compose block)") if refused else ""

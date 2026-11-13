@@ -142,6 +142,11 @@ class SpecCheck(unittest.TestCase):
         issues = [task("ENG-3", "001", files="a.go"), task("ENG-4", "002", ["ENG-3"], files="a.go"), task("ENG-5", "003", ["ENG-4"], files="a.go")]
         self.assertFalse(has(check(issues)["ENG-1"][2], "a.go"))
 
+    def test_a_reads_entry_must_name_a_file_inside_the_repo(self):
+        r = check([task("ENG-3", "001", reads="src/keywords.ts, 940bd04:src/cases.ts"), task("ENG-4", "002", reads="/etc/passwd, ../x.ts, src/*.ts, 940bd04:../y")])
+        self.assertEqual(r["ENG-3"], (True, "task", []))
+        self.assertTrue(not r["ENG-4"][0] and len([g for g in r["ENG-4"][2] if "`reads:`" in g]) == 4, r["ENG-4"])
+
     def test_story_and_task_gaps(self):
         r = check([task("ENG-3", "001"), task("ENG-4", "002", files="x.go, y.go, z.go"), task("ENG-5", "003", crit="- a\n" * 6),
                    task("ENG-6", "004", files=""), task("ENG-7", "005", protected=""),
