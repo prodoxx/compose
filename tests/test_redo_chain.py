@@ -238,7 +238,8 @@ class RunChain(unittest.TestCase):
                   mock.patch.object(fc.fc_core, "current_branch", return_value="trunk"), mock.patch.object(fc.fc_blockers, "released", return_value=({}, {})),
                   mock.patch.object(fc.fc_worktree, "stack_order", return_value=["fast/p/010"]), mock.patch.object(fc.fc_worktree, "stack_worktree"),
                   mock.patch.object(fc.fc_worktree, "task_branch", lambda repo, proj, tid: f"fast/p/{tid}"),
-                  mock.patch.object(fc.fc_worktree, "replace_branch", lambda repo, proj, b: self.calls.append(f"replace {b}")),
+                  mock.patch.object(fc.fc_worktree, "replace_branch", lambda repo, proj, b: self.calls.append(f"replace {b}") or f"tip-{b}"),
+                  mock.patch.object(fc.fc_layers, "restore_branch", lambda repo, proj, b, tip: self.calls.append(f"restore {b} {tip}") or True),
                   mock.patch.object(fc.fc_layers, "linearize", linearize), mock.patch.object(fc.fc_implement, "run_task", run_task),
                   mock.patch.object(fc.fc_run, "triage", lambda *x: None), mock.patch.object(fc.fc_run.fc_fast, "run_events", return_value=[]), mock.patch.object(fc.fc_run.fc_ledger, "record_task"), mock.patch.object(fc.fc_stack, "register_stack"), mock.patch("builtins.print")):
             p.start(); self.addCleanup(p.stop)
@@ -258,6 +259,26 @@ class RunChain(unittest.TestCase):
         self.stop = "fast/p/011 conflicts when rebased onto fast/p/010 in a.txt; the layers below it are kept. Resolve by hand: git rebase --onto fast/p/010 abc"
         self.assertEqual(str(self.run_ids(["012"])), f"stack  STOP  {self.stop}")
         self.assertEqual(self.ran, [])
+
+    def test_a_chain_that_stops_before_any_task_starts_puts_the_branches_it_set_aside_back(self):
+        """#453: `run --only 010 --redo` set 010's branch aside, and the stop meant nothing was rebuilt: the old layer is back as it was."""
+        self.stop = "fast/p/011 conflicts when rebased onto fast/p/010 in a.txt; the layers below it are kept."
+        out = []
+        with mock.patch.object(fc.fc_core, "say", out.append):
+            self.assertEqual(str(self.run_ids(["010", "012"])), f"stack  STOP  {self.stop}")
+        self.assertEqual(self.calls, ["replace fast/p/010", "replace fast/p/012", "linearize", "restore fast/p/010 tip-fast/p/010", "restore fast/p/012 tip-fast/p/012"])
+        self.assertIn("stack  kept  fast/p/010, fast/p/012 back as before: the run stopped before it built anything", out)
+
+    def test_a_redo_that_never_started_keeps_the_finished_result_and_puts_its_branch_back(self):
+        (self.proj / "results" / "013.json").write_text(json.dumps({"id": "013", "status": "passed", "attempts": 2}))
+        self.unchain = ("013",)
+        out = []
+        with mock.patch.dict(os.environ, {"COMPOSE_REDO": "1"}), mock.patch.object(fc.fc_core, "say", out.append):
+            e = self.run_ids(["012", "013"], {"013": "012"})
+        self.assertEqual(e.code, 1)
+        self.assertEqual(json.loads((self.proj / "results" / "013.json").read_text()), {"id": "013", "status": "passed", "attempts": 2})
+        self.assertIn("restore fast/p/013 tip-fast/p/013", self.calls)
+        self.assertIn("013 kept  its passed result and its branch: the redo never started", out)
 
     def test_no_stack_dispatches_without_rebasing_the_existing_layers(self):
         self.assertEqual(self.run_ids(["012"], no_stack=True).code, 0)

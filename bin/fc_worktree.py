@@ -131,12 +131,13 @@ def own_branches(repo, proj):
             if re.fullmatch(pat, b)]
 
 def replace_branch(repo, proj, branch):
-    """Delete a task branch that is about to be rebuilt. Its old tip is kept under a ref: layers stacked above still carry the
-    old commits, and the chain rebase must drop them instead of replaying them onto the new layer."""
+    """Delete a task branch that is about to be rebuilt, and return its old tip ("" when it had none). The tip is kept under a ref:
+    layers stacked above still carry the old commits, and the chain rebase must drop them instead of replaying them onto the new layer."""
     tip = fc_core.sh(["git", "rev-parse", "--verify", "-q", branch], repo, check=False).stdout.strip()
     if tip:
         fc_core.sh(["git", "update-ref", f"refs/compose/replaced/{proj.name}/{branch.removeprefix(task_prefix(repo, proj))}/{tip}", tip], repo)
     fc_core.sh(["git", "branch", "-D", branch], repo, check=False)
+    return tip
 
 def replaced_tips(repo, proj):
     """[(branch, old tip)] for the project's replaced task branches (see replace_branch)."""

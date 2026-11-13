@@ -140,6 +140,55 @@ class Chain(unittest.TestCase):
                                        "git checkout d && git rebase -i --onto p1 T (the commit it shares with p1) (drop c1', which p1 holds already), then re-run")
         self.assertEqual(said, ["stack  STOP  " + L.STACK_STOP])
 
+    def test_a_layer_standing_on_one_this_run_builds_again_waits_for_it_and_is_rebased_onto_the_new_one(self):
+        """#453: 002 is set aside for its redo; 003 carries its old commits and needs its code, so it is no stop, and the next pass moves it onto the new 002."""
+        dag = Dag({"T": [], "A1": ["T"], "A2": ["A1"], "A3": ["A2"]}, {"main": "T", "b1": "A1", "b3": "A3"}, conflicts={("b3", "b1"): ["chain.py"]})
+        replaced = [("b2", "A2")]
+        linear, said = self.linearize(dag, ["b1", "b3"], replaced, rebuild=["b2"])
+        self.assertEqual((linear, L.STACK_STOP, dag.tips["b3"]), (["b1"], "", "A3"))  # 003 stays as it was
+        self.assertEqual(said, ["stack  wait  b3 stands on b2, which this run builds again; it is rebased onto the new layer then"])
+        linear, _ = self.linearize(dag, ["b1", "b3"], replaced)  # without `rebuild` a conflict is a stop, as before
+        self.assertEqual(linear, ["b1"])
+        self.assertIn("b3 conflicts when rebased onto b1", L.STACK_STOP)
+        dag.commits["N2"], dag.tips["b2"], dag.conflicts = ["A1"], "N2", {}  # the redo built 002 again, on 001
+        linear, said = self.linearize(dag, ["b1", "b2", "b3"], replaced)
+        self.assertEqual((linear, L.STACK_STOP, said), (["b1", "b2", "b3"], "", []))
+        (r,) = [r for r in dag.rebases if r["b"] == "b3" and r["onto"] == "b2"]
+        self.assertEqual(r["upstream"], "A2")  # only 003's own commit goes onto the new 002
+
+    def test_a_layer_that_does_not_stand_on_a_rebuilt_one_still_stops_the_chain(self):
+        dag = Dag({"T": [], "A1": ["T"], "X": ["T"]}, {"main": "T", "b1": "A1", "b4": "X"}, conflicts={("b4", "b1"): ["x.py"]})
+        linear, _ = self.linearize(dag, ["b1", "b4"], [("b2", "A9")], rebuild=["b2"])
+        self.assertEqual(linear, ["b1"])
+        self.assertIn("b4 conflicts when rebased onto b1 in x.py", L.STACK_STOP)
+
+
+class SetAside(unittest.TestCase):
+    """replace_branch sets a task branch aside for its rebuild; restore_branch puts it back when the rebuild never started."""
+    def sh(self, cmd, cwd=None, check=True, **kw):
+        self.calls.append(cmd[1:])
+        out = self.branches.get(cmd[-1], "") if cmd[1] == "rev-parse" else ""
+        return subprocess.CompletedProcess(cmd, 0 if out or cmd[1] != "rev-parse" else 1, out + "\n", "")
+
+    def setUp(self):
+        self.calls, self.branches = [], {"fast/p/001": "abc"}
+        for p in (mock.patch.object(fc.fc_core, "sh", self.sh), mock.patch.object(fc.fc_worktree, "task_prefix", return_value="fast/p/")):
+            p.start(); self.addCleanup(p.stop)
+        self.proj = Path("/x/p")
+
+    def test_replace_branch_returns_the_old_tip_and_restore_branch_puts_it_back(self):
+        self.assertEqual(fc.fc_worktree.replace_branch(Path("."), self.proj, "fast/p/001"), "abc")
+        self.assertEqual(self.calls[1:], [["update-ref", "refs/compose/replaced/p/001/abc", "abc"], ["branch", "-D", "fast/p/001"]])
+        self.calls.clear(); self.branches.clear()  # the branch is gone now
+        self.assertTrue(fc.fc_layers.restore_branch(Path("."), self.proj, "fast/p/001", "abc"))
+        self.assertEqual(self.calls[1:], [["branch", "fast/p/001", "abc"], ["update-ref", "-d", "refs/compose/replaced/p/001/abc"]])
+
+    def test_restore_branch_leaves_a_branch_that_exists_again_and_a_task_that_had_none(self):
+        self.assertFalse(fc.fc_layers.restore_branch(Path("."), self.proj, "fast/p/001", "abc"))  # rebuilt meanwhile
+        self.assertFalse(fc.fc_layers.restore_branch(Path("."), self.proj, "fast/p/002", ""))  # never had a branch
+        self.assertEqual([c for c in self.calls if c[0] in ("branch", "update-ref")], [])
+        self.branches.clear()
+        self.assertEqual(fc.fc_worktree.replace_branch(Path("."), self.proj, "fast/p/009"), "")
 
 
 if __name__ == "__main__":

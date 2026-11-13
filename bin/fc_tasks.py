@@ -171,6 +171,13 @@ def runnable(tasks):
     return [t for t in code_tasks(tasks) if t.get("kind") != "hand"]
 
 
+def result_status(proj, tid):
+    """The status in the task's result file, None when it has none or cannot be read."""
+    try:
+        return json.loads((proj / "results" / f"{tid}.json").read_text()).get("status")
+    except (OSError, ValueError, AttributeError):
+        return None
+
 FINISHED = ("passed", "hand_done")  # a layer whose branch is the record: a run keeps it unless told to --redo
 
 def task_finished(proj, meta, redo=False, since=None):

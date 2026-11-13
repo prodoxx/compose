@@ -189,9 +189,13 @@ def run_task(repo, proj, task, attempts, model=None, reset_files=False, tag=""):
         # `--redo` says the user wants it rebuilt.
         fc_core.say(f"{tid} keep    {why}; pass --redo to rebuild it")
         return json.loads((proj / "results" / f"{tid}.json").read_text())
-    fc_worktree.replace_branch(repo, proj, branch)  # a re-run (or --redo) replaces the previous attempt
+    set_aside = fc_worktree.replace_branch(repo, proj, branch)  # a re-run (or --redo) replaces the previous attempt
     fc_core.sh(["git", "clone", "--quiet", "--shared", "--no-hardlinks", str(repo), str(wt)], repo)
-    base_name, base = task_base(repo, proj, meta)
+    try:
+        base_name, base = task_base(repo, proj, meta)
+    except RuntimeError:  # its lower layers do not chain: nothing was built, so the attempt it replaced is still the layer
+        fc_layers.restore_branch(repo, proj, branch, set_aside)
+        raise
     fc_core.sh(["git", "checkout", "-q", "-b", branch, base], wt)  # a stacked task starts from its lower layer's tip
     fc_worktree.ready_checkout(repo, wt, borrow=not fc_worktree.names_lockfile(meta), install=fc_core.project_config(proj).get("install"), generate=fc_core.project_config(proj).get("generate"))
     for name in ("opencode.jsonc", "opencode.json"):  # untracked local config the implementer needs

@@ -131,15 +131,26 @@ def rebase_layer(wt, prev, upstream, b, drop=()):
     env = {**os.environ, "COMPOSE_DROP": " ".join(drop), "GIT_SEQUENCE_EDITOR": f"{shlex.quote(sys.executable)} -c {shlex.quote(DROP_PICKS)}"}
     return fc_core.sh(["git", "rebase", "-q", "-i", "--no-autosquash", "--empty=drop", "--onto", prev, upstream], wt, check=False, env=env)
 
-def linearize(repo, proj, trunk, wt, through=()):
-    with fc_worktree.STACK_LOCK:
-        return _linearize(repo, proj, trunk, wt, through)
+def restore_branch(repo, proj, branch, tip):
+    """Put back a branch fc_worktree.replace_branch set aside when its rebuild never started: at its old tip, with the set-aside ref
+    gone. False when the branch exists again or there was no tip."""
+    if not tip or fc_core.sh(["git", "rev-parse", "--verify", "-q", branch], repo, check=False).stdout.strip():
+        return False
+    fc_core.sh(["git", "branch", branch, tip], repo)
+    fc_core.sh(["git", "update-ref", "-d", f"refs/compose/replaced/{proj.name}/{branch.removeprefix(fc_worktree.task_prefix(repo, proj))}/{tip}"], repo, check=False)
+    return True
 
-def _linearize(repo, proj, trunk, wt, through=()):
+def linearize(repo, proj, trunk, wt, through=(), rebuild=()):
+    with fc_worktree.STACK_LOCK:
+        return _linearize(repo, proj, trunk, wt, through, rebuild)
+
+def _linearize(repo, proj, trunk, wt, through=(), rebuild=()):
     """Rebase the project's unmerged task branches into one chain on the current trunk tip, layer on layer, inside the CLI's
     worktree. Returns the branches that now form a clean chain; a conflict stops the chain there and is reported, and STACK_STOP
     says where: a caller that acts on the stack top (verify, top, the stack) refuses the partial chain then. With `through`, the
-    chain holds only those branches and stops once the last of them is placed: the others, held back, stay as they are, carrying what they were built on."""
+    chain holds only those branches and stops once the last of them is placed: the others, held back, stay as they are, carrying what they were built on.
+    `rebuild`: the branches the caller is about to build again (their old tips are in `replaced`). A layer that stands on one of them
+    and does not rebase without it needs its code: it is left as it is, not a stop, and goes onto the new layer once that exists."""
     global STACK_STOP
     STACK_STOP = ""
     chain = chain_order(repo, proj)
@@ -189,6 +200,10 @@ def _linearize(repo, proj, trunk, wt, through=()):
                 at = fc_core.sh(["git", "log", "-1", "--format=%h %s", "REBASE_HEAD"], wt, check=False).stdout.strip()
                 fc_core.sh(["git", "rebase", "--abort"], wt, check=False)
                 fc_core.sh(["git", "checkout", "-q", "--detach", trunk], wt, check=False)
+                carried = [rb for rb, t in replaced if rb in rebuild and rb != b and contains(t, b)]
+                if carried:  # it stands on a layer this run builds again: its own commits need that code, so they wait for the new layer
+                    fc_core.say(f"stack  wait  {b} stands on {', '.join(carried)}, which this run builds again; it is rebased onto the new layer then")
+                    continue
                 STACK_STOP = chain_conflict(b, prev, files, upstream, source, at, drop)
                 fc_core.say(f"stack  STOP  {STACK_STOP}")
                 break

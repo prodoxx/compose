@@ -238,16 +238,23 @@ def run_tasks(repo, proj, tasks, a):
         fc_core.say(f"unblocked  {b}  {proof}")
     for b, why in still.items():
         fc_core.say(f"waits      {b}  {why}")
+    set_aside = {}  # branch -> its tip before this run replaced it, for the layers it rebuilds
     if not a.no_stack and fc_worktree.stack_order(repo, proj):
         # Earlier layers must contain everything committed on trunk since they were built (new tests, new task files), or a
         # task stacked on them starts without its own test. Rebase the existing chain onto the current trunk tip first.
         # `--no-stack` leaves the chain alone: a task with `after:` still rebases what it stacks on, the rest never wait on it.
         # A task this run rebuilds is replaced first (run_task would, later): its old commits conflicting with the trunk must not stop the run.
+        # A layer that stands on one of them and does not rebase without it is left as it is, and goes onto the new layer later;
+        # a stop sets the branches back: nothing ran, so the old layer and its result stay what they were.
         for m in tasks:
             if not fc_tasks.task_finished(proj, m, redo=bool(os.environ.get("COMPOSE_REDO"))):
-                fc_worktree.replace_branch(repo, proj, fc_worktree.task_branch(repo, proj, m["id"]))
-        fc_layers.linearize(repo, proj, a.trunk, fc_worktree.stack_worktree(repo, proj, a.trunk))
+                b = fc_worktree.task_branch(repo, proj, m["id"])
+                set_aside[b] = fc_worktree.replace_branch(repo, proj, b)
+        fc_layers.linearize(repo, proj, a.trunk, fc_worktree.stack_worktree(repo, proj, a.trunk), rebuild=list(set_aside))
         if fc_layers.STACK_STOP:
+            back = [b for b, tip in set_aside.items() if fc_layers.restore_branch(repo, proj, b, tip)]
+            if back:
+                fc_core.say(f"stack  kept  {', '.join(back)} back as before: the run stopped before it built anything")
             sys.exit(f"stack  STOP  {fc_layers.STACK_STOP}")
     fc_fleet.space(proj)
     t0 = time.time()
@@ -366,7 +373,13 @@ def run_tasks(repo, proj, tasks, a):
                     fc_core.say(f"{p} STOP  {e}")
                     r = {"id": metas[p]["id"], "title": metas[p].get("title"), "status": "unchained", "attempts": 0, "seconds": 0.0, "cost": 0.0,
                          "branch": "-", "log": [{"stop": str(e)}]}
-                    fc_core.atomic_write((proj / "results" / f"{p}.json"), json.dumps(r, indent=2))
+                    prior = fc_tasks.result_status(proj, p)
+                    if prior in fc_tasks.FINISHED:  # a redo that never started: the finished result and its branch stay what they were
+                        b = fc_worktree.task_branch(repo, proj, p)
+                        fc_layers.restore_branch(repo, proj, b, set_aside.get(b))
+                        fc_core.say(f"{p} kept  its {prior} result and its branch: the redo never started")
+                    else:
+                        fc_core.atomic_write((proj / "results" / f"{p}.json"), json.dumps(r, indent=2))
                 fc_proc.resume_task(p)
                 if r["status"] in ("held", "paused"):  # held before its first turn, or paused mid-turn with its work kept: pending again, the next pass reads the hold
                     pending[p] = []
