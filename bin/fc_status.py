@@ -374,7 +374,7 @@ def cmd_done(a):
     """Record that the team lead finished tasks by hand (status hand_done) so `status` tells the truth, and move each one In
     Review on Linear with the reason, rolling its story and feature up as a passed task does. Requires a reason."""
     proj = fc_core.project_dir(a); repo = Path(a.repo).resolve()
-    ids = [x.strip() for x in a.only.split(",") if x.strip()]
+    ids = fc_core.task_ids(a.only)
     (proj / "results").mkdir(exist_ok=True)
     unsaved = False
     for tid in ids:

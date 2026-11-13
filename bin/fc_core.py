@@ -148,6 +148,30 @@ def all_projects(repo):
                 found[p.name] = (wt, p)
     return found
 
+RANGE_LIMIT = 10000  # ids one range may name: a typo such as 1..99999999 stops instead of building a list
+
+def task_ids(text):
+    """The task ids a `--only` argument names, in order and without repeats. It is a comma list in which an item is one id or a
+    range of numeric ids, `338..350` (both ends included, zero padding kept: `003..010`). A range names every id between its ends,
+    whether a task carries it or not; the caller keeps the ones that exist. An item that is neither stops with what it takes."""
+    out = []
+    for item in (x.strip() for x in (text or "").split(",")):
+        if not item:
+            continue
+        if ".." not in item:
+            ids = [item]
+        else:
+            lo, _, hi = item.partition("..")
+            if not (lo.isdigit() and hi.isdigit()):
+                sys.exit(f"--only takes comma-separated task ids, and a range of numeric ids such as 338..350; {item!r} is neither")
+            if int(lo) > int(hi):
+                sys.exit(f"--only range {item} runs backwards: write {hi}..{lo}")
+            if int(hi) - int(lo) >= RANGE_LIMIT:
+                sys.exit(f"--only range {item} names more than {RANGE_LIMIT} ids")
+            ids = [str(n).zfill(len(lo)) for n in range(int(lo), int(hi) + 1)]
+        out += [i for i in ids if i not in out]
+    return out
+
 def project_dir(a):
     """Resolve --project to its directory, and point a.repo at the worktree that holds it, so every git command runs there."""
     repo = Path(a.repo).resolve()

@@ -243,7 +243,7 @@ def cmd_hold(a):
         return
     if not (a.only or a.rests_on) or not a.reason:
         sys.exit('hold needs --only <ids> or --rests-on <refs>, with --reason "<one line>", or --release <ids|all>')
-    ids = [x.strip() for x in (a.only or "").split(",") if x.strip()]
+    ids = fc_core.task_ids(a.only)
     for ref in [x.strip() for x in (a.rests_on or "").split(",") if x.strip()]:
         found = rests_on(proj, [ref])
         print(f"rests on {ref}: " + ", ".join(f"{t} ({w})" for t, w in found.items()) if found else f"rests on nothing: {ref}")

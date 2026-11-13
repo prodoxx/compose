@@ -132,7 +132,7 @@ def prove_root(repo, proj, cfg, only):
         sys.exit("prove runs before `run`: the stack already holds the feature, so its cases would pass. After a re-plan, name the tasks to redo: "
                  "`compose verify --prove --only <ids>` proves the cases on the stack below the first of them.")
     order = fc_worktree.layer_order(fc_tasks.code_tasks(fc_tasks.load_tasks(proj, required=True)))
-    ids = [t.strip() for t in only.split(",")]
+    ids = fc_core.task_ids(only)
     if [t for t in ids if t not in order]:
         sys.exit(f"prove --only: no task {', '.join(t for t in ids if t not in order)} in the plan")
     below = order[:min(order.index(t) for t in ids)]

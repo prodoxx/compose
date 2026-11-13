@@ -51,7 +51,7 @@ def triage(repo, proj, ids):
 
 def cmd_triage(a):
     proj = fc_core.project_dir(a); repo = Path(a.repo).resolve()
-    ids = [x.strip() for x in a.only.split(",")] if a.only else sorted(
+    ids = fc_core.task_ids(a.only) if a.only else sorted(
         f.stem for f in (proj / "results").glob("[0-9]*.json") if f.stem.isdigit() and json.loads(f.read_text()).get("status") == "passed")
     if not triage(repo, proj, ids):
         sys.exit("no fast-model key (TEXT_MODEL_API_KEY) or no passed tasks: nothing triaged")
@@ -120,7 +120,7 @@ def queue_tasks(proj, tasks):
 
 def cmd_run(a):
     proj = fc_core.project_dir(a); repo = Path(a.repo).resolve()
-    only = set(a.only.split(",")) if a.only else None
+    only = set(fc_core.task_ids(a.only)) if a.only else None
     why = None if getattr(a, "unproven", False) else fc_prove.unproven(repo, proj, fc_prove.verify_config(a)[2])
     if why:  # an e2e case that fails for the environment fails every verify, and no implementer can fix it
         sys.exit(f"run stopped before anything was cloned: {why}. Run `compose verify --project {proj.name} --prove` and fix every case it "

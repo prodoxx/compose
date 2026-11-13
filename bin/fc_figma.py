@@ -98,7 +98,7 @@ def design_brief(meta, figma, results):
 def cmd_designcrews(a):
     """Start one design-NNN builder per open design task. `--print` shows the briefs instead."""
     proj = fc_core.project_dir(a)
-    only = {x.strip() for x in a.only.split(",")} if a.only else None
+    only = set(fc_core.task_ids(a.only)) if a.only else None
     redo = getattr(a, "redo", False)
     if redo and not only:
         sys.exit("--redo needs --only <ids>: it reopens the named tasks, not every finished one")
@@ -391,7 +391,7 @@ def cmd_figma(a):
     except fc_textmodel.TextModelError as e:
         sys.exit(f"figma judge stopped before judging anything: {e}")
     bad = 0
-    for tid in a.only.split(","):
+    for tid in fc_core.task_ids(a.only):
         meta = tasks.get(tid)
         if not meta:
             sys.exit(f"unknown task {tid}")

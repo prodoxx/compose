@@ -28,6 +28,38 @@ class RunReadsTasksFresh(unittest.TestCase):
         self.assertEqual(order, ["refresh", "read"])
 
 
+class OnlyRanges(unittest.TestCase):
+    """`--only` takes ids and ranges of ids (#473): 338..350 is every id from 338 to 350, not one id named "338..350"."""
+    def test_a_range_names_every_id_between_its_ends_and_keeps_zero_padding(self):
+        ids = fc.fc_core.task_ids
+        self.assertEqual(ids("338..341"), ["338", "339", "340", "341"])
+        self.assertEqual(ids("008..011"), ["008", "009", "010", "011"])
+        self.assertEqual(ids("003, 001..002,003,5..5"), ["003", "001", "002", "5"])  # a comma list around it, spaces, no repeats
+        self.assertEqual(ids(None), [])
+
+    def test_an_item_that_is_neither_an_id_nor_a_numeric_range_stops_with_what_the_option_takes(self):
+        for bad in ("a..9", "1..", "..9", "1..2..3"):
+            with self.assertRaisesRegex(SystemExit, rf"^--only takes comma-separated task ids, and a range of numeric ids such as 338\.\.350; '{bad}' is neither$"):
+                fc.fc_core.task_ids(bad)
+        with self.assertRaisesRegex(SystemExit, r"^--only range 9\.\.3 runs backwards: write 3\.\.9$"):
+            fc.fc_core.task_ids("9..3")
+        with self.assertRaisesRegex(SystemExit, "names more than 10000 ids"):
+            fc.fc_core.task_ids("1..99999999")
+
+    def test_run_only_with_a_range_runs_the_tasks_of_the_range_that_exist(self):
+        tasks = [{"id": t, "model": STANDARD, "title": t, "files": [], "protected": [], "test": "true"} for t in ("001", "002", "003", "005")]
+        with mock.patch.object(fc.fc_core, "project_dir", return_value=Path("/p")), mock.patch.object(fc.fc_run, "require_committed"), \
+                mock.patch.object(fc.fc_linear, "refresh_tasks"), mock.patch.object(fc.fc_tasks, "load_tasks", return_value=tasks), \
+                mock.patch.object(fc.fc_tasks, "task_finished", return_value=None), mock.patch.object(fc.fc_briefs, "test_open", return_value=False), \
+                mock.patch.object(fc.fc_briefs, "waiting_writers", return_value=[]), mock.patch.object(fc.fc_route, "route_tasks", return_value=({}, {})), \
+                mock.patch.object(fc.fc_run.fc_fast, "run_holds", return_value={}), mock.patch.object(fc.fc_run, "run_tasks") as run:
+            args = dict(repo="/r", project="p", unproven=True, no_stack=True, redo=False)
+            fc.fc_run.cmd_run(SimpleNamespace(only="002..004,005", **args))
+            self.assertEqual([m["id"] for m in run.call_args.args[2]], ["002", "003", "005"])
+            with self.assertRaisesRegex(SystemExit, r"^no tasks on Linear under this feature carry a compose block with ids 007\.\.009$"):
+                fc.fc_run.cmd_run(SimpleNamespace(only="007..009", **args))
+
+
 class RunStartsOnTier(unittest.TestCase):
     def setUp(self):
         self.proj = Path(tempfile.mkdtemp()) / ".compose" / "p"

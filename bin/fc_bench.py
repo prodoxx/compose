@@ -36,7 +36,7 @@ def bench_tests(a):
     if not a.base:
         sys.exit("bench --tests needs --base <rev>: the revision the protected tests are reset to")
     proj = fc_core.project_dir(a); repo = Path(a.repo).resolve()
-    only = set(a.only.split(",")) if a.only else None
+    only = set(fc_core.task_ids(a.only)) if a.only else None
     tasks = [m for m in fc_tasks.load_tasks(proj, required=True) if (not only or m["id"] in only) and m.get("protected")]
 
     def one(job):
@@ -82,7 +82,7 @@ def cmd_bench(a):
     if a.tests:
         return bench_tests(a)
     proj = fc_core.project_dir(a); repo = Path(a.repo).resolve()
-    only = set(a.only.split(",")) if a.only else None
+    only = set(fc_core.task_ids(a.only)) if a.only else None
     if fc_core.sh(["git", "status", "--porcelain"], repo).stdout.strip():
         sys.exit("repo has uncommitted changes; commit first")
     tasks = [m for m in fc_tasks.load_tasks(proj, required=True) if not only or m["id"] in only]

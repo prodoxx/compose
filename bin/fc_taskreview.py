@@ -40,7 +40,7 @@ def review_event(proj, meta, sha, rv):
 
 def cmd_review(a):
     proj = fc_core.project_dir(a); repo = Path(a.repo).resolve()
-    only = [x.strip() for x in (a.only or "").split(",") if x.strip()]
+    only = fc_core.task_ids(a.only)
     if not only and not a.range:
         sys.exit("review needs --only <ids> (each task's own change) or --range <base>..<tip>")
     cfg_path = proj / "verify.json"

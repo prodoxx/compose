@@ -218,7 +218,7 @@ def main():
             s.add_argument("tier", choices=("frontier",))
             s.add_argument("dollars", type=float)
         if name == "route":
-            s.add_argument("--only", help="comma-separated task ids")
+            s.add_argument("--only", help="comma-separated task ids or ranges such as 338..350")
             s.add_argument("--recalculate", action="store_true", help="recompute every route, even one whose context is unchanged")
         if name == "shrink":
             s.add_argument("images", nargs="+", help="image files to shrink")
@@ -235,7 +235,7 @@ def main():
             s.add_argument("--dry-run", action="store_true", help="write nothing to Linear")
             s.add_argument("--json", action="store_true", help="print the results as a JSON list")
         if name == "run":
-            s.add_argument("--only", help="comma-separated task ids")
+            s.add_argument("--only", help="comma-separated task ids or ranges such as 338..350")
             s.add_argument("--attempts", type=int, default=3)
             s.add_argument("--parallel", type=int, help="tasks at once (default: parallel in ~/.compose/config.json, else 3)")
             s.add_argument("--trunk", default=None, help="trunk branch the stack targets (default: the branch you are on)")
@@ -243,14 +243,14 @@ def main():
             s.add_argument("--redo", action="store_true", help="rebuild tasks whose passed branch still exists (otherwise they are kept)")
             s.add_argument("--unproven", action="store_true", help="run although `verify --prove` has not passed on the current e2e cases")
         if name == "review":
-            s.add_argument("--only", help="comma-separated task ids: each task's own change, against the layer it sits on")
+            s.add_argument("--only", help="comma-separated task ids or ranges such as 338..350: each task's own change, against the layer it sits on")
             s.add_argument("--range", help="<base>..<tip>: a change that is not a task branch, such as a merged feature; --only then names the tasks whose brief and criteria it is judged against")
         if name in ("run", "resume", "verify"):
             s.add_argument("--force", action="store_true", help="start although the Mac's battery is nearly empty, or (run, resume) the OpenRouter key's credit looks too low for the tasks that start at once")
         if name == "resume":
             s.add_argument("--parallel", type=int, help="tasks at once (default: parallel in ~/.compose/config.json, else the halted run's)")
         if name == "done":
-            s.add_argument("--only", required=True, help="comma-separated task ids")
+            s.add_argument("--only", required=True, help="comma-separated task ids or ranges such as 338..350")
             s.add_argument("--note", required=True, help="why it was done by hand, e.g. 'provider out of credit'")
         if name == "top":
             s.add_argument("--detach", action="store_true")
@@ -288,7 +288,7 @@ def main():
         if name == "bench":
             s.add_argument("--models", default="pi:openrouter-fast/z-ai/glm-5.3-flash@preset/glm-5-3-flash-fast,pi:openrouter-fast/openai/gpt-oss-120b@preset/gpt-oss-120b-cerebras,claude",
                            help="comma-separated model ids: OpenCode ids, 'pi:<provider/model>' for the pi harness, 'claude' = Claude Code one-shot")
-            s.add_argument("--only", help="comma-separated task ids")
+            s.add_argument("--only", help="comma-separated task ids or ranges such as 338..350")
             s.add_argument("--runs", type=int, default=1, help="repeats per task per model")
             s.add_argument("--attempts", type=int, default=3)
             s.add_argument("--parallel", type=int, default=4)
@@ -301,7 +301,7 @@ def main():
         if name == "designer":
             s.add_argument("--figma", help="the target Figma file's url or key: stored in linear.json before the brief prints")
         if name == "designcrews":
-            s.add_argument("--only", help="comma-separated task ids")
+            s.add_argument("--only", help="comma-separated task ids or ranges such as 338..350")
             s.add_argument("--print", dest="print_", action="store_true", help="print the briefs instead of starting builders")
             s.add_argument("--redo", action="store_true", help="with --only: reopen tasks finished by hand or passed, even In Review, for a new builder; their old result is kept as <id>.json.before-redo")
             s.add_argument("--ignore-waits", action="store_true", help="with --only: start the named tasks although their blockers are not In Review or Done (the hold reads the last sync)")
@@ -312,7 +312,7 @@ def main():
                                                           "shaping a feature is the engineering manager's brainstorm (sections/0b.md), not an architect")
         if name == "testcrews":
             s.add_argument("--contract", help="default: .compose/<project>/results/contract.md")
-            s.add_argument("--only", help="comma-separated task ids")
+            s.add_argument("--only", help="comma-separated task ids or ranges such as 338..350")
             s.add_argument("--print", dest="print_", action="store_true", help="print the briefs instead of starting teammates")
             s.add_argument("--budget", type=int, help="test lines per task (default 60; a task's test_lines: wins)")
             s.add_argument("--collect", action="store_true", help="cherry-pick every test-writing teammate's commits onto the project branch in task order")
@@ -320,13 +320,13 @@ def main():
             s.add_argument("--parallel", type=int, help="writers to start at once, Claude Code ones too (default: parallel in ~/.compose/config.json, and claude_parallel for Claude writers)")
             s.add_argument("--force", action="store_true", help="start the writers although the Mac's battery is nearly empty")
         if name == "triage":
-            s.add_argument("--only", help="comma-separated task ids (default: every passed task)")
+            s.add_argument("--only", help="comma-separated task ids or ranges such as 338..350 (default: every passed task)")
         if name == "reflect":
             s.add_argument("--evidence", help="what was found: the product owner's words, a report, a rejection reason; `-` reads stdin")
             s.add_argument("--dismiss", help="why the evidence so far needs no change of course (a false alarm, a task-sized fix): later screens skip it")
             s.add_argument("--against", action="append", help="a Linear line the evidence contradicts, quoted; repeatable")
         if name == "hold":
-            s.add_argument("--only", help="comma-separated task ids to hold")
+            s.add_argument("--only", help="comma-separated task ids or ranges such as 338..350 to hold")
             s.add_argument("--rests-on", dest="rests_on", help="comma-separated refs: an issue id, a tech doc title, a decision id (D3), or reflect; holds every unfinished task resting on them")
             s.add_argument("--reason", help="one line: why they wait")
             s.add_argument("--release", help="comma-separated task ids, or all")

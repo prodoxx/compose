@@ -60,7 +60,7 @@ def cmd_route(a):
     repo = Path(a.repo).resolve()
     tasks = fc_tasks.runnable(fc_tasks.load_tasks(proj, required=True))
     if a.only:
-        ids = {x.strip() for x in a.only.split(",") if x.strip()}
+        ids = set(fc_core.task_ids(a.only))
         tasks = [m for m in tasks if m["id"] in ids]
     if not tasks:
         line = "no tasks on Linear under this feature carry a compose block"

@@ -249,7 +249,7 @@ def cmd_testcrews(a):
     if not contract_file.exists():
         sys.exit(f"no contract at {contract_file}: the groundwork teammate writes it after the stubs (compose groundwork, phase C)")
     contract, budget, redo = contract_file.read_text(), getattr(a, "budget", None), bool(getattr(a, "redo", False))
-    only = {x.strip() for x in a.only.split(",")} if a.only else None
+    only = set(fc_core.task_ids(a.only)) if a.only else None
     tasks = fc_tasks.load_tasks(proj, required=True)
     finished = lambda m: fc_tasks.task_finished(proj, m, redo) or (not redo and test_collected(proj, m["id"]))  # a finished task needs no test writer
     metas = [m for m in tasks if (not only or m["id"] in only) and not finished(m)]
@@ -449,7 +449,7 @@ def collect_tests(proj, only=None, force=False):
         return collect_tests_locked(proj, wt, only, force)
 
 def collect_tests_locked(proj, wt, only, force):
-    want = {x.strip() for x in only.split(",")} if only else None
+    want = set(fc_core.task_ids(only)) if only else None
     everyone = fc_tasks.load_tasks(proj, required=True)
     by_id = {m["id"]: m for m in everyone if not want or m["id"] in want}
     ids = sorted(by_id)
