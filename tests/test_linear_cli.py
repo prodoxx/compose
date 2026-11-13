@@ -172,6 +172,23 @@ class LinearStates(unittest.TestCase):
             self.done("003,004")
         self.assertEqual([c.args[1] for c in close.call_args_list], ["003", "004"])
 
+    def test_done_by_hand_ends_the_design_builder_that_never_reported_done(self):
+        """#479: `compose done` on a design task exited 0 and wrote no report, so its builder stayed `working` and `crew stop` refused."""
+        crew = self.proj / "results" / "crew"
+        crew.mkdir(parents=True)
+        name = fc.fc_herdr.agent_name(self.proj.name, "design-003")
+        (crew / f"{name}.json").write_text(json.dumps({"name": name, "role": "design-003", "tab": "t1"}))
+        fc.fc_crew.write_report(self.proj, name, "working", "design ready: C5 chips")
+        with mock.patch.object(fc.fc_crew, "close_after_turn") as close, mock.patch.object(fc.fc_crew, "crew_attention"):
+            self.done("003")
+            self.done("003")  # run again: the builder is already done, and says nothing twice
+            self.done("004")  # a task with no builder of its own
+        last = fc.fc_crew.crew_reports(self.proj, name)
+        self.assertEqual([r["state"] for r in last], ["working", "done"])
+        self.assertEqual(last[-1]["message"], "task 003 accepted by hand: finished by hand in the lead's tab")
+        close.assert_called_once_with(self.proj, name)
+        self.assertEqual(list(crew.glob("*.status")), [crew / f"{name}.status"])
+
 class SyncFromLinear(unittest.TestCase):
     """Feature ENG-1 > stories ENG-2, ENG-3 > tasks; ENG-2 has 3 tasks served 2 per page."""
     def setUp(self):

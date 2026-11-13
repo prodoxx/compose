@@ -1,6 +1,6 @@
 import json, os, sys, time
 from pathlib import Path
-import fc_cost, fc_core, fc_load, fc_tasks, fc_worktree, fc_layers, fc_blockers, fc_budget, fc_change, fc_linear, fc_ledger, fc_tierpin, fc_tierspend, fc_update, fc_routecost, fc_shed, fc_history, fc_herdr, fc_fleet, fc_manager
+import fc_cost, fc_core, fc_load, fc_tasks, fc_worktree, fc_layers, fc_blockers, fc_budget, fc_change, fc_linear, fc_ledger, fc_tierpin, fc_tierspend, fc_update, fc_routecost, fc_shed, fc_history, fc_herdr, fc_fleet, fc_manager, fc_crew
 
 
 def project_head(repo, proj):
@@ -356,6 +356,20 @@ def cmd_status(a):
         print(l)
     print("\n".join(render_status(wt, [proj]) for wt, proj in projects.values()), end="")
 
+def report_task_done(proj, tid, note):
+    """A design task accepted by hand (`compose done`) ends its builder too: the builder `design-<tid>` reports `done` only when the designer
+    says so, and the designer's word is `compose done`, which exits 0 without telling the crew. So the report is written here, as `compose
+    report ... done` would, and the tab closes once the turn ends; the watch and `crew stop` then see it finished. Returns the teammate's
+    name, None when no such builder is on record or its last report is already `done`."""
+    name = fc_herdr.agent_name(proj.name, f"design-{tid}")
+    if not fc_crew.crew_record(proj, name) or (fc_crew.crew_reports(proj, name) or [{}])[-1].get("state") == "done":
+        return None
+    message = f"task {tid} accepted by hand: {note}"
+    fc_crew.write_report(proj, name, "done", message)
+    fc_crew.crew_attention(proj, name, "done", message)
+    fc_crew.close_after_turn(proj, name)
+    return name
+
 def cmd_done(a):
     """Record that the team lead finished tasks by hand (status hand_done) so `status` tells the truth, and move each one In
     Review on Linear with the reason, rolling its story and feature up as a passed task does. Requires a reason."""
@@ -387,6 +401,8 @@ def cmd_done(a):
         print(f"{tid} hand_done  {meta.get('title', '')}  ({a.note})")
         fc_linear.linear_event(proj, meta, "hand_done", prev)
         fc_fleet.close_task(proj, tid)  # the pi pane of its earlier attempts
+        if builder := report_task_done(proj, tid, a.note):  # a design task's Claude builder: `done` is the designer's word, and it reported nothing
+            print(f"{tid} reported done for {builder}; its tab closes when its turn ends")
     if unsaved:
         sys.exit(1)
 
