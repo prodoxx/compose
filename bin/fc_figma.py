@@ -1,7 +1,7 @@
 import argparse, json, os, re, subprocess, sys, time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-import fc_core, fc_config, fc_pace, fc_steps, fc_tasks, fc_linear, fc_models, fc_herdr, fc_fleet, fc_crew, fc_init, fc_figmaplan, fc_figmanodes, fc_figmashots
+import fc_core, fc_config, fc_pace, fc_steps, fc_tasks, fc_linear, fc_models, fc_textmodel, fc_herdr, fc_fleet, fc_crew, fc_init, fc_figmaplan, fc_figmanodes, fc_figmashots
 
 
 FIGMA_CONNECTOR = ("Figma tools: the authenticated Figma connector, `mcp__claude_ai_Figma__*` or the Figma plugin's `mcp__plugin_figma_figma__*` (the same server; use whichever ToolSearch finds), is for WRITES ONLY: `use_figma` (and the `create_session` it needs), never a read-only script, and never `whoami`, `get_libraries`, `search_design_system`, or `create_new_file`. Load it in one ToolSearch select call.\n"
@@ -465,6 +465,10 @@ def cmd_figma(a):
     for tid, text in fc_tasks.criteria_from_tasks(proj):
         crits.setdefault(tid, []).append(text)
     threshold = cfg.get("acceptance_threshold", 0.6)
+    try:  # a dead fast model is one line before any task is judged, not a BLOCKED line after rows that read like design findings
+        fc_textmodel.check(env, fc_models.fast_json)
+    except fc_textmodel.TextModelError as e:
+        sys.exit(f"figma judge stopped before judging anything: {e}")
     bad = 0
     for tid in a.only.split(","):
         meta = tasks.get(tid)
@@ -524,6 +528,8 @@ def cmd_figma(a):
                     row["confirmed"], row["evidence"] = fc_models.confirm_call(env, system, user, key="violated")
                 except fc_models.PaymentRequired:
                     raise
+                except fc_textmodel.TextModelError as e:
+                    sys.exit(f"figma judge stopped, nothing recorded for {tid}: {e}")
                 except Exception as e:  # noqa: BLE001
                     errors.append(str(e))
                     continue
@@ -548,6 +554,8 @@ def cmd_figma(a):
                         row["choice"] = "MET"
                 except fc_models.PaymentRequired:
                     raise
+                except fc_textmodel.TextModelError as e:
+                    sys.exit(f"figma judge stopped, nothing recorded for {tid}: {e}")
                 except Exception as e:  # noqa: BLE001
                     row["confirmed"], row["evidence"], row["judge_error"] = False, str(e), True
             if not row.get("judge_error"):  # an error is never re-asked into a pass

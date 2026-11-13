@@ -9,6 +9,7 @@ _spec = importlib.util.spec_from_loader("fc", importlib.machinery.SourceFileLoad
 fc = importlib.util.module_from_spec(_spec)
 for _m in [m for m in sys.modules if m.startswith("fc_") and m not in ("fc_cost", "fc_mcp", "fc_sessions")]: del sys.modules[_m]
 _spec.loader.exec_module(fc)
+import fc_textmodel  # loaded by fc_models, not named by compose.py
 
 
 class FigmaCheck(unittest.TestCase):
@@ -325,6 +326,23 @@ class FigmaJudge(unittest.TestCase):
             self.assertIn(needle, str(e.exception))
             self.assertNotIn("\n", str(e.exception))
             self.assertEqual("no node tree" in str(e.exception), only == "003")
+
+    def test_a_gone_fast_model_stops_figma_judge_before_any_task_is_judged(self):
+        # entry 93 and 94: Jev's verdicts printed as UNCLEAR and one BLOCKED line after them, for a model OpenRouter no longer served
+        gone = fc_textmodel.TextModelError("the fast text model x/y is not available (HTTP 404: gone): set TEXT_MODEL in ~/.compose/.env")
+        with mock.patch.object(fc_textmodel, "check", side_effect=gone), self.assertRaises(SystemExit) as e:
+            self.judge("001", {"Cart page": [("MET", 0.9), ("MET", 0.9)]})
+        self.assertEqual(str(e.exception), f"figma judge stopped before judging anything: {gone}")
+        self.assertEqual((self.ask.called, self.ev.called), (False, False))
+        self.assertFalse((self.proj / "results" / "001.json").exists())
+
+    def test_a_fast_model_that_dies_mid_judge_stops_it_with_the_model_error_and_no_rows(self):
+        gone = fc_textmodel.TextModelError("the fast text model x/y is not available (HTTP 404: gone): set TEXT_MODEL in ~/.compose/.env")
+        with self.assertRaises(SystemExit) as e:
+            self.judge("001", {"Cart page": [("NOT_MET", 0.9), ("UNCLEAR", 0.3)]}, fail=gone)
+        self.assertEqual(str(e.exception), f"figma judge stopped, nothing recorded for 001: {gone}")
+        self.assertFalse((self.proj / "results" / "001.json").exists())
+        self.assertNotIn("UNCLEAR", self.out.getvalue())
 
     def test_a_billing_halt_from_the_confirm_call_stops_the_command(self):
         with self.assertRaises(fc.fc_models.PaymentRequired):

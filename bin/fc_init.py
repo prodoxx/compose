@@ -1,6 +1,6 @@
 import json, os, re, shutil, subprocess, sys, urllib.error, urllib.request
 from pathlib import Path
-import fc_auth, fc_checks, fc_config, fc_core, fc_harness, fc_steps, fc_tasks, fc_linear, fc_providers, fc_herdr, fc_fleet, fc_worktree, fc_layers, fc_crew, fc_pin
+import fc_auth, fc_checks, fc_config, fc_core, fc_harness, fc_models, fc_textmodel, fc_steps, fc_tasks, fc_linear, fc_providers, fc_herdr, fc_fleet, fc_worktree, fc_layers, fc_crew, fc_pin
 
 
 TRAIL_INIT = ["trail", "init", "--no-agents", "--no-global", "--no-build"]  # Claude Code wiring only, nothing outside the repo
@@ -160,14 +160,25 @@ def key_problems():
             warnings.append(f"WARNING: could not check the {name} key ({'no answer' if status is None else 'HTTP ' + str(status)}): the work may stop later if it is bad")
     return problems, warnings
 
+def text_model_problems():
+    """The line saying the fast text model is gone, with the `.env` line to change, as a one-element list; [] when it answers or the
+    check cannot tell (fc_models.check_text_model: a pass is kept for the day, and a claude: model, no key, or COMPOSE_NO_PREFLIGHT=1 makes no call)."""
+    try:
+        fc_textmodel.check(fc_models.fast_env(), fc_models.fast_json)
+    except fc_textmodel.TextModelError as e:
+        return [str(e)]
+    return []
+
 def start_problems(repo, tree=True, hint="commit or discard them", proj=None):
     """(problems, warnings) to settle before long work starts, all at once so they are fixed in one pass: a work tree with changes
     of the user's (fc_worktree.dirty_paths ignores compose's and the tools' own files), a key its service rejects (key_problems),
+    a fast text model its provider no longer serves (text_model_problems),
     docker down or unhealthy where the project's compose file needs it (fc_checks.docker_problems), a database target that is not
     the one recorded in `proj`'s verify.json (fc_checks.database_problems), and the machine warnings (fc_checks.machine_warnings).
     `tree=False` skips the tree, for verify, which tolerates it. A problem is a line with its fix; a warning starts with WARNING.
     COMPOSE_NO_PREFLIGHT=1 drops everything but the tree."""
     problems, warnings = key_problems()
+    problems += text_model_problems()
     if not os.environ.get("COMPOSE_NO_PREFLIGHT"):
         warnings += fc_checks.machine_warnings()
         problems += fc_checks.docker_problems(repo)
@@ -217,7 +228,7 @@ def cmd_doctor(a):
     Warns, never stops, when a key still sits in config.json or .env: it differs from the key auth.json holds, so it was left
     there - remove the one you do not want. herdr's loud toasts or sounds are one optional row of check_deps, fixed by `compose setup`.
     Then the preflight run and verify repeat at their start (start_problems): a `PROBLEM:` line with its fix for each key its
-    service rejects and, in the work tree of --project, for changes of the user's that run refuses;
+    service rejects, a fast text model its provider no longer serves and, in the work tree of --project, for changes of the user's that run refuses;
     WARNING lines for a Mac on battery, a loaded machine and docker containers in a crash loop. A problem exits 1 as well."""
     bad = check_deps()
     if shutil.which("gh") and fc_core.sh(["gh", "auth", "status"], Path.home(), check=False, timeout=20).returncode != 0:

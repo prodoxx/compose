@@ -102,6 +102,20 @@ class PiWrites(unittest.TestCase):
         self.twice(pi.write_text_model, env)
         self.assertEqual(env.read_text(), mine)
 
+    def test_a_retired_default_is_replaced_in_place_and_nothing_else_is(self):
+        # compose setup used to write inception/mercury-2.5, which OpenRouter dropped: that line is never the user's choice, so it is swapped
+        env, d = self.dir / ".env", pi.TEXT_MODEL_DEFAULTS
+        env.write_text("TEXT_MODEL=inception/mercury-2.5\nTEXT_MODEL_API_KEY=sk-or-test\nTEXT_MODEL_BASE_URL=http://mine\nTEXT_MODEL_REASONING=none\n")
+        self.assertFalse(pi.text_model_set(env))
+        line = pi.write_text_model(env)
+        self.assertIn("replaced TEXT_MODEL inception/mercury-2.5 (OpenRouter no longer serves it) with " + d["TEXT_MODEL"], line)
+        self.assertEqual(env.read_text(), f"TEXT_MODEL={d['TEXT_MODEL']}\nTEXT_MODEL_API_KEY=sk-or-test\nTEXT_MODEL_BASE_URL=http://mine\nTEXT_MODEL_REASONING=none\n")
+        self.assertTrue(pi.text_model_set(env))
+        env.write_text('TEXT_MODEL="inception/mercury-2.5"\n')
+        self.assertIn("appended TEXT_MODEL_BASE_URL", pi.write_text_model(env))
+        self.assertEqual(env.read_text(), f"TEXT_MODEL={d['TEXT_MODEL']}\nTEXT_MODEL_BASE_URL={d['TEXT_MODEL_BASE_URL']}\n")
+        self.assertIn("left as is", pi.write_text_model(env))
+
 
 class PreviewProvider(unittest.TestCase):
     def setUp(self):

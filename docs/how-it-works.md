@@ -245,6 +245,7 @@ With reasoning `none`, the model plans but never edits, and `low` fixed that at 
 
 The reviewer is the config's `models.review`, such as `claude:claude-sonnet-5-5`.
 Without it, the reviewer is whichever model `~/.compose/.env` names as `TEXT_MODEL`, which defaults to Claude Sonnet 5.5 through OpenRouter.
+A fast model its provider no longer serves is reported as that, with the `.env` line to change, before `run`, `verify`, `figma judge`, or `prove` spends time on it, and never as a finding about the work.
 You set the planner and teammate models per role in the config, as [workspaces.md](workspaces.md#crew-models) describes.
 
 These figures come from small benchmarks and one prototype.

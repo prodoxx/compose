@@ -1,13 +1,13 @@
 """pi's openrouter-fast provider in models.json, pi's own auth.json overrides, and the TEXT_MODEL lines in ~/.compose/.env."""
 import json
 from pathlib import Path
-import fc_core, fc_models
+import fc_core, fc_models, fc_textmodel
 
 
 PI_MODELS = fc_models.PI_AGENT_DIR / "models.json"
 PROVIDER = {"baseUrl": "https://openrouter.ai/api/v1", "api": "openai-completions", "apiKey": "$OPENROUTER_API_KEY",
             "models": [{"id": "z-ai/glm-5.3-flash@preset/glm-5-3-flash-fast", "cost": {"input": 0.15, "output": 0.5, "cacheRead": 0, "cacheWrite": 0}}]}
-TEXT_MODEL_DEFAULTS = {"TEXT_MODEL": "anthropic/claude-sonnet-5.5", "TEXT_MODEL_BASE_URL": "https://openrouter.ai/api/v1"}
+TEXT_MODEL_DEFAULTS = {"TEXT_MODEL": fc_textmodel.TEXT_MODEL, "TEXT_MODEL_BASE_URL": fc_textmodel.TEXT_MODEL_BASE_URL}
 PI_AUTH = PI_MODELS.parent / "auth.json"
 
 def has_glm(models):
@@ -32,8 +32,12 @@ def provider_declared(path):
         return False
     return bool(provider.get("apiKey")) and has_glm(models)
 
+def retired(key, value):
+    """Whether this .env line is the TEXT_MODEL of a model OpenRouter no longer serves, which an older compose wrote as its default."""
+    return key.strip() == "TEXT_MODEL" and value.strip().strip("\"'") in fc_textmodel.RETIRED_TEXT_MODELS
+
 def text_model_set(env_path):
-    """True when the .env at env_path has TEXT_MODEL and TEXT_MODEL_BASE_URL lines with values."""
+    """True when the .env at env_path has TEXT_MODEL and TEXT_MODEL_BASE_URL lines with values, TEXT_MODEL not one compose retired."""
     try:
         lines = Path(env_path).read_text().splitlines()
     except OSError:
@@ -41,7 +45,7 @@ def text_model_set(env_path):
     found = set()
     for line in lines:
         key, sep, value = line.partition("=")
-        if sep and value.strip() and key.strip() in TEXT_MODEL_DEFAULTS:
+        if sep and value.strip() and key.strip() in TEXT_MODEL_DEFAULTS and not retired(key, value):
             found.add(key.strip())
     return set(TEXT_MODEL_DEFAULTS) <= found
 
@@ -111,18 +115,29 @@ def preview_provider(path):
     return f"would add {' and '.join(lacks)} to openrouter-fast in {path}"
 
 def write_text_model(env_path):
-    """Append the TEXT_MODEL_DEFAULTS lines the .env lacks, never changing existing ones; one line saying what it did."""
+    """Append the TEXT_MODEL_DEFAULTS lines the .env lacks, never changing existing ones but a TEXT_MODEL that names a retired
+    default (fc_textmodel.RETIRED_TEXT_MODELS), which is replaced in place; one line saying what it did."""
     path = Path(env_path)
     try:
         text = path.read_text()
     except FileNotFoundError:
         text = ""
-    have = set()
-    for line in text.splitlines():
+    have, swapped = set(), []
+    lines = text.splitlines()
+    for n, line in enumerate(lines):
         key, sep, value = line.partition("=")
+        if sep and value.strip() and retired(key, value):
+            swapped.append(value.strip().strip("\"'"))
+            lines[n] = f"TEXT_MODEL={TEXT_MODEL_DEFAULTS['TEXT_MODEL']}"
         if sep and value.strip():
             have.add(key.strip())
     missing = [(k, v) for k, v in TEXT_MODEL_DEFAULTS.items() if k not in have]
+    if swapped:
+        text = "\n".join(lines) + ("\n" if text.endswith("\n") else "")
+        path.write_text(text)
+        said = f"replaced TEXT_MODEL {swapped[0]} (OpenRouter no longer serves it) with {TEXT_MODEL_DEFAULTS['TEXT_MODEL']} in {path}"
+        if not missing:
+            return said
     if not missing:
         return f"{', '.join(TEXT_MODEL_DEFAULTS)} already set in {path}; left as is"
     add = "".join(f"{k}={v}\n" for k, v in missing)
@@ -131,4 +146,4 @@ def write_text_model(env_path):
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a") as f:
         f.write(add)
-    return f"appended {', '.join(k for k, _ in missing)} to {path}"
+    return (f"{said}; " if swapped else "") + f"appended {', '.join(k for k, _ in missing)} to {path}"

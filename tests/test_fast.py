@@ -10,6 +10,7 @@ _spec = importlib.util.spec_from_loader("fc", importlib.machinery.SourceFileLoad
 fc = importlib.util.module_from_spec(_spec)
 for _m in [m for m in sys.modules if m.startswith("fc_") and m not in ("fc_cost", "fc_mcp", "fc_sessions")]: del sys.modules[_m]
 _spec.loader.exec_module(fc)
+import fc_textmodel  # loaded by fc_models, not named by compose.py
 import fc_fast  # noqa: E402
 
 
@@ -331,3 +332,86 @@ class FastModelRequest(unittest.TestCase):
     def test_reasoning_follows_the_env(self):
         self.assertEqual(self.body({"TEXT_MODEL_REASONING": "none"})["reasoning"], {"enabled": False})
         self.assertEqual(self.body({"TEXT_MODEL_REASONING": "medium"})["reasoning"], {"effort": "medium"})
+
+
+class TextModelGone(unittest.TestCase):
+    """inception/mercury-2.5 left OpenRouter and every fast call answered HTTP 404: figma judge ended BLOCKED with criteria UNCLEAR, which
+    read like a design problem. A model the provider no longer serves is one TextModelError that says so and names the .env line to change."""
+    GONE = '{"error": {"message": "inception/mercury-2.5 is no longer available on OpenRouter: no provider serves this model anymore.", "code": 404}}'
+
+    def setUp(self):
+        self.calls = []
+        self.cache = Path(tempfile.mkdtemp()) / "model-probe.json"
+        for p in (mock.patch.object(fc.fc_config, "PROBE_CACHE", self.cache), mock.patch.object(fc.fc_config, "ENV_FILE", Path("/home/me/.compose/.env")),
+                  mock.patch.dict(os.environ, {"COMPOSE_NO_PREFLIGHT": ""})):
+            p.start(); self.addCleanup(p.stop)
+
+    def refuse(self, code, body):
+        def http_json(req, provider, timeout=None):
+            self.calls.append(json.loads(req.data)["model"])
+            raise fc_textmodel.HttpRefused(f"{provider}: HTTP {code} X: {body}", code, body)
+        return mock.patch.object(fc.fc_models, "http_json", http_json)
+
+    def answer(self, content='{"say": "hi"}'):
+        def http_json(req, provider, timeout=None):
+            self.calls.append(json.loads(req.data)["model"])
+            return {"choices": [{"message": {"content": content}, "finish_reason": "stop"}], "usage": {}}
+        return mock.patch.object(fc.fc_models, "http_json", http_json)
+
+    ENV = {"TEXT_MODEL": "inception/mercury-2.5", "TEXT_MODEL_API_KEY": "k"}
+
+    def test_a_404_is_a_text_model_error_with_the_providers_words_and_the_fix(self):
+        for call in (lambda: fc.fc_models.fast_json(self.ENV, "s", "u"), lambda: fc.fc_models.confirm_call(self.ENV, "s", "u"),
+                     lambda: fc.fc_models.fast_object(self.ENV, "s", "u", "{}", "k")):
+            with self.refuse(404, self.GONE), self.assertRaises(fc_textmodel.TextModelError) as e:
+                call()
+            self.assertIn("the fast text model inception/mercury-2.5 is not available (HTTP 404: inception/mercury-2.5 is no longer available on OpenRouter", str(e.exception))
+            self.assertIn("set TEXT_MODEL in /home/me/.compose/.env to a model your provider serves (anthropic/claude-sonnet-5.5 is compose's default)", str(e.exception))
+        self.assertEqual(len(self.calls), 3)  # a refusal that stays is asked once
+
+    def test_a_400_that_names_the_model_is_one_too_but_other_refusals_are_not(self):
+        with self.refuse(400, '{"error": {"message": "x/y is not a valid model ID"}}'), self.assertRaises(fc_textmodel.TextModelError):
+            fc.fc_models.fast_json(self.ENV, "s", "u")
+        for code, body in ((400, '{"error": {"message": "max_tokens must be greater than the reasoning budget"}}'), (401, "no auth"), (500, "boom")):
+            with self.refuse(code, body), self.assertRaises(fc_textmodel.HttpRefused) as e:
+                fc.fc_models.fast_json(self.ENV, "s", "u")
+            self.assertNotIsInstance(e.exception, fc_textmodel.TextModelError)
+
+    def test_no_key_is_a_text_model_error_not_a_key_error(self):
+        with self.assertRaises(fc_textmodel.TextModelError) as e:
+            fc.fc_models.fast_json({"TEXT_MODEL": "a/b"}, "s", "u")
+        self.assertIn("a/b has no key to be asked with", str(e.exception))
+
+    def test_the_check_stops_on_a_gone_model_and_keeps_a_pass_for_the_day(self):
+        with self.refuse(404, self.GONE), self.assertRaises(fc_textmodel.TextModelError):
+            fc_textmodel.check(self.ENV, fc.fc_models.fast_json)
+        self.assertFalse(self.cache.exists())  # a failure is never cached
+        env = {**self.ENV, "TEXT_MODEL": "anthropic/claude-sonnet-5.5"}
+        with self.answer():
+            fc_textmodel.check(env, fc.fc_models.fast_json); fc_textmodel.check(env, fc.fc_models.fast_json)
+        self.assertEqual(self.calls, ["inception/mercury-2.5", "anthropic/claude-sonnet-5.5"])  # one tiny call, then the cache answers
+        other = {**env, "TEXT_MODEL": "other/model"}
+        with self.answer():
+            fc_textmodel.check(other, fc.fc_models.fast_json)
+        self.assertEqual(self.calls[-1], "other/model")
+
+    def test_the_check_says_nothing_when_it_cannot_tell(self):
+        for code, body in ((401, "no"), (429, "busy"), (500, "boom")):
+            with self.refuse(code, body):
+                fc_textmodel.check(self.ENV, fc.fc_models.fast_json)
+        with self.answer(content=""):
+            fc_textmodel.check(self.ENV, fc.fc_models.fast_json)
+        self.assertFalse(self.cache.exists())
+        calls = len(self.calls)
+        with self.refuse(404, self.GONE):
+            fc_textmodel.check({"TEXT_MODEL": "claude:claude-sonnet-5-5", "TEXT_MODEL_API_KEY": "k"}, fc.fc_models.fast_json)  # Claude Code on the subscription: no call
+            fc_textmodel.check({"TEXT_MODEL": "inception/mercury-2.5"}, fc.fc_models.fast_json)  # no key: the setup row's business
+            with mock.patch.dict(os.environ, {"COMPOSE_NO_PREFLIGHT": "1"}):
+                fc_textmodel.check(self.ENV, fc.fc_models.fast_json)  # offline work
+        self.assertEqual(len(self.calls), calls)
+
+    def test_the_default_is_written_once(self):
+        import fc_pi  # what `compose setup` writes into a new .env is the id fast_json falls back to
+        self.assertEqual(fc_pi.TEXT_MODEL_DEFAULTS["TEXT_MODEL"], fc_textmodel.TEXT_MODEL)
+        self.assertEqual(fc_pi.TEXT_MODEL_DEFAULTS["TEXT_MODEL_BASE_URL"], fc_textmodel.TEXT_MODEL_BASE_URL)
+        self.assertNotIn(fc_textmodel.TEXT_MODEL, fc_textmodel.RETIRED_TEXT_MODELS)

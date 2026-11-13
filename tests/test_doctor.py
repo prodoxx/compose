@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bin"))
 for _m in [m for m in sys.modules if m.startswith("fc_") and m not in ("fc_cost", "fc_mcp", "fc_sessions")]: del sys.modules[_m]
 sys.modules.pop("compose", None)  # another test file may have imported it against the fc_ modules just dropped
 import compose as fc
-import fc_steps, fc_auth, fc_checks
+import fc_steps, fc_auth, fc_checks, fc_textmodel
 
 CLI = str(Path(__file__).resolve().parents[1] / "bin" / "compose.py")
 TOOLS = {"herdr": "0.9.3", "treehouse": "v3.1.2", "trail": "0.23.0", "gh": "gh version 2.94.0", "pi": "1.0.3", "claude": "2.1.301 (Claude Code)", "npx": "11.19.0", "bp": ""}
@@ -516,6 +516,15 @@ class Preflight(unittest.TestCase):
             self.assertEqual(fc.fc_init.key_problems(), (["the OpenRouter key has no credit left: raise its limit or add credit at openrouter.ai/settings/credits"], []))
         with self.serve(openrouter=Answer({"data": {"limit_remaining": None}}), linear=Answer({})):  # no limit set
             self.assertEqual(fc.fc_init.key_problems(), ([], []))
+
+    def test_a_gone_fast_text_model_is_a_problem_with_the_fix(self):
+        err = fc_textmodel.TextModelError("the fast text model x/y is not available (HTTP 404: gone): set TEXT_MODEL in ~/.compose/.env")
+        with mock.patch.object(fc_textmodel, "check", side_effect=err), self.serve(openrouter=Answer({"data": {"limit_remaining": None}}), linear=Answer({})):
+            problems, _ = fc.fc_init.start_problems(self.repo, tree=False)
+        self.assertEqual(problems, [str(err)])
+        with mock.patch.object(fc_textmodel, "check") as check, self.serve(openrouter=Answer({"data": {"limit_remaining": None}}), linear=Answer({})):
+            self.assertEqual(fc.fc_init.start_problems(self.repo, tree=False)[0], [])
+        check.assert_called_once()
 
     def test_a_service_that_does_not_answer_is_a_warning_never_a_verdict(self):
         with self.serve(openrouter=urllib.error.URLError("offline"), linear=503):

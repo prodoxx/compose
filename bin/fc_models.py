@@ -1,6 +1,6 @@
 import base64, json, os, re, subprocess, sys, time, urllib.error, urllib.request, uuid
 from pathlib import Path
-import fc_core, fc_config, fc_claude, fc_harness, fc_proc, fc_readguard, fc_providers, fc_tiers, fc_notify
+import fc_core, fc_config, fc_claude, fc_textmodel, fc_harness, fc_proc, fc_readguard, fc_providers, fc_tiers, fc_notify
 
 
 def opencode(cwd, model, prompt, session=None, timeout=600):
@@ -213,7 +213,7 @@ def http_json(req, provider, timeout=90):
             if e.code in BUSY and wait is not None:
                 time.sleep(busy_wait(wait, retry_after))
                 continue
-            raise RuntimeError(f"{provider}: HTTP {e.code} {e.reason}: {body.strip()}") from e
+            raise fc_textmodel.HttpRefused(f"{provider}: HTTP {e.code} {e.reason}: {body.strip()}", e.code, body) from e
         err = out.get("error") if isinstance(out, dict) else None
         if err:
             payment_check(provider, json.dumps(err), (err.get("code") if isinstance(err, dict) else None))
@@ -436,7 +436,6 @@ def fast_env():
     """The env a fast-model call reads: ~/.compose/.env, overridden by the process env (the workspace key)."""
     return {**fc_core.load_env(fc_config.ENV_FILE), **os.environ}
 
-TEXT_MODEL = "anthropic/claude-sonnet-5.5"  # the fast text model when ~/.compose/.env names none (fc_pi.TEXT_MODEL_DEFAULTS writes it there)
 def reasoning(env):
     """OpenRouter's `reasoning`, as jev sends it: TEXT_MODEL_REASONING=none turns it off, else it is the effort (`low` unset); Sonnet 5.5 refuses it off."""
     return {"enabled": False} if (level := (env.get("TEXT_MODEL_REASONING") or "low").strip()) == "none" else {"effort": level}
@@ -447,13 +446,13 @@ def fast_json(env, system, user, max_tokens=1500, timeout=90, key=None):
     holding it is the one read."""
     if fc_claude.is_claude(env.get("TEXT_MODEL", "")):  # no token cap to cut it off; a whole diff takes longer than a fast model
         return parse_reply(fc_claude.claude_json(fc_core.scrub(system), fc_core.scrub(user), env["TEXT_MODEL"], timeout=max(timeout, 300)), False, max_tokens, key)
-    body = {"model": env.get("TEXT_MODEL", TEXT_MODEL), "max_tokens": max_tokens, "temperature": 0,  # the same code gets the same review
+    body = {"model": env.get("TEXT_MODEL", fc_textmodel.TEXT_MODEL), "max_tokens": max_tokens, "temperature": 0,  # the same code gets the same review
             "response_format": {"type": "json_object"}, "reasoning": reasoning(env), "usage": {"include": True},
             "messages": [{"role": "system", "content": fc_core.scrub(system)}, {"role": "user", "content": fc_core.scrub(user)}]}
-    req = urllib.request.Request(env.get("TEXT_MODEL_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/") + "/chat/completions",
+    req = urllib.request.Request(env.get("TEXT_MODEL_BASE_URL", fc_textmodel.TEXT_MODEL_BASE_URL).rstrip("/") + "/chat/completions",
                                  data=json.dumps(body).encode(),
-                                 headers={"Authorization": f"Bearer {env['TEXT_MODEL_API_KEY']}", "Content-Type": "application/json"})
-    out = http_json(req, "openrouter (fast model)", timeout=timeout)
+                                 headers={"Authorization": f"Bearer {fc_textmodel.key(env, body['model'])}", "Content-Type": "application/json"})
+    out = fc_textmodel.call(http_json, req, "openrouter (fast model)", body["model"], timeout)
     u = out.get("usage", {})
     fc_core.LEDGER.add("openrouter", u.get("prompt_tokens", 0), u.get("completion_tokens", 0), u.get("cost"))
     choice = (out.get("choices") or [{}])[0]
@@ -473,7 +472,7 @@ def parse_reply(content, cut, max_tokens, key):
 CUT_RETRY = 4  # a reply cut off at its budget is asked again with this many times the budget; the same budget would cut it again
 def fast_json_whole(env, system, user, max_tokens=1500, timeout=90):
     """fast_json, asked once more: with CUT_RETRY times the budget when the reply was cut off at it, with the same budget when
-    it was empty or not valid JSON (Mercury returns a key without its opening quote about once in 30 replies)."""
+    it was empty or not valid JSON (a small fast model sometimes returns a key without its opening quote)."""
     try:
         return fast_json(env, system, user, max_tokens=max_tokens, timeout=timeout)
     except CutOff:

@@ -1,7 +1,7 @@
 import hashlib, json, os, re, sys, time
 from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
-import fc_core, fc_config, fc_models, fc_tasks, fc_worktree, fc_layers, fc_jev, fc_verify, fc_ledger
+import fc_core, fc_config, fc_models, fc_textmodel, fc_tasks, fc_worktree, fc_layers, fc_jev, fc_verify, fc_ledger
 
 
 # A query or fragment key that forces a flag or experiment variant for whoever opens the URL, which no real user's page carries.
@@ -156,6 +156,10 @@ def cmd_prove(a):
     if not cfg.get("e2e"):
         fc_core.say("prove  nothing to prove: verify.json has no e2e cases")
         sys.exit(0)
+    try:  # the model that classifies a failing case: found gone before the cases run, not after them
+        fc_textmodel.check({**fc_core.load_env(cfg.get("env_file", fc_config.ENV_FILE)), **os.environ}, fc_models.fast_json)
+    except fc_textmodel.TextModelError as e:
+        sys.exit(f"prove stopped, nothing run or recorded: {e}")
     root, rooted, wt = prove_root(repo, proj, cfg, getattr(a, "only", None))
     t0 = time.time()
     fc_core.say(f"prove  start project={proj.name} cases={len(cfg['e2e'])}")

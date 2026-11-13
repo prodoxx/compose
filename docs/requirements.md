@@ -122,7 +122,7 @@ These need no install.
 
 | Variable | Effect |
 |---|---|
-| `COMPOSE_NO_PREFLIGHT=1` | `doctor` and the start of `run`, `resume`, and `verify` skip the key calls, the gh login check, and the machine warnings (offline work); the uncommitted-changes check stays |
+| `COMPOSE_NO_PREFLIGHT=1` | `doctor` and the start of `run`, `resume`, and `verify` skip the key calls, the fast-model check, the gh login check, and the machine warnings (offline work); the uncommitted-changes check stays |
 | `COMPOSE_NO_AWAKE=1` | `run`, `verify`, `watch`, and `crew start` start no `caffeinate`, so the Mac may sleep mid-run (the test suite sets it) |
 | `COMPOSE_CONFIG` | path of the config file; the files beside it in `~/.compose/` move with it. Project code that `run`, `verify`, and `compose timed` start gets one in a fresh scratch directory, and a change to `~/.compose` while it runs prints a `WARNING`, unless a compose outside it made that change (another session's `compose workspace`, say; compose journals each write it makes there in `~/.compose/home-writes.jsonl`) or it is in the CLI checkout |
 | `COMPOSE_NO_TREEHOUSE=1` | use plain git worktrees even with treehouse installed |

@@ -37,7 +37,7 @@ Without `claude` on the PATH it runs every step that does not need it, skips the
 | trail, treehouse | default | installs `@trailhq/trail-code` and treehouse | no |
 | bp, Chromium | default | links `bp` into `~/.local/bin` and installs Playwright's Chromium | no |
 | herdr config, herdr pi integration | default | writes herdr's config (below) and installs herdr's pi integration | no |
-| Models and `.env` | default | adds the default model choices to `~/.compose/config.json` and the `TEXT_MODEL` lines to `~/.compose/.env`, never overwriting what is there | no |
+| Models and `.env` | default | adds the default model choices to `~/.compose/config.json` and the `TEXT_MODEL` lines to `~/.compose/.env`, never overwriting what is there (but a `TEXT_MODEL` that names a model OpenRouter dropped, `inception/mercury-2.5`, is replaced by the default) | no |
 | git rerere, Claude Code permissions | default | sets `rerere.enabled` globally when it is unset; shows the narrow Claude Code permission rules `compose` needs and writes them to `~/.claude/settings.json` only on your yes (never with `--yes` or `--dry-run`) | no |
 | herdr claude integration | default | installs herdr's claude integration | yes |
 | Framelink | opt-in, designer | adds the `framelink-figma` MCP server and your Figma token, for the designer only | yes |
@@ -74,13 +74,14 @@ It also reports, all at once and with the fix for each, what would stop or spoil
 
 - uncommitted changes in the project worktree (the tools' own files and the agent wiring do not count),
 - an OpenRouter or Linear key that its service rejects, found with a free key-info call (`pbpaste | compose workspace key <workspace>` stores a new one),
+- a fast text model that its provider no longer serves, found with one tiny fast-model call that is kept for the day (the line names the `TEXT_MODEL` entry of `~/.compose/.env` to change; `figma judge` and `prove` check it as well before they start),
 - a Mac on battery, a load average far above the core count, and a docker container that keeps restarting, as warnings.
 
 `run`, `resume`, and `verify` make the same checks at their start, so a run never stops later to ask about them.
 While they work, compose holds a macOS `caffeinate -dims -w <pid>` assertion so the Mac and its display stay awake, and releases it when the process ends.
 Closing the lid on battery still sleeps the Mac, which `caffeinate` cannot prevent: plug it in or leave the lid open. On battery at 10% or less, `run`, `resume`, `verify`, and `crew start` refuse to start and say so; `--force` starts anyway.
 compose changes no power setting.
-Offline, `COMPOSE_NO_PREFLIGHT=1` skips the key calls, the gh check, and the machine warnings.
+Offline, `COMPOSE_NO_PREFLIGHT=1` skips the key calls, the fast-model check, the gh check, and the machine warnings.
 
 ## Each repo
 
