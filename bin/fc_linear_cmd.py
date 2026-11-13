@@ -293,10 +293,20 @@ def verb_create(a):
     inp.update(priority(a))
     if a.parent:
         inp["parentId"] = fc_linear.linear_issue(a.parent)["id"]
-    issue = fc_linear.linear_gql("mutation($in: IssueCreateInput!) { issueCreate(input: $in) { issue { id identifier } } }", {"in": inp})["issueCreate"]["issue"]
-    if ids(a.blocked_by):  # repeated or comma-separated: every one is a blocker
-        fc_linear.linear_blocked_by({"id": issue["id"]}, ids(a.blocked_by))
-    print(f"created {issue['identifier']}")
+    try:
+        issue = fc_linear.linear_gql("mutation($in: IssueCreateInput!) { issueCreate(input: $in) { issue { id identifier } } }", {"in": inp})["issueCreate"]["issue"]
+    except OSError as e:  # the connection or the server failed: Linear may have committed the issue, a refusal (RuntimeError) it did not
+        raise RuntimeError(f"{e}; the issue may have been created, so find it with `compose linear list --search \"{a.title}\"` before running create again") from e
+    print(f"created {issue['identifier']}")  # the id is out before the blockers are linked: a failure while linking must not hide it
+    if blockers := ids(a.blocked_by):  # repeated or comma-separated: every one is a blocker
+        linked = []
+        try:
+            fc_linear.linear_blocked_by({"id": issue["id"]}, blockers, linked=linked)
+        except (RuntimeError, OSError) as e:
+            missing = [b for b in blockers if b not in linked]
+            raise RuntimeError(f"{issue['identifier']} is created but not all its blockers are linked: {e}\n"
+                               f"linked: {', '.join(linked) or 'none'}; missing: {', '.join(missing)}; finish with "
+                               f"`compose linear update {issue['identifier']} --add-blocked-by {','.join(missing)}`, and do not run create again") from e
 
 def ids(values):
     """The issue ids in repeated or comma-separated flag values, empty ones dropped."""

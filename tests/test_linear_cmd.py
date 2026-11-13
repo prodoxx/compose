@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import importlib.machinery, importlib.util, io, json, os, subprocess, tempfile, time, unittest
+import importlib.machinery, importlib.util, io, json, os, subprocess, tempfile, time, unittest, urllib.error
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
@@ -367,7 +367,7 @@ class LinearCreate(unittest.TestCase):
         (body := self.repo / "body.md").write_text("Steps.")
         sent, issue, blocked = self.create(file=str(body), parent="ENG-1", state="todo", label=["BUG"], blocked_by=["ENG-2,ENG-3"])
         self.assertEqual(sent, [{"teamId": "t1", "projectId": "p1", "title": "Fix it", "description": "Steps.", "parentId": "parent-id", "stateId": "s1", "labelIds": ["l1"]}])
-        issue.assert_any_call("ENG-1"); blocked.assert_called_once_with({"id": "new-id"}, ["ENG-2", "ENG-3"])
+        issue.assert_any_call("ENG-1"); blocked.assert_called_once_with({"id": "new-id"}, ["ENG-2", "ENG-3"], linked=[])
 
     def test_a_repeated_blocked_by_keeps_every_blocker(self):
         # a planner passed --blocked-by twice to create and only the last blocker was linked
@@ -379,7 +379,44 @@ class LinearCreate(unittest.TestCase):
             compose.main()
         self.assertEqual(fc.fc_linear_cmd.ids(got[0]), ["ENG-2", "ENG-3", "ENG-4"])
         _, _, blocked = self.create(blocked_by=got[0])
-        blocked.assert_called_once_with({"id": "new-id"}, ["ENG-2", "ENG-3", "ENG-4"])
+        blocked.assert_called_once_with({"id": "new-id"}, ["ENG-2", "ENG-3", "ENG-4"], linked=[])
+
+    def create_failing(self, relation_fails_at=None, create_fails=False):
+        """`compose linear create --blocked-by ENG-2,ENG-3,ENG-4` against a Linear that fails with a 503 once: on the issueCreate call, or on the n-th relation."""
+        relations, down = [], urllib.error.HTTPError(URL, 503, "Service Unavailable", {}, None)
+        def gql(query, variables):
+            if "issueCreate" in query and create_fails:
+                raise down
+            if "inverseRelations" in query:
+                return {"issue": {"inverseRelations": {"nodes": []}}}
+            if "issueRelationCreate" in query:
+                if len(relations) + 1 == relation_fails_at:
+                    raise down
+                relations.append(variables["a"])
+                return {"issueRelationCreate": {"success": True}}
+            if "issue(id" in query:
+                return {"issue": {"id": "u-" + variables["id"]}}
+            return self.gql(query, variables)
+        with mock.patch.object(fc.fc_linear, "linear_gql", gql), redirect_stdout(io.StringIO()) as out:
+            code, msg = self.fails(fc.fc_linear_cmd.cmd_linear, self.args("create", title="Fix it", blocked_by=["ENG-2,ENG-3,ENG-4"]))
+        return code, msg, out.getvalue().strip(), relations
+
+    def test_a_failure_while_linking_blockers_still_prints_the_id_and_names_what_is_left(self):
+        # a 503 on the third link left the issue with two of three blockers and no id (#471, #460)
+        code, msg, out, relations = self.create_failing(relation_fails_at=3)
+        self.assertEqual((code, out, relations), (1, "created ENG-12", ["u-ENG-2", "u-ENG-3"]))
+        self.assertEqual(msg, "linear create: ENG-12 is created but not all its blockers are linked: HTTP Error 503: Service Unavailable\n"
+                              "linked: ENG-2, ENG-3; missing: ENG-4; finish with `compose linear update ENG-12 --add-blocked-by ENG-4`, and do not run create again")
+        code, msg, out, _ = self.create_failing(relation_fails_at=1)
+        self.assertEqual(out, "created ENG-12")
+        self.assertIn("linked: none; missing: ENG-2, ENG-3, ENG-4;", msg)
+        self.assertIn("--add-blocked-by ENG-2,ENG-3,ENG-4`", msg)
+
+    def test_a_server_error_on_the_create_call_says_the_issue_may_exist(self):
+        code, msg, out, relations = self.create_failing(create_fails=True)
+        self.assertEqual((code, out, relations), (1, "", []))
+        self.assertEqual(msg, 'linear create: HTTP Error 503: Service Unavailable; the issue may have been created, '
+                              'so find it with `compose linear list --search "Fix it"` before running create again')
 
     def test_priority_takes_a_name_or_linears_number_on_create_and_update(self):
         for given, want in (("urgent", 1), ("High", 2), ("medium", 3), ("low", 4), ("none", 0), ("0", 0), ("4", 4)):
