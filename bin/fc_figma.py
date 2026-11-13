@@ -1,7 +1,7 @@
-import argparse, json, os, re, subprocess, sys, time
+import argparse, json, os, re, sys, time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-import fc_core, fc_config, fc_pace, fc_steps, fc_tasks, fc_linear, fc_models, fc_textmodel, fc_herdr, fc_fleet, fc_crew, fc_init, fc_figmaplan, fc_figmanodes, fc_figmashots
+import fc_core, fc_config, fc_tasks, fc_linear, fc_models, fc_textmodel, fc_herdr, fc_fleet, fc_crew, fc_init, fc_figmaplan, fc_figmanodes, fc_figmashots, fc_framelink, fc_figmatree
 
 
 FIGMA_CONNECTOR = ("Figma tools: the authenticated Figma connector, `mcp__claude_ai_Figma__*` or the Figma plugin's `mcp__plugin_figma_figma__*` (the same server; use whichever ToolSearch finds), is for WRITES ONLY: `use_figma` (and the `create_session` it needs), never a read-only script, and never `whoami`, `get_libraries`, `search_design_system`, or `create_new_file`. Load it in one ToolSearch select call.\n"
@@ -11,55 +11,6 @@ FIGMA_CONNECTOR = ("Figma tools: the authenticated Figma connector, `mcp__claude
                    "Framelink (REST) shows structure, names, layout, sizes, fills, text, fonts, component properties, and component keys; it has no variable bindings and no library flag, so prove a binding from the write's returned facts and library origin by component key. "
                    "The plugin's `compose guard` hook enforces this: in a compose session every connector call but `use_figma` and `create_session` is denied and pointed at Framelink.\n"
                    "Never use another `plugin:*figma*` server, and never an authenticate call.")
-FRAMELINK_SETUP = (f"Framelink is not set up. Put a Figma personal access token in {fc_steps.FRAMELINK_ENV} as one line `FIGMA_API_KEY=<token>` (chmod 600), then run\n"
-                   f"  {fc_steps.FRAMELINK_ADD}\n"
-                   "The token never goes on a command line; only --env names the file.")
-
-FRAMELINK_TIMEOUT = 300  # seconds for one fetch; a node Framelink read in over 120s has been seen to finish
-
-def framelink_fetch(key, node=None, depth=None, env_file=None):
-    """Framelink's JSON for a Figma file or node via the REST API, which does not count against the MCP read cap. The fetch takes
-    its turn in the fleet's Figma pace (fc_figmaplan.figma_pace), and a fetch Figma refused for its rate holds the fleet a minute.
-    Never echoes the token."""
-    env_file = Path(env_file or fc_steps.FRAMELINK_ENV)
-    if not env_file.exists():
-        raise RuntimeError(FRAMELINK_SETUP)
-    fc_pace.wait("figma", fc_figmaplan.figma_pace, fc_figmaplan.FIGMA_CALL_SECONDS, "Figma")
-    cmd = ["npx", "-y", "figma-developer-mcp", "fetch", "--env", str(env_file), "--no-telemetry", "--file-key", key, "--format", "json"]
-    if node:
-        cmd += ["--node-id", node]
-    if depth is not None:
-        cmd += ["--depth", str(depth)]
-    for attempt in (1, 2):  # a fetch that outlasts the timeout is tried once more before the task stops
-        try:
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=FRAMELINK_TIMEOUT)
-            break
-        except subprocess.TimeoutExpired as e:
-            if attempt == 2:
-                raise RuntimeError(f"framelink fetch failed: {e}")
-        except OSError as e:
-            raise RuntimeError(f"framelink fetch failed: {e}")
-    secrets = [v.strip().strip("\"'") for line in env_file.read_text().splitlines() if "=" in line and not line.startswith("#")
-               for v in [line.split("=", 1)[1]] if len(v.strip()) > 3]
-    if r.returncode or not r.stdout.strip():
-        err = (r.stderr or r.stdout or "no output").strip()[-500:]
-        for sec in secrets:
-            err = err.replace(sec, "***")
-        if re.search(r"\b429\b|too many requests|rate limit", err, re.I):
-            fc_pace.hold("figma", 60)
-            err += " (Figma lets calls through again in about 60s; run it again then)"
-        raise RuntimeError(f"framelink fetch failed (exit {r.returncode}): {err}")
-    return r.stdout
-
-def empty_file(key):
-    """True when the Figma REST API reads the file and no page has a frame yet, which Framelink's whole-file fetch cannot parse
-    ("Cannot read properties of undefined (reading 'children')"); false when the file has content or REST cannot read it either."""
-    try:
-        pages = fc_figmaplan.figma_api(f"/files/{key}?depth=2", setup=FRAMELINK_SETUP)["document"]["children"]
-    except (RuntimeError, KeyError, TypeError):
-        return False
-    return not any(p.get("children") for p in pages)
-
 def figma_publish(a, proj):
     """`figma publish`, run right before asking the product owner to publish a library; stores the library and the one open ask in linear.json; `--withdraw` closes that ask."""
     path = proj / "linear.json"
@@ -69,7 +20,7 @@ def figma_publish(a, proj):
         sys.exit(f"not a Figma file url or key: {a.library}" if a.library else "no library file: compose figma publish --library <url or key>")
     data["figma_library"] = library
     text, data = fc_figmaplan.publish_ruling(data, library, [k.strip() for k in (a.keys or "").split(",") if k.strip()],
-                                             lambda p: fc_figmaplan.figma_api(p, setup=FRAMELINK_SETUP), withdraw=a.withdraw)
+                                             lambda p: fc_figmaplan.figma_api(p, setup=fc_framelink.FRAMELINK_SETUP), withdraw=a.withdraw)
     fc_core.atomic_write(path, json.dumps(data))
     if text.startswith("publish: unknown"):
         sys.exit(text)  # a publish that cannot be shown pending is never asked for
@@ -347,47 +298,15 @@ def store_figma(proj, key):
     data["figma"] = key
     fc_core.atomic_write(path, json.dumps(data))
 
-def figma_tree(a, proj):
-    """Save the Framelink tree of --node (comma-separated ids) for design task --only to results/NNN.tree.txt, every node self-contained,
-    then the write script's --bindings text."""
-    if not a.only or not a.node:
-        sys.exit("figma tree needs --only <id> and --node <node ids>")
-    meta = next((m for m in fc_tasks.load_tasks(proj, required=True) if m["id"] == a.only), None)
-    if not meta or meta.get("kind") != "design":
-        sys.exit(f"{a.only} is not a design task")
-    key = meta.get("figma") or (json.loads((proj / "linear.json").read_text()) if (proj / "linear.json").exists() else {}).get("figma")
-    if not key:
-        sys.exit("no Figma file: compose figma check --figma <url or key>")
-    fetched = []
-    for node in (n.strip() for n in a.node.split(",") if n.strip()):
-        try:
-            fetched.append((node, framelink_fetch(key, node=node.replace("-", ":"), depth=a.depth)))
-        except RuntimeError as e:
-            sys.exit(str(e))
-    docs = {}
-    for node, text in fetched:
-        try:
-            doc = json.loads(text)
-        except ValueError:
-            continue
-        if isinstance(doc, dict) and isinstance(doc.get("nodes"), list):
-            docs[node] = doc
-    try:  # rendered before the tree is written, so a tree on disk always has the screens of the same fetch
-        shots, notes = fc_figmashots.save_screens(key, [node.replace("-", ":") for node, _ in fetched], proj / "results" / f"{a.only}.screens")
-    except RuntimeError as e:
-        sys.exit(f"no screens of {a.only}: {e}")
-    absent = fc_figmanodes.self_contained(list(docs.values()))
-    parts = [f"NODE {node}\n" + (json.dumps(docs[node], indent=2) if node in docs else text) for node, text in fetched]
-    if a.bindings:
-        extra = sys.stdin.read() if a.bindings == "-" else Path(a.bindings).read_text()
-        parts.append("WRITE RESULT (facts the write script returned: node ids, variable bindings, component keys)\n" + extra.strip())
-    out = proj / "results" / f"{a.only}.tree.txt"
-    fc_core.atomic_write(out, "\n\n".join(parts) + "\n")
-    print(f"saved {out}" + (f" and {len(shots)} screen{'s' * (len(shots) != 1)} in {out.parent / (a.only + '.screens')}" if shots else ""))
-    for note in notes:
-        print(note)
-    if absent:
-        print(f"instances of {', '.join(absent)} show no hidden slots: their main components are not in the tree; add the local ones to --node")
+FIGMA_FLAGS = {"figma": ("check", "tree"), "plan": ("check",), "pages": ("check",), "modes": ("check",), "need_pages": ("check",), "need_modes": ("check",),
+               "library": ("publish",), "keys": ("publish",), "withdraw": ("publish",), "only": ("tree", "judge"), "node": ("tree",), "depth": ("tree",),
+               "bindings": ("tree",), "screens": ("tree",), "out": ("tree",), "force": ("tree", "judge")}  # flag -> the actions that read it
+
+def refuse_unused_flags(a):
+    """Exit when `a` holds a flag the action does not read: a flag that changes nothing and says nothing tells its caller the wrong thing."""
+    for flag, actions in FIGMA_FLAGS.items():
+        if getattr(a, flag, None) not in (None, False) and a.action not in actions:
+            sys.exit(f"figma {a.action} does not use --{flag.replace('_', '-')}; it is for figma {' and '.join(actions)}")
 
 def code_nodes(proj, wt, meta):
     """Write each of a code task's `figma_nodes:` into its clone as `.figma/<node>.json`, Framelink JSON made self-contained as
@@ -401,7 +320,7 @@ def code_nodes(proj, wt, meta):
     docs = []
     for node in meta["figma_nodes"]:
         try:
-            docs.append(json.loads(framelink_fetch(key, node=node.replace("-", ":"))))
+            docs.append(json.loads(fc_framelink.framelink_fetch(key, node=node.replace("-", ":"))))
         except ValueError:
             raise RuntimeError(f"framelink fetch of node {node} is not JSON")
     fc_figmanodes.self_contained(docs)
@@ -430,9 +349,11 @@ def cmd_figma(a):
     """`figma check` stores the target Figma file key, proves Framelink reads it, and records the plan's capabilities; `figma tree` saves a
     task's node tree from Framelink; `figma judge` gates a design task with Jev on that tree; `figma publish` says whether a library
     publish is pending before anyone asks for one."""
+    refuse_unused_flags(a)
+    caller = Path(a.repo).resolve()
     proj = fc_core.project_dir(a)
     if a.action == "tree":
-        return figma_tree(a, proj)
+        return fc_figmatree.figma_tree(a, proj, fc_figmatree.caller_projects(caller) if a.only and not getattr(a, "out", None) else ())
     if a.action == "publish":
         return figma_publish(a, proj)
     if a.action == "check":
@@ -447,10 +368,10 @@ def cmd_figma(a):
                 sys.exit("no Figma file: compose figma check --figma <url or key>")
         print(f"figma file {key} stored in {proj / 'linear.json'}; the capability probe, a use_figma write, confirms the write connector")
         try:
-            pages_now = fc_figmaplan.count_pages(framelink_fetch(key, depth=1))
+            pages_now = fc_figmaplan.count_pages(fc_framelink.framelink_fetch(key, depth=1))
             print(f"framelink reads figma file {key}")
         except RuntimeError as e:
-            if "reading 'children'" not in str(e) or not empty_file(key):
+            if "reading 'children'" not in str(e) or not fc_framelink.empty_file(key):
                 sys.exit(f"framelink cannot read figma file {key}: {e}")
             pages_now = None
             print(f"framelink reads figma file {key} (empty: no frame on any page yet)")

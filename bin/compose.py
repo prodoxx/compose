@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fc_cost, fc_mcp  # noqa: E402
-import fc_core, fc_proc, fc_readguard, fc_libapi, fc_green, fc_gate, fc_config, fc_compact, fc_transcript, fc_snapshot, fc_compactlog, fc_tasks, fc_linear, fc_linear_cmd, fc_prd, fc_delivery, fc_factorystate, fc_factoryturn, fc_lead, fc_factory, fc_claude, fc_models, fc_route, fc_quick, fc_herdr, fc_fleet, fc_worktree, fc_layers, fc_blockers, fc_stack, fc_change, fc_frame0, fc_f0pages, fc_ask, fc_decide, fc_hooks, fc_pin, fc_reports, fc_manager, fc_compactor, fc_crew, fc_toolbug, fc_init, fc_clean, fc_figma, fc_briefs, fc_buildercheck, fc_reconcile, fc_format, fc_implement, fc_shrink, fc_jev, fc_accept, fc_fixround, fc_detach, fc_verify, fc_taskreview, fc_ship, fc_prove, fc_run, fc_status, fc_tiers, fc_tierpin, fc_budget, fc_spec, fc_watch, fc_rewake, fc_history, fc_yolo, fc_bench, fc_setup, fc_update, fc_readiness, fc_retro, fc_reader, fc_stages  # noqa: E402
+import fc_core, fc_proc, fc_readguard, fc_libapi, fc_green, fc_gate, fc_config, fc_compact, fc_transcript, fc_snapshot, fc_compactlog, fc_tasks, fc_linear, fc_linear_cmd, fc_prd, fc_delivery, fc_factorystate, fc_factoryturn, fc_lead, fc_factory, fc_claude, fc_models, fc_route, fc_quick, fc_herdr, fc_fleet, fc_worktree, fc_layers, fc_blockers, fc_stack, fc_change, fc_frame0, fc_f0pages, fc_ask, fc_decide, fc_hooks, fc_pin, fc_reports, fc_manager, fc_compactor, fc_crew, fc_toolbug, fc_init, fc_clean, fc_framelink, fc_figmatree, fc_figma, fc_briefs, fc_buildercheck, fc_reconcile, fc_format, fc_implement, fc_shrink, fc_jev, fc_accept, fc_fixround, fc_detach, fc_verify, fc_taskreview, fc_ship, fc_prove, fc_run, fc_status, fc_tiers, fc_tierpin, fc_budget, fc_spec, fc_watch, fc_rewake, fc_history, fc_yolo, fc_bench, fc_setup, fc_update, fc_readiness, fc_retro, fc_reader, fc_stages  # noqa: E402
 
 DETACHED = fc_detach.DETACHED
 
@@ -385,7 +385,7 @@ def main():
             s.add_argument("--dry-run", action="store_true", help="move | delete | links: show the changes without making them")
         if name == "figma":
             s.add_argument("action", choices=("check", "tree", "judge", "publish"))
-            s.add_argument("--figma", help="check: the target Figma file's url or key, stored in linear.json")
+            s.add_argument("--figma", help="check: the target Figma file's url or key, stored in linear.json; tree: read this file instead of the stored one (not stored)")
             s.add_argument("--plan", help="check: a plan tier the product owner names (starter, pro, org, enterprise): stores the limits compose's design flow depends on, as predicted")
             s.add_argument("--pages", help="check: pages per file the probe measured (a count or unlimited); with --modes and no --plan it sets the tier too")
             s.add_argument("--modes", help="check: modes per collection the probe measured (a count or unlimited); with --pages and no --plan it sets the tier too")
@@ -394,11 +394,13 @@ def main():
             s.add_argument("--library", help="publish: the library file's url or key (stored after the first use)")
             s.add_argument("--keys", help="publish: comma-separated component keys the consumer file needs")
             s.add_argument("--withdraw", action="store_true", help="publish: withdraw the open ask (the product owner will not publish); the line reads none until a publish shows")
-            s.add_argument("--only", help="judge: comma-separated design task ids; tree: one id")
+            s.add_argument("--only", help="judge: comma-separated design task ids; tree: one task id (a design task saves its gate tree and screens; any other task only names the file key)")
             s.add_argument("--node", help="tree: comma-separated node ids to fetch through Framelink")
             s.add_argument("--depth", type=int, help="tree: how deep Framelink walks (default: all)")
-            s.add_argument("--force", action="store_true", help="judge: judge a task whose result was accepted by hand, replacing that result")
+            s.add_argument("--force", action="store_true", help="judge: judge a task whose result was accepted by hand, replacing that result; tree: replace the gate tree of a design task of another project")
             s.add_argument("--bindings", help="tree: a file (or - for stdin) with what the write script returned, appended to the tree")
+            s.add_argument("--out", help="tree: the file to save the tree to (default .compose/<project>/results/figma/<nodes>.tree.txt for a read, results/NNN.tree.txt for a design task); with --only <design task> it leaves the task's gate files alone")
+            s.add_argument("--screens", action="store_true", help="tree: also render the nodes next to the tree, in <out minus .tree.txt>.screens (a design task's gate tree always does)")
         if name == "report":
             s.add_argument("--as", dest="as_", required=True, help="your agent name, <slug>-<role>")
             s.add_argument("state", help="working | needs-user | blocked | done | tool-bug | contradiction")

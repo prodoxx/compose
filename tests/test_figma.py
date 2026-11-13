@@ -46,7 +46,7 @@ class FigmaCheck(unittest.TestCase):
         self.assertEqual(self.stored(), {"figma": "NewKey123456"})
 
     def test_check_stores_a_url_then_shows_the_stored_key(self):
-        with mock.patch.object(fc.fc_figma, "framelink_fetch", return_value="{}") as fetch:
+        with mock.patch.object(fc.fc_framelink, "framelink_fetch", return_value="{}") as fetch:
             out = self.check("https://www.figma.com/design/AbCdEf123456/Shop?node-id=1-2")
             self.assertIn("figma file AbCdEf123456 stored in ", self.check())
         self.assertEqual(self.stored(), {"feature": "ENG-1", "figma": "AbCdEf123456"})
@@ -59,7 +59,7 @@ class FigmaCheck(unittest.TestCase):
     def test_check_passes_an_empty_file_framelink_cannot_parse(self):
         crash = RuntimeError("framelink fetch failed (exit 1): TypeError: Cannot read properties of undefined (reading 'children')")
         empty = {"document": {"children": [{"type": "CANVAS", "id": "0:1", "children": []}]}}
-        with mock.patch.object(fc.fc_figma, "framelink_fetch", side_effect=crash), \
+        with mock.patch.object(fc.fc_framelink, "framelink_fetch", side_effect=crash), \
              mock.patch.object(fc.fc_figma.fc_figmaplan, "figma_api", return_value=empty) as api:
             out = self.check("AbCdEf123456")
         self.assertIn("framelink reads figma file AbCdEf123456 (empty: no frame on any page yet)", out)
@@ -69,14 +69,14 @@ class FigmaCheck(unittest.TestCase):
         crash = RuntimeError("framelink fetch failed (exit 1): TypeError: Cannot read properties of undefined (reading 'children')")
         filled = {"document": {"children": [{"type": "CANVAS", "id": "0:1", "children": [{"type": "FRAME", "id": "1:2"}]}]}}
         for rest in (filled, RuntimeError("figma api /files/AbCdEf123456 failed: HTTP 404")):
-            with self.subTest(rest=rest), mock.patch.object(fc.fc_figma, "framelink_fetch", side_effect=crash), \
+            with self.subTest(rest=rest), mock.patch.object(fc.fc_framelink, "framelink_fetch", side_effect=crash), \
                  mock.patch.object(fc.fc_figma.fc_figmaplan, "figma_api", **{"side_effect" if isinstance(rest, Exception) else "return_value": rest}):
                 with self.assertRaises(SystemExit) as e:
                     self.check("AbCdEf123456")
                 self.assertIn("framelink cannot read figma file AbCdEf123456: framelink fetch failed", str(e.exception))
 
     def test_check_says_how_to_set_up_framelink_when_it_cannot_read(self):
-        with mock.patch.object(fc.fc_figma, "framelink_fetch", side_effect=RuntimeError(fc.fc_figma.FRAMELINK_SETUP)):
+        with mock.patch.object(fc.fc_framelink, "framelink_fetch", side_effect=RuntimeError(fc.fc_framelink.FRAMELINK_SETUP)):
             with self.assertRaises(SystemExit) as e:
                 self.check("AbCdEf123456")
         msg = str(e.exception)
@@ -86,12 +86,12 @@ class FigmaCheck(unittest.TestCase):
     def test_framelink_fetch_uses_env_file_depth_and_never_leaks_the_token(self):
         env = self.proj / "fl.env"
         with self.assertRaises(RuntimeError) as e:
-            fc.fc_figma.framelink_fetch("K", env_file=env)
+            fc.fc_framelink.framelink_fetch("K", env_file=env)
         self.assertIn("claude mcp add framelink-figma", str(e.exception))
         env.write_text("FIGMA_API_KEY=figd_secret_token\n")
         ok = SimpleNamespace(returncode=0, stdout='{"nodes": []}', stderr="")
         with mock.patch.object(subprocess, "run", return_value=ok) as run:
-            self.assertEqual(fc.fc_figma.framelink_fetch("K", node="1:2", depth=1, env_file=env), '{"nodes": []}')
+            self.assertEqual(fc.fc_framelink.framelink_fetch("K", node="1:2", depth=1, env_file=env), '{"nodes": []}')
         cmd = run.call_args[0][0]
         self.assertEqual(cmd[:4], ["npx", "-y", "figma-developer-mcp", "fetch"])
         self.assertEqual(cmd[cmd.index("--env") + 1], str(env))
@@ -100,7 +100,7 @@ class FigmaCheck(unittest.TestCase):
         self.assertNotIn("figd_secret_token", " ".join(cmd))
         bad = SimpleNamespace(returncode=1, stdout="", stderr="403 token figd_secret_token rejected")
         with mock.patch.object(subprocess, "run", return_value=bad), self.assertRaises(RuntimeError) as e:
-            fc.fc_figma.framelink_fetch("K", env_file=env)
+            fc.fc_framelink.framelink_fetch("K", env_file=env)
         self.assertIn("403 token *** rejected", str(e.exception))
         self.assertNotIn("figd_secret_token", str(e.exception))
 
@@ -123,17 +123,18 @@ class FigmaTree(unittest.TestCase):
             judge_task("ENG-1", "001", "Button", ["Has a label"]), judge_task("ENG-2", "002", "Code", ["x"], kind="code")]})
 
     def tree(self, **kw):
-        ns = dict(repo=".", project="p", action="tree", figma=None, only="001", node="1:2,3-4", depth=None, bindings=None)
+        ns = dict(repo=".", project="p", action="tree", figma=None, only="001", node="1:2,3-4", depth=None, bindings=None, out=None, screens=False, force=False)
         out = io.StringIO()
         shots = getattr(self, "shots", mock.Mock(return_value=([], [])))
         with mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), mock.patch("sys.stdout", out), \
+                mock.patch.object(fc.fc_figmatree, "caller_projects", return_value=getattr(self, "caller", [])), \
                 mock.patch.object(fc.fc_figma.fc_figmashots, "save_screens", shots):
             fc.fc_figma.cmd_figma(SimpleNamespace(**{**ns, **kw}))
         return out.getvalue()
 
     def test_renders_a_screen_of_each_node_with_the_tree(self):
         self.shots = mock.Mock(return_value=([("1:2", self.proj / "a.png"), ("3:4", self.proj / "b.png")], ["no screen of 5:6: Figma rendered nothing for it"]))
-        with mock.patch.object(fc.fc_figma, "framelink_fetch", side_effect=lambda key, node=None, depth=None: f"TREE {node}"):
+        with mock.patch.object(fc.fc_framelink, "framelink_fetch", side_effect=lambda key, node=None, depth=None: f"TREE {node}"):
             out = self.tree()
         self.assertEqual(self.shots.call_args.args, ("AbCdEf123456", ["1:2", "3:4"], self.proj / "results" / "001.screens"))
         self.assertIn("and 2 screens in", out)
@@ -141,14 +142,100 @@ class FigmaTree(unittest.TestCase):
 
     def test_a_render_that_fails_saves_no_tree(self):
         self.shots = mock.Mock(side_effect=RuntimeError("figma api /images failed: HTTP 500"))
-        with mock.patch.object(fc.fc_figma, "framelink_fetch", side_effect=lambda key, node=None, depth=None: f"TREE {node}"), self.assertRaises(SystemExit) as e:
+        with mock.patch.object(fc.fc_framelink, "framelink_fetch", side_effect=lambda key, node=None, depth=None: f"TREE {node}"), self.assertRaises(SystemExit) as e:
             self.tree()
         self.assertEqual(str(e.exception), "no screens of 001: figma api /images failed: HTTP 500")
         self.assertFalse((self.proj / "results" / "001.tree.txt").exists())
 
+    def fetch_all(self):
+        return mock.patch.object(fc.fc_framelink, "framelink_fetch", side_effect=lambda key, node=None, depth=None: f"TREE {node}")
+
+    def test_a_code_project_reads_a_node_without_a_design_task_and_leaves_the_gate_files_alone(self):
+        """#468: figma tree needed --only <design task>. Without one it reads for any project: no screens unless asked, a file of its own."""
+        gate = self.proj / "results" / "001.tree.txt"
+        gate.write_text("gate tree")
+        self.shots = mock.Mock(return_value=([], []))
+        with self.fetch_all() as fetch:
+            out = self.tree(only=None, node="233:3,233-55")
+        saved = self.proj / "results" / "figma" / "233-3_233-55.tree.txt"
+        self.assertEqual(saved.read_text(), "NODE 233:3\nTREE 233:3\n\nNODE 233-55\nTREE 233:55\n")
+        self.assertEqual((gate.read_text(), fetch.call_args.args[0]), ("gate tree", "AbCdEf123456"))
+        self.assertIn(f"saved {saved}", out)
+        self.shots.assert_not_called()
+
+    def test_a_read_takes_the_key_from_figma_flag_first_and_never_stores_it(self):
+        with self.fetch_all() as fetch:
+            self.tree(only="002", figma="https://www.figma.com/design/ZzZzZz123456/Other?node-id=1-2")
+            self.assertEqual(fetch.call_args.args[0], "ZzZzZz123456")
+            self.tree(only="002")
+        self.assertEqual(fetch.call_args.args[0], "AbCdEf123456")
+        self.assertEqual(json.loads((self.proj / "linear.json").read_text())["figma"], "AbCdEf123456")
+        (self.proj / "linear.json").write_text("{}")
+        with self.fetch_all(), self.assertRaises(SystemExit) as e:
+            self.tree(only=None)
+        self.assertIn("no Figma file", str(e.exception))
+
+    def test_a_read_saves_screens_only_when_asked_and_beside_its_own_tree(self):
+        self.shots = mock.Mock(return_value=([("1:2", Path("a.png"))], []))
+        out_file = self.proj / "scratch" / "dock.tree.txt"
+        with self.fetch_all():
+            out = self.tree(only=None, node="1:2", screens=True, out=str(out_file))
+        self.assertEqual(self.shots.call_args.args, ("AbCdEf123456", ["1:2"], self.proj / "scratch" / "dock.screens"))
+        self.assertTrue(out_file.exists())
+        self.assertIn("and 1 screen in", out)
+
+    def test_out_on_a_design_task_leaves_its_gate_tree_and_screens_alone(self):
+        gate = self.proj / "results" / "001.tree.txt"
+        gate.write_text("gate tree")
+        self.shots = mock.Mock(return_value=([], []))
+        with self.fetch_all():
+            self.tree(out=str(self.proj / "peek.txt"))
+        self.assertEqual(gate.read_text(), "gate tree")
+        self.shots.assert_not_called()
+        self.assertTrue((self.proj / "peek.txt").exists())
+
+    def test_another_projects_design_task_is_not_replaced_without_force(self):
+        """#478: a code project's lead named the design project and its task, and the read replaced that task's tree and emptied its screens."""
+        gate = self.proj / "results" / "001.tree.txt"
+        gate.write_text("gate tree")
+        self.caller, self.shots = ["code"], mock.Mock(return_value=([], []))
+        with self.fetch_all() as fetch, self.assertRaises(SystemExit) as e:
+            self.tree()
+        self.assertIn("a design task of p, and this worktree is code's", str(e.exception))
+        self.assertIn(str(gate), str(e.exception))
+        self.assertIn(str(self.proj / "results" / "001.screens"), str(e.exception))
+        self.assertIn("leave out --only", str(e.exception))
+        fetch.assert_not_called()
+        self.shots.assert_not_called()
+        self.assertEqual(gate.read_text(), "gate tree")
+        for caller in (["p"], ["code", "p"], []):  # its own worktree, a checkout holding both, or one that holds no project
+            self.caller = caller
+            with self.fetch_all():
+                self.tree()
+        gate.write_text("gate tree")
+        self.caller = ["code"]
+        with self.fetch_all():
+            self.tree(force=True)
+        self.assertNotEqual(gate.read_text(), "gate tree")
+
+    def test_caller_projects_are_the_projects_of_the_worktree_the_command_runs_in(self):
+        wt = Path(tempfile.mkdtemp()).resolve()
+        projects = {"a": (wt, wt / ".compose" / "a"), "b": (wt / "other", wt / "other" / ".compose" / "b")}
+        with mock.patch.object(fc.fc_core, "checkout", return_value=SimpleNamespace(top=wt)), mock.patch.object(fc.fc_core, "all_projects", return_value=projects):
+            self.assertEqual(fc.fc_figmatree.caller_projects(wt), ["a"])
+        with mock.patch.object(fc.fc_core, "checkout", return_value=SimpleNamespace(top=wt / "else")), mock.patch.object(fc.fc_core, "all_projects", return_value=projects):
+            self.assertEqual(fc.fc_figmatree.caller_projects(wt), [])
+
+    def test_a_flag_the_action_does_not_read_is_refused_not_ignored(self):
+        for action, flag, value in (("judge", "figma", "AbCdEf123456"), ("tree", "plan", "pro"), ("check", "node", "1:2"), ("publish", "out", "x"), ("tree", "withdraw", True)):
+            ns = dict(repo=".", project="p", action=action, only=None, **{flag: value})
+            with mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), self.assertRaises(SystemExit) as e:
+                fc.fc_figma.cmd_figma(SimpleNamespace(**ns))
+            self.assertEqual(str(e.exception), f"figma {action} does not use --{flag.replace('_', '-')}; it is for figma {' and '.join(fc.fc_figma.FIGMA_FLAGS[flag])}")
+
     def test_saves_each_nodes_framelink_tree_then_the_write_results(self):
         (self.proj / "bind.txt").write_text('{"bound": "color/bg"}\n')
-        with mock.patch.object(fc.fc_figma, "framelink_fetch", side_effect=lambda key, node=None, depth=None: f"TREE {node}") as fetch:
+        with mock.patch.object(fc.fc_framelink, "framelink_fetch", side_effect=lambda key, node=None, depth=None: f"TREE {node}") as fetch:
             out = self.tree(bindings=str(self.proj / "bind.txt"), depth=3)
         text = (self.proj / "results" / "001.tree.txt").read_text()
         self.assertEqual(text, 'NODE 1:2\nTREE 1:2\n\nNODE 3-4\nTREE 3:4\n\nWRITE RESULT (facts the write script returned: node ids, variable bindings, component keys)\n{"bound": "color/bg"}\n')
@@ -164,7 +251,7 @@ class FigmaTree(unittest.TestCase):
                 {"id": "I5:1;7:1", "type": "TEXT", "text": "Walk"},
                 {"id": "I5:1;7:2", "name": "Pill", "type": "INSTANCE", "children": [{"id": "I5:1;7:2;8:1", "type": "RECTANGLE"}]}]},
             {"id": "1:3", "type": "RECTANGLE"}]}]}
-        with mock.patch.object(fc.fc_figma, "framelink_fetch", side_effect=lambda key, node=None, depth=None: json.dumps(doc)):
+        with mock.patch.object(fc.fc_framelink, "framelink_fetch", side_effect=lambda key, node=None, depth=None: json.dumps(doc)):
             self.tree(node="1:2")
         saved = json.loads((self.proj / "results" / "001.tree.txt").read_text().split("\n", 1)[1])
         light = saved["nodes"][0]
@@ -174,11 +261,11 @@ class FigmaTree(unittest.TestCase):
         self.assertEqual([n.get("inInstance") for n in (text, pill, pill["children"][0])], ["5:1", "5:1", "I5:1;7:2"])
 
     def test_refuses_a_missing_id_node_non_design_task_and_a_failed_fetch(self):
-        for kw, msg in ((dict(only=None), "needs --only"), (dict(node=None), "needs --only"), (dict(only="002"), "002 is not a design task")):
+        for kw, msg in ((dict(node=None), "needs --node"), (dict(only="009"), "unknown task 009"), (dict(figma="junk"), "not a Figma file url or key: junk")):
             with self.assertRaises(SystemExit) as e:
                 self.tree(**kw)
             self.assertIn(msg, str(e.exception))
-        with mock.patch.object(fc.fc_figma, "framelink_fetch", side_effect=RuntimeError("framelink fetch failed")), self.assertRaises(SystemExit) as e:
+        with mock.patch.object(fc.fc_framelink, "framelink_fetch", side_effect=RuntimeError("framelink fetch failed")), self.assertRaises(SystemExit) as e:
             self.tree()
         self.assertEqual(str(e.exception), "framelink fetch failed")
         self.assertFalse((self.proj / "results" / "001.tree.txt").exists())
@@ -541,7 +628,7 @@ class FigmaCaps(unittest.TestCase):
         out = io.StringIO()
         top = '{"nodes": [{"type": "CANVAS", "id": "0:1"}, {"type": "CANVAS", "id": "0:2"}]}'
         with mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), mock.patch("sys.stdout", out), \
-             mock.patch.object(fc.fc_figma, "framelink_fetch", return_value=top):
+             mock.patch.object(fc.fc_framelink, "framelink_fetch", return_value=top):
             try:
                 fc.fc_figma.cmd_figma(SimpleNamespace(**{**ns, **kw}))
             except SystemExit as e:
@@ -798,7 +885,7 @@ class FigmaPublish(unittest.TestCase):
 
     def test_a_rate_limited_figma_call_holds_the_fleet_waits_once_as_figma_says_and_runs_again(self):
         env = self.proj / "fl.env"; env.write_text("FIGMA_API_KEY=figd_secret_token\n")
-        api, pace = fc.fc_figma.fc_figmaplan, fc.fc_figma.fc_pace
+        api, pace = fc.fc_figma.fc_figmaplan, fc.fc_framelink.fc_pace
         limited = lambda after: api.urllib.error.HTTPError("u", 429, "Too Many Requests", {"Retry-After": str(after)}, None)
         ok = mock.MagicMock(); ok.__enter__.return_value.read.return_value = b'{"meta": {}}'
         with mock.patch.object(api.urllib.request, "urlopen", side_effect=[limited(3), ok]) as op, mock.patch("time.sleep") as nap, \
@@ -819,9 +906,9 @@ class FigmaPublish(unittest.TestCase):
         env = self.proj / "fl.env"; env.write_text("FIGMA_API_KEY=figd_secret_token\n")
         bad = SimpleNamespace(returncode=1, stdout="", stderr="Error: 429 Too Many Requests")
         with mock.patch.object(subprocess, "run", return_value=bad), self.assertRaises(RuntimeError) as e:
-            fc.fc_figma.framelink_fetch("K", env_file=env)
+            fc.fc_framelink.framelink_fetch("K", env_file=env)
         self.assertTrue(str(e.exception).endswith("429 Too Many Requests (Figma lets calls through again in about 60s; run it again then)"), str(e.exception))
-        with fc.fc_figma.fc_pace.state("figma") as s:
+        with fc.fc_framelink.fc_pace.state("figma") as s:
             self.assertAlmostEqual(s["hold_until"], time.time() + 60, delta=1)
 
     def test_a_slow_framelink_read_is_tried_once_more_with_a_longer_timeout(self):
@@ -829,11 +916,11 @@ class FigmaPublish(unittest.TestCase):
         ok = SimpleNamespace(returncode=0, stdout='{"nodes": []}', stderr="")
         slow = subprocess.TimeoutExpired(["npx"], 300)
         with mock.patch.object(subprocess, "run", side_effect=[slow, ok]) as run:
-            self.assertEqual(fc.fc_figma.framelink_fetch("K", node="1:2", env_file=env), '{"nodes": []}')
+            self.assertEqual(fc.fc_framelink.framelink_fetch("K", node="1:2", env_file=env), '{"nodes": []}')
         self.assertEqual(run.call_count, 2)
         self.assertGreater(run.call_args[1]["timeout"], 120)
         with mock.patch.object(subprocess, "run", side_effect=[slow, slow]) as run, self.assertRaises(RuntimeError) as e:
-            fc.fc_figma.framelink_fetch("K", node="1:2", env_file=env)
+            fc.fc_framelink.framelink_fetch("K", node="1:2", env_file=env)
         self.assertEqual(run.call_count, 2)
         self.assertIn("framelink fetch failed", str(e.exception))
 
@@ -844,11 +931,11 @@ class FigmaPublish(unittest.TestCase):
         api = fc.fc_figma.fc_figmaplan
         reply = mock.MagicMock(); reply.__enter__.return_value.read.return_value = b"{}"
         with mock.patch.object(subprocess, "run", return_value=ok), mock.patch.object(api.urllib.request, "urlopen", return_value=reply), mock.patch("time.sleep") as nap:
-            fc.fc_figma.framelink_fetch("K", env_file=env)
+            fc.fc_framelink.framelink_fetch("K", env_file=env)
             nap.assert_not_called()
             api.figma_api("/files/K/components", env_file=env)  # the REST reads and Framelink's share the one pace: the same token
             self.assertAlmostEqual(nap.call_args.args[0], 60 / api.FIGMA_PER_MINUTE, delta=0.1)
-            fc.fc_figma.framelink_fetch("K", env_file=env)
+            fc.fc_framelink.framelink_fetch("K", env_file=env)
             self.assertAlmostEqual(nap.call_args.args[0], 2 * 60 / api.FIGMA_PER_MINUTE, delta=0.1)
 
 
