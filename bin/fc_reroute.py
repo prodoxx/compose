@@ -95,21 +95,13 @@ def layer_base(repo, proj, tid, trunk):
 
 def fired(issue):
     """The `(trigger, run id)` pairs of every `* rerouted:` line across the issue's comment pages."""
-    query = "query($id: String!, $after: String) { issue(id: $id) { comments(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { body } } } }"
-    found, after = set(), None
-    while True:
-        data = fc_linear.linear_gql(query, {"id": issue, "after": after})
-        if data["issue"] is None:
-            raise RuntimeError(f"no issue {issue}")
-        comments = data["issue"]["comments"]
-        for node in comments["nodes"]:
-            for line in node["body"].splitlines():
-                m = re.fullmatch(r"[*-] rerouted: (.+) \(run (\S+)\)", line.strip())
-                if m:
-                    found.update((t, m.group(2)) for t in m.group(1).split(", "))
-        if not comments["pageInfo"]["hasNextPage"]:
-            return found
-        after = comments["pageInfo"]["endCursor"]
+    found = set()
+    for node in fc_evidence.comments(issue):
+        for line in node["body"].splitlines():
+            m = re.fullmatch(r"[*-] rerouted: (.+) \(run (\S+)\)", line.strip())
+            if m:
+                found.update((t, m.group(2)) for t in m.group(1).split(", "))
+    return found
 
 
 def reassess(repo, proj, meta, tasks, triggers, run_id, base, branch):
@@ -143,36 +135,46 @@ def reassess(repo, proj, meta, tasks, triggers, run_id, base, branch):
     return route
 
 
+PROGRESS_EVERY = 10  # a sweep over more tasks than this says how far it is every this many tasks: Linear is read one paced call at a time
+
+
 def catch_up(repo, proj, tasks, ids, trunk, kinds):
-    """One reassessment per passed task for the triggers of `kinds` not yet fired; `{id: why}` for each route not recorded."""
+    """One reassessment per passed task for the triggers of `kinds` not yet fired; `{id: why}` for each route not recorded.
+    A sweep over many tasks says so when it starts and every PROGRESS_EVERY tasks, and reads each issue's comments once
+    (fc_evidence.remembered): a verify of 105 tasks was silent for 20 minutes while it read them."""
     failed = {}
     if not fc_config.LINEAR_KEY or fc_policy.skipped():
         return failed
     by_id = {m["id"]: m for m in tasks}
-    for id in ids:
-        meta = by_id.get(id)
-        if not meta or not meta.get("linear"):
-            continue
-        result = proj / "results" / f"{id}.json"
-        try:
-            if not result.exists() or json.loads(result.read_text()).get("status") != "passed":
+    feature = json.loads((proj / "linear.json").read_text()).get("feature") if (proj / "linear.json").exists() else None
+    if len(ids) > PROGRESS_EVERY:
+        fc_core.say(f"reroute  checking {len(ids)} task(s) on Linear for routes to record")
+    with fc_evidence.remembered():
+        for n, id in enumerate(ids, 1):
+            if n % PROGRESS_EVERY == 0 and n < len(ids):
+                fc_core.say(f"reroute  {n} of {len(ids)} tasks")
+            meta = by_id.get(id)
+            if not meta or not meta.get("linear"):
                 continue
-            run_id = fc_ledger.run_id(proj, id)
-            done = fired(meta["linear"])
-            base, branch = layer_base(repo, proj, id, trunk), fc_worktree.task_branch(repo, proj, id)
-            outside = "scope" in kinds and diff_signals(repo, meta, base, branch)["outside"]
-            ledger = []
-            if any(k in LEDGER for k in kinds):
-                feature = json.loads((proj / "linear.json").read_text()).get("feature") if (proj / "linear.json").exists() else None
-                rows = fc_evidence.task_rows(meta["linear"], feature, meta["id"])
-                ledger = [t for t in ledger_triggers(repo, proj, meta, rows) if t in kinds]
-            triggers = [t for t in (["diff"] if "diff" in kinds else []) + (["scope"] if outside else []) + ledger if (t, run_id) not in done]
-            if triggers:
-                reassess(repo, proj, meta, tasks, triggers, run_id, base, branch)
-        except fc_models.PaymentRequired:
-            raise
-        except Exception as e:
-            failed[id] = str(e)
+            result = proj / "results" / f"{id}.json"
+            try:
+                if not result.exists() or json.loads(result.read_text()).get("status") != "passed":
+                    continue
+                run_id = fc_ledger.run_id(proj, id)
+                done = fired(meta["linear"])
+                base, branch = layer_base(repo, proj, id, trunk), fc_worktree.task_branch(repo, proj, id)
+                outside = "scope" in kinds and diff_signals(repo, meta, base, branch)["outside"]
+                ledger = []
+                if any(k in LEDGER for k in kinds):
+                    rows = fc_evidence.task_rows(meta["linear"], feature, meta["id"])
+                    ledger = [t for t in ledger_triggers(repo, proj, meta, rows) if t in kinds]
+                triggers = [t for t in (["diff"] if "diff" in kinds else []) + (["scope"] if outside else []) + ledger if (t, run_id) not in done]
+                if triggers:
+                    reassess(repo, proj, meta, tasks, triggers, run_id, base, branch)
+            except fc_models.PaymentRequired:
+                raise
+            except Exception as e:
+                failed[id] = str(e)
     return failed
 
 

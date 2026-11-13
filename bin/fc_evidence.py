@@ -1,5 +1,6 @@
 """The evidence ledger's read side: the rows of an issue's evidence comments, and the `## Evidence` section of its
 description derived from them. fc_ledger writes the rows."""
+import contextlib
 import json
 import re
 
@@ -22,23 +23,54 @@ def parse_comment(body):
                 out.append(r)
     return out
 
+_MEMO = {}  # issue -> its comments, while a `remembered()` block is open
+_REMEMBERING = [False]
+
+@contextlib.contextmanager
+def remembered():
+    """Inside the block each issue's comments are read from Linear once, however many callers ask for them: a sweep over a stack's
+    tasks asks for the feature issue's comments once per task (the same pages every time), and for a task's own twice (what was
+    rerouted, then the evidence rows). Only for a sweep that writes no comment on an issue before it is done reading it: what it
+    wrote is not read back from the memory, which ends with the block."""
+    if _REMEMBERING[0]:
+        yield
+        return
+    _REMEMBERING[0] = True
+    try:
+        yield
+    finally:
+        _REMEMBERING[0] = False
+        _MEMO.clear()
+
+def comments(issue):
+    """Every comment of the issue (`body`, `createdAt`), all pages, oldest first; a missing issue raises. Remembered inside `remembered()`."""
+    if _REMEMBERING[0] and issue in _MEMO:
+        return _MEMO[issue]
+    nodes, cursor = [], None
+    while True:
+        data = fc_linear.linear_gql(COMMENTS, {"id": issue, "after": cursor})["issue"]
+        if data is None:
+            raise RuntimeError(f"no issue {issue}")
+        nodes += data["comments"]["nodes"]
+        if not data["comments"]["pageInfo"]["hasNextPage"]:
+            break
+        cursor = data["comments"]["pageInfo"]["endCursor"]
+    if _REMEMBERING[0]:
+        _MEMO[issue] = nodes
+    return nodes
+
 def rows(issue, task_id=None, run_id=None, criterion_id=None):
     """Every evidence row of the issue's comments, once each, oldest first, filtered by task, run, or criterion."""
     if not issue or not fc_linear.linear_ready():
         return []
-    out, seen, cursor = [], set(), None
-    while True:
-        cs = fc_linear.linear_gql(COMMENTS, {"id": issue, "after": cursor})["issue"]["comments"]
-        for c in cs["nodes"]:
-            for r in parse_comment(c["body"]):
-                if r["event_id"] in seen:
-                    continue
-                seen.add(r["event_id"])
-                r["at"] = c["createdAt"]
-                out.append(r)
-        if not cs["pageInfo"]["hasNextPage"]:
-            break
-        cursor = cs["pageInfo"]["endCursor"]
+    out, seen = [], set()
+    for c in comments(issue):
+        for r in parse_comment(c["body"]):
+            if r["event_id"] in seen:
+                continue
+            seen.add(r["event_id"])
+            r["at"] = c["createdAt"]
+            out.append(r)
     out = [r for r in out if (not task_id or not r.get("task_ids") or task_id in r["task_ids"])
            and (not run_id or r.get("run_id") == run_id)
            and (not criterion_id or not r.get("criterion_id") or criterion_id in r["criterion_id"])]

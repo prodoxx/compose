@@ -74,6 +74,20 @@ class Pace(unittest.TestCase):
         self.assertEqual(err.getvalue(), "")  # a short wait is silent
         self.assertAlmostEqual(nap.call_args.args[0], 2, delta=0.1)
 
+    def test_short_waits_that_add_up_to_a_long_one_are_said_once_they_do(self):
+        """#476: calls each held back 1.5s said nothing, so a step of a hundred of them looked hung for minutes."""
+        fc_pace._short.clear()
+        with mock.patch.object(fc_pace, "claim", return_value=1.5), mock.patch("time.sleep"), mock.patch("sys.stderr", io.StringIO()) as err:
+            for _ in range(6):
+                fc_pace.wait("slow", even(1.5), 120, "Linear")
+            self.assertEqual(err.getvalue(), "")  # 9s so far
+            fc_pace.wait("slow", even(1.5), 120, "Linear")
+            said = err.getvalue()
+            for _ in range(3):
+                fc_pace.wait("slow", even(1.5), 120, "Linear")
+            self.assertEqual(err.getvalue(), said)  # counted afresh after a word
+        self.assertRegex(said, r"^Linear: paced 10s in the last calls \(every compose process paces its Linear calls to stay under the limit\)\n$")
+
     def test_compose_no_pace_switches_the_wait_off_for_the_suite(self):
         with mock.patch.dict(os.environ, {"COMPOSE_NO_PACE": "1"}), mock.patch("time.sleep") as nap:
             for _ in range(3):

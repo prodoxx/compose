@@ -160,7 +160,7 @@ class Unavailable(unittest.TestCase):
 
 
 class Fired(unittest.TestCase):
-    QUERY = "query($id: String!, $after: String) { issue(id: $id) { comments(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { body } } } }"
+    QUERY = fc_evidence.COMMENTS  # the one query every read of an issue's comments goes through
 
     @staticmethod
     def page(*bodies, cursor=None):
@@ -782,3 +782,49 @@ class LedgerRerun(unittest.TestCase):
             with self.subTest(runs=len(stages)):
                 code, order, ran, rounds, asked, fixer, passed, *_ = self.rounds(stages, after, fix=1)
                 self.assertEqual((code, passed, len(ran), len(asked), fixer.call_count), (1, False, len(stages), len(stages), 0))
+
+
+class SweepReads(unittest.TestCase):
+    """A catch-up over a big stack reads Linear a little, and says how far it is (#476): a 105-task verify sat silent for 20 minutes
+    in the step that read every task's comment pages, two or three times each, one paced call at a time."""
+    COUNT = 25
+
+    def setUp(self):
+        self.repo = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.repo, True)
+        self.proj = self.repo / ".compose" / "p"
+        (self.proj / "results").mkdir(parents=True)
+        (self.proj / "linear.json").write_text(json.dumps({"feature": "ENG-1"}))
+        self.ids = [f"{n:03d}" for n in range(1, self.COUNT + 1)]
+        self.tasks = [{"id": t, "linear": f"XX-{t}"} for t in self.ids]
+        for t in self.ids:
+            (self.proj / "results" / f"{t}.json").write_text(json.dumps({"id": t, "status": "passed"}))
+        self.calls, self.said = [], []
+
+    def gql(self, query, variables):
+        self.calls.append(variables["id"])
+        return {"issue": {"comments": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": []}}}
+
+    def sweep(self, kinds, ids=None):
+        with mock.patch.object(fc.fc_config, "LINEAR_KEY", "lin_test"), mock.patch.object(fc.fc_linear, "linear_gql", self.gql), mock.patch.object(fc.fc_core, "say", self.said.append), \
+                mock.patch.object(fc_reroute, "layer_base", return_value="main"), mock.patch.object(fc_reroute, "diff_signals", return_value={"outside": []}), \
+                mock.patch.object(fc_reroute, "reassess"), mock.patch.object(fc_reroute, "ledger_triggers", return_value=[]), \
+                mock.patch.object(fc_ledger, "run_id", side_effect=lambda proj, t: f"run-{t}"):
+            return fc_reroute.catch_up(self.repo, self.proj, self.tasks, ids or self.ids, "main", kinds)
+
+    def test_each_issue_is_read_once_the_feature_once_for_every_task_not_once_per_task(self):
+        self.assertEqual(self.sweep(("diff", "scope", "failed tests", "invalid evidence", "unmet requirements")), {})
+        self.assertEqual(sorted(self.calls), sorted(["ENG-1"] + [f"XX-{t}" for t in self.ids]))
+
+    def test_a_sweep_that_reads_many_tasks_says_where_it_is_and_a_short_one_stays_silent(self):
+        self.sweep(("diff", "scope"))
+        self.assertEqual(self.said, [f"reroute  checking {self.COUNT} task(s) on Linear for routes to record", "reroute  10 of 25 tasks", "reroute  20 of 25 tasks"])
+        self.said.clear()
+        self.sweep(("diff", "scope"), ids=self.ids[:8])
+        self.assertEqual(self.said, [])
+
+    def test_what_a_sweep_remembers_is_forgotten_when_it_ends(self):
+        self.sweep(("diff",))
+        self.calls.clear()
+        self.sweep(("diff",), ids=self.ids[:2])
+        self.assertEqual(self.calls, ["XX-001", "XX-002"])

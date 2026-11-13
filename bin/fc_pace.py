@@ -6,7 +6,8 @@ import contextlib, fcntl, json, os, sys, time
 from pathlib import Path
 import fc_core, fc_config
 
-LONG_WAIT = 10  # a wait of this many seconds or more is said on stderr, so no caller waits silently
+LONG_WAIT = 10  # a wait of this many seconds or more is said on stderr, so no caller waits silently; shorter ones are said once they add up to it
+_short = {}  # who -> the seconds of short waits since the last word on stderr
 
 def pace_dir():
     return Path(os.environ.get("COMPOSE_CONFIG") or fc_config.CONFIG_PATH).parent / "pace"
@@ -81,6 +82,12 @@ def wait(service, policy, limit, who):
         raise RuntimeError(f"{who} lets calls through again in about {about(pause)}; run it again then")
     if pause >= LONG_WAIT:
         print(f"{who}: waiting {about(pause)} for a turn (every compose process paces its {who} calls to stay under the limit)", file=sys.stderr)
+        _short[who] = 0
+    elif pause > 0:  # a run of calls each held back a second or two is as slow as one long wait: say when they add up (#476)
+        _short[who] = _short.get(who, 0) + pause
+        if _short[who] >= LONG_WAIT:
+            print(f"{who}: paced {about(_short[who])} in the last calls (every compose process paces its {who} calls to stay under the limit)", file=sys.stderr)
+            _short[who] = 0
     if pause > 0:
         time.sleep(pause)
     return pause
