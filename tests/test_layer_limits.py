@@ -40,6 +40,39 @@ class DeletionBudget(unittest.TestCase):
         self.assertEqual(self.budget(rows, ["a.py", "b.py", "yarn.lock", "gone.py"], deleted=["gone.py"]), (2 + 10 + 1, [], []))
 
 
+class StrayFileDrop(unittest.TestCase):
+    """#474: an implementer that wrote a file outside `files:` has no tool to remove it (the read guard refuses rm and git), so compose does."""
+
+    def drop(self, d, stray, in_base):
+        """Run drop_stray over `stray` in folder `d`; `in_base` names the paths the base has. Returns the git commands it ran."""
+        ran = []
+        def sh(cmd, cwd=None, *a, **k):
+            ran.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0 if cmd[1] != "cat-file" or cmd[-1].split(":", 1)[1] in in_base else 1, "", "")
+        with mock.patch.object(fc.fc_core, "sh", sh):
+            fc.fc_gate.drop_stray(Path(d), "base", stray)
+        return ran
+
+    def test_a_file_the_base_lacks_is_unstaged_and_deleted_from_the_clone(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "tests").mkdir()
+            (Path(d) / "tests" / "new.test.tsx").write_text("x")
+            ran = self.drop(d, ["tests/new.test.tsx"], in_base=())
+            self.assertFalse((Path(d) / "tests" / "new.test.tsx").exists())
+            self.assertIn(["git", "rm", "-q", "-f", "--cached", "--ignore-unmatch", "--", "tests/new.test.tsx"], ran)
+
+    def test_a_file_the_base_has_is_restored_from_the_base(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "other.py").write_text("edited")
+            ran = self.drop(d, ["other.py"], in_base=("other.py",))
+            self.assertIn(["git", "checkout", "-q", "base", "--", "other.py"], ran)
+            self.assertEqual((Path(d) / "other.py").read_text(), "edited")  # git, mocked here, does the restoring
+
+    def test_a_path_already_gone_is_no_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.drop(d, ["gone.py"], in_base=())
+
+
 class WholeFileDeletion(unittest.TestCase):
     """Task 018: commit_facts counts a file the commit deletes whole as one line."""
 

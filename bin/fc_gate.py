@@ -27,6 +27,19 @@ def branch_budget(wt, base, allowed=None, delete=()):
              and not any(f == p or f.startswith(p + "/") for p in del_paths)]
     return lines, new_docs, stray
 
+def drop_stray(wt, base, stray):
+    """Put each file outside the task's `files:` back as `base` has it: a file the base has is restored (an edit, a deletion), one it
+    lacks is unstaged and deleted. An implementer cannot do this itself: the read guard refuses `rm`, `git rm` and `git checkout`,
+    so a stray file it made (a `write` outside `files:`) would end every later attempt."""
+    for f in stray:
+        if fc_core.sh(["git", "cat-file", "-e", f"{base}:{f}"], wt, check=False).returncode == 0:
+            fc_core.sh(["git", "checkout", "-q", base, "--", f], wt, check=False)
+        else:
+            fc_core.sh(["git", "rm", "-q", "-f", "--cached", "--ignore-unmatch", "--", f], wt, check=False)
+            path = Path(wt) / f
+            if path.is_file() or path.is_symlink():
+                path.unlink()
+
 FAILING_RE = re.compile(r"^\s*(?:(?:FAIL|ERROR): |FAILED (?!\()|not ok \d+ - |--- FAIL: )(\S.*?)(?: \(\d[\d.]*s\))?\s*$", re.M)  # unittest, pytest, node --test, go test; not unittest's "FAILED (failures=3)" summary
 BASELINES, BASELINE_LOCK = {}, threading.Lock()
 

@@ -467,9 +467,10 @@ def run_task(repo, proj, task, attempts, model=None, reset_files=False, tag=""):
         if new_docs:
             problems.append("Delete these document files; implementers never add documents: " + ", ".join(new_docs))
         if stray:
-            problems.append("Revert every change to these files, they are outside this task (another task owns them; the test for "
-                            "this task must pass with only the named files changed): " + ", ".join(stray)
-                            + f"\nFiles you may change: {', '.join(meta['files'])}")
+            if attempt < attempts:  # the last attempt's strays stay in the clone, for whoever reads why the task was rejected
+                fc_gate.drop_stray(wt, base, stray)  # the implementer has no tool that reverts a file: its guard refuses rm and its VCS commands, so compose does it
+            problems.append("These files are outside this task (another task owns them), so compose put them back as they were: " + ", ".join(stray)
+                            + f"\nDo not create or edit them again; the test for this task must pass with only these files changed: {', '.join(meta['files'])}")
         if broke:
             problems.append(fc_gate.advice(broke))
         status = fc_attempt.miss_status(test.returncode, over, new_docs, stray, broke, status)
