@@ -49,6 +49,16 @@ def block_inside(body, heading):
     span, block = section_span(lines, heading), compose_block_start(lines)
     return bool(span and block is not None and block > span[0] and block >= span[1] and section_end(lines, heading, span[0], len(lines)) > block)
 
+def dropped_subsections(body, heading, text):
+    """The headings under `heading` in the body that the new `text` of the section no longer holds."""
+    lines = body.split("\n")
+    span = section_span(lines, heading)
+    if not span:
+        return []
+    new = text.split("\n")
+    kept = {new[i].strip() for i, _ in headings(new)}
+    return [lines[i] for i, _ in headings(lines) if span[0] < i < span[1] and lines[i].strip() not in kept]
+
 LINEAR_BULLET, LINEAR_NUMBER = re.compile(r"^([ \t]*)[-+*](?=[ \t])"), re.compile(r"^([ \t]*)\d+[.)](?=[ \t])")
 LINEAR_RULE, LINEAR_HASHES, LINEAR_TASK = re.compile(r"^[ \t]*([-*_])(?:[ \t]*\1){2,}$"), re.compile(r"^(#{1,6} .*?)[ \t]+#+$"), re.compile(r"^([ \t]*\* )\[x\]")
 LINEAR_CODE_SPAN, LINEAR_LINK = re.compile(r"(`+[^`]*`+)"), re.compile(r"\]\(<([^<>\s]*)>\)")
@@ -104,9 +114,9 @@ def section_hashes(body):
     names = list(dict.fromkeys(lines[i] for i, _ in headings(lines)))
     return [(h, section_hash(body, h)) for h in names]
 
-def replace_section(body, heading, text):
+def replace_section(body, heading, text, keep_subsections=False):
     """The body with the section replaced by `text`, which renames it when it opens with another heading of the section's level, and
-    removed when it is empty."""
+    removed when it is empty. With `keep_subsections` only the section's own lines, those before its first subheading, are replaced."""
     text = text.strip()
     first = text.split("\n")[0]
     new = first if heading_level(first) == heading_level(heading) else heading
@@ -116,7 +126,11 @@ def replace_section(body, heading, text):
     if not span:
         return body.rstrip("\n") + "\n\n" + section + "\n" if section else body
     i, end = span
-    parts = [p for p in ("\n".join(lines[:i]).rstrip("\n"), section.rstrip("\n"), "\n".join(lines[end:]).rstrip("\n")) if p]
+    after = "\n".join(lines[end:]).rstrip("\n")
+    if keep_subsections and section:
+        sub = next((j for j, _ in headings(lines) if i < j < end), end)
+        section, after = section.rstrip("\n"), "\n".join(lines[sub:]).rstrip("\n")
+    parts = [p for p in ("\n".join(lines[:i]).rstrip("\n"), section.rstrip("\n"), after) if p]
     return "\n\n".join(parts) + "\n" if parts else ""
 
 PLAN_SECTIONS = ("## Start today", "## Lanes", "## Waves", "## Critical path", "## Outside waits", "## How this maps to compose",

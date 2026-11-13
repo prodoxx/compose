@@ -35,7 +35,7 @@ class LinearProject(unittest.TestCase):
     def args(self, action, *target, **kw):
         return SimpleNamespace(**{**dict(repo=str(self.repo), project=None, action=action, target=list(target), body=False, comments=False, json=False,
                                          append=False, description=False, any_project=False, fresh=False, label=None, parent=None, search=None, state=None,
-                                         title=None, priority=None, blocked_by=None, file=None, section=None, expect=None, create=None, into=None, add_label=None, drop_label=None, add_blocked_by=None, drop_blocked_by=None), **kw})
+                                         title=None, priority=None, blocked_by=None, file=None, section=None, expect=None, create=None, into=None, add_label=None, drop_label=None, add_blocked_by=None, drop_blocked_by=None, subsections=None), **kw})
 
     def fails(self, fn, *args):
         err = io.StringIO()
@@ -225,9 +225,15 @@ class LinearGet(unittest.TestCase):
         self.assertEqual(self.get("ENG-7", comments=True), [line] + ann + bob)
         self.assertEqual(self.get("ENG-7", body=True), [line, "Steps here."])
 
-    def test_body_says_the_compose_block_is_no_sections(self):
+    NESTED = ("(a section's hash covers its subsections, and --section replaces them too: it refuses a text that drops one unless "
+              "--subsections keep (own text only) or drop is given)")
+
+    def test_body_says_a_hash_covers_the_subsections_and_the_compose_block_is_no_sections(self):
         self.issue["description"] = "## Goal\n\ng\n\n## Notes\n\nn\n\n```compose\nid: 001\ntest: t\n```\n"
         self.assertEqual(self.get("ENG-7", body=True)[-1], "(the task's compose block belongs to no section: --section keeps it wherever it sits, --description changes it)")
+        self.assertNotIn(self.NESTED, self.get("ENG-7", body=True))
+        self.issue["description"] = "## Notes\n\nn\n\n### Brief\n\nb\n"
+        self.assertEqual(self.get("ENG-7", body=True, fresh=True)[-1], self.NESTED)
 
     def test_body_lists_each_heading_with_its_section_hash_before_the_comments(self):
         self.issue["description"] = "## Goal\n\ngoal\n\n## Notes\n\nspec line\n\n### Codebase brief\n\nwhere things live\n\n```sh\n# not a heading\n```\n"
@@ -235,7 +241,7 @@ class LinearGet(unittest.TestCase):
         got = self.get("ENG-7", body=True, comments=True)
         self.assertEqual(got[got.index("```") + 1:], ['--- section hashes (--section "<heading>" --expect <hash>)', f"{hash_of('## Goal')} ## Goal",
                                                       f"{hash_of('## Notes')} ## Notes", f"{hash_of('### Codebase brief')} ### Codebase brief",
-                                                      "--- Ann 2026-01-02", "first", "--- Bob 2026-03-04", "second"])
+                                                      self.NESTED, "--- Ann 2026-01-02", "first", "--- Bob 2026-03-04", "second"])
         self.assertEqual(len({hash_of(h) for h in ("## Goal", "## Notes", "### Codebase brief")}), 3)
         self.assertRegex(hash_of("## Goal"), r"^[0-9a-f]{8}$")
 
@@ -515,6 +521,36 @@ class LinearUpdate(unittest.TestCase):
         code, said, sent = self.write("## Plan\n\nold\n", section="## Plan")
         self.assertEqual((code, said, sent), (0, "unchanged ENG-7: the body already reads as written, so nothing was sent", None))
         self.assertEqual(self.write("## Plan\n\nold\n", section="## Plan", title="T")[1:], ("updated ENG-7", None))
+
+    def test_an_h2_write_that_drops_a_subsection_refuses_unless_keep_or_drop_is_given(self):
+        # `## Notes` rewritten as its own text deleted `### Codebase brief` (#463)
+        self.issue["description"] = "## Scope\n\nx\n\n## Notes\n\nvisual\n\n### Codebase brief\n\nbrief\n\n### Other\n\no\n\n## Intent\n\ni\n"
+        code, said, sent = self.write("## Notes\n\nnew visual\n", section="## Notes")
+        self.assertEqual((code, sent), (1, None))
+        self.assertEqual(said, "## Notes holds ### Codebase brief, ### Other, and the text drops them, as a section write replaces its subsections too: nothing written; "
+                               "write them back in the text, or pass --subsections keep to replace only the section's own text, or --subsections drop to remove them")
+        kept = "## Scope\n\nx\n\n## Notes\n\nnew visual\n\n### Codebase brief\n\nbrief\n\n### Other\n\no\n\n## Intent\n\ni\n"
+        self.assertEqual(self.write("## Notes\n\nnew visual\n\n### Codebase brief\n\nbrief\n\n### Other\n\no\n", section="## Notes")[2], kept)  # written back: goes through
+        self.assertEqual(self.write("## Notes\n\nnew visual\n", section="## Notes", subsections="keep")[2], kept)
+        self.assertEqual(self.write("new visual\n", section="## Notes", subsections="keep")[2], kept)
+        self.assertEqual(self.write("## Notes\n\nnew visual\n", section="## Notes", subsections="drop")[2], "## Scope\n\nx\n\n## Notes\n\nnew visual\n\n## Intent\n\ni\n")
+        self.assertEqual(self.write("", section="## Notes")[2], "## Scope\n\nx\n\n## Intent\n\ni\n")  # an empty body still removes the section, subsections and all
+        self.assertEqual(self.write("## Intent\n\ni2\n", section="## Intent")[0], 0)  # a section with no subsection is as before
+
+    def test_subsections_keep_takes_own_text_only_and_the_flag_needs_a_section(self):
+        self.issue["description"] = "## Notes\n\nvisual\n\n### Brief\n\nb\n"
+        self.assertIn("holds no heading of its own", self.write("## Notes\n\nn\n\n### Brief\n\nb2\n", section="## Notes", subsections="keep")[1])
+        self.assertIn("needs text", self.write("", section="## Notes", subsections="keep")[1])
+        self.assertEqual(self.write("x", description=True, subsections="keep")[:2], (1, "update --subsections needs --section: it says what happens to that section's subsections"))
+
+    def test_replace_section_can_keep_the_subsections_and_dropped_subsections_names_them(self):
+        body = "## A\n\nown\n\n### B\n\nb\n\n#### C\n\nc\n\n## D\n\nd\n"
+        self.assertEqual(fc_plan.replace_section(body, "## A", "new", keep_subsections=True), "## A\n\nnew\n\n### B\n\nb\n\n#### C\n\nc\n\n## D\n\nd\n")
+        self.assertEqual(fc_plan.replace_section(body, "## A", "## A2\n\nnew", keep_subsections=True), "## A2\n\nnew\n\n### B\n\nb\n\n#### C\n\nc\n\n## D\n\nd\n")
+        self.assertEqual(fc_plan.dropped_subsections(body, "## A", "new"), ["### B", "#### C"])
+        self.assertEqual(fc_plan.dropped_subsections(body, "## A", "new\n\n### B\n\nx"), ["#### C"])
+        self.assertEqual(fc_plan.dropped_subsections(body, "### B", "new"), ["#### C"])
+        self.assertEqual(fc_plan.dropped_subsections(body, "## D", "new"), [])
 
     def test_replace_section_swaps_only_that_section_or_appends_it(self):
         rs, body, want = fc_plan.replace_section, "# Cart\n\n## Plan\n\nold\n\n### Steps\n\n1. a\n\n## Notes\n\nkeep\n", "# Cart\n\n## Plan\n\nnew\n\n## Notes\n\nkeep\n"
@@ -811,7 +847,7 @@ class LinearCommentLabelsDoc(unittest.TestCase):
         self.doc = {"id": "did", "title": "PRD", "content": content, "url": self.DOC_URL, "project": {"id": "p1", "name": "Shop"}}
         with mock.patch.object(fc_plan, "replace_section", return_value="via plan\n") as rs:
             self.assertEqual(self.run_verb("doc", "update", "d1", body="new plan", section="## Plan"), [f"updated {self.DOC_URL}"])
-        rs.assert_called_once_with(content, "## Plan", "new plan")
+        rs.assert_called_once_with(content, "## Plan", "new plan", keep_subsections=False)
         self.assertEqual([v["in"] for v in self.sent("documentUpdate(")], [{"content": "via plan\n"}])
 
 class LinearCancel(unittest.TestCase):

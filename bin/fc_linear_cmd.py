@@ -105,7 +105,7 @@ def priority(a):
 
 def print_body(body):
     """The body, then each heading's section hash, which a section write passes back to --expect, and a line for what a hash list
-    does not show: the task's compose block belongs to no section."""
+    does not show: a section's hash covers its subsections, and the task's compose block belongs to no section."""
     print((body or "").rstrip("\n"))
     lines = (body or "").split("\n")
     marks = fc_plan.section_hashes(body or "")
@@ -113,6 +113,10 @@ def print_body(body):
         print('--- section hashes (--section "<heading>" --expect <hash>)')
         for heading, h in marks:
             print(f"{h} {heading}")
+        levels = [n for _, n in fc_plan.headings(lines)]
+        if any(2 <= a < b for a, b in zip(levels, levels[1:])):  # an H1 is the document's title: nobody writes it as a section
+            print("(a section's hash covers its subsections, and --section replaces them too: it refuses a text that drops one unless "
+                  "--subsections keep (own text only) or drop is given)")
         if fc_plan.compose_block_start(lines) is not None:
             print("(the task's compose block belongs to no section: --section keeps it wherever it sits, --description changes it)")
 
@@ -124,19 +128,30 @@ def writes_body(a, verb):
         sys.exit(f'{verb} --section takes a heading line such as "## Notes", not {a.section!r}')
     if a.expect and not a.section:
         sys.exit(f"{verb} --expect needs --section: it checks that section's hash")
+    if getattr(a, "subsections", None) and not a.section:
+        sys.exit(f"{verb} --subsections needs --section: it says what happens to that section's subsections")
     writes = bool(a.section or a.append or a.description)
     if a.file and not writes:  # the body file would be read by nothing
         sys.exit(f"{verb} --file needs --section, --append, or --description")
     return writes
 
 def section_body(a, old, text):
-    """The body with `--section` written from `text`. A section write never changes the task's compose block, so it refuses text
-    that holds a block when the issue already has one."""
-    heading = a.section
-    if fc_plan.compose_block_start(text.strip().split("\n")) is not None and fc_plan.compose_block_start(old.split("\n")) is not None:
+    """The body with `--section` written from `text`. A section write replaces the section and its subsections, and never the task's
+    compose block, so it refuses what would do either by accident: text that drops a subsection (`--subsections keep` writes the
+    section's own text only, `drop` removes them) and text that holds a block the issue already has."""
+    heading, mode, lines = a.section, getattr(a, "subsections", None), text.strip().split("\n")
+    if fc_plan.compose_block_start(lines) is not None and fc_plan.compose_block_start(old.split("\n")) is not None:
         sys.exit(f"{heading}: the text holds a compose block and the issue already has one, and a section write leaves the task's block where it is: "
                  "nothing written; take the block out of the text, or write the whole body with --description, keeping exactly one block")
-    return fc_plan.replace_section(old, heading, text)
+    if mode == "keep":
+        if not text.strip():
+            sys.exit(f"--subsections keep writes the section's own text: {heading} needs text (an empty body removes it with its subsections)")
+        if any(i or fc_plan.heading_level(lines[0]) != fc_plan.heading_level(heading) for i, _ in fc_plan.headings(lines)):
+            sys.exit(f"--subsections keep leaves the subsections of {heading} as they are, so its text holds no heading of its own: nothing written")
+    elif text.strip() and mode != "drop" and (gone := fc_plan.dropped_subsections(old, heading, text)):
+        sys.exit(f"{heading} holds {', '.join(gone)}, and the text drops {'it' if len(gone) == 1 else 'them'}, as a section write replaces its subsections too: "
+                 "nothing written; write them back in the text, or pass --subsections keep to replace only the section's own text, or --subsections drop to remove them")
+    return fc_plan.replace_section(old, heading, text, keep_subsections=mode == "keep")
 
 def new_body(a, old):
     old = old or ""
