@@ -91,6 +91,50 @@ class ReadGuard(unittest.TestCase):
                   "echo hi > src/a.py", "python3 src/a.py", "python3 -c 'print(1)'", "cat 'src/a.py"):
             self.no("bash", {"command": c})
 
+    def installing(self, files, **lock):
+        """The guard of a task whose files: are `files`, in a clone that holds the lockfiles `lock` names; its installers come from fc_readguard.installers."""
+        for name in lock: (self.wt / name).write_text("")
+        rg = fc.fc_readguard
+        return json.loads(rg.write_guard(self.wt, files, self.pack, installs=rg.installers(self.wt, files)).read_text())
+
+    def test_a_task_that_lists_a_package_file_may_install_and_add_and_nothing_else(self):
+        # #449: the guard refused `bun install` and `bun add`, so a task that adds a dependency could not update its lockfile or install it
+        rg = fc.fc_readguard
+        g = self.installing(["app/package.json", "bun.lock"])
+        self.assertEqual(g["installers"], ["bun"])
+        for c in ("bun install", "bun i", "bun add ai@7.0.152", "bun add -d @types/node @openrouter/ai-sdk-provider@^1.2.0", "bun add --exact left-pad", "bun install --ignore-scripts",
+                  "cd app && bun install", f"cd {self.wt} && bun install", "cd app && bun add zod | tail -5", "bun install | head -n 20", "cd . && bun add zod@latest"):
+            self.assertIsNone(rg.refusal("Bash", {"command": c}, g), c)
+        for c in ("bun", "bun add", "bun --version", "bun x cowsay", "bun run test", "bun test", "bunx prisma generate", "bun install > out", "bun install 2>&1 | tail -30", "bun install; rm x",
+                  "bun install && bun test", "bun add zod | sh", "bun add zod | tee x", "bun add $(cat x)", "bun add `x`", "bun add ./local", "bun add ../outside", "bun add https://x.test/a.tgz",
+                  "bun add github:a/b", "bun add zod --registry https://x.test", "bun add -g zod", "bun add --cwd .. zod", "bun install --cwd ..", "cd .. && bun install", "cd /tmp && bun install",
+                  "export PATH=$HOME/.bun/bin:$PATH && bun install", "~/.bun/bin/bun install", "npm install", "npm view zod", "pnpm add zod", "yarn add zod", "cat bun.lock | head -5 > x"):
+            self.assertIsNotNone(rg.refusal("Bash", {"command": c}, g), c)
+
+    def test_an_install_is_allowed_only_for_the_manager_of_the_lockfile_and_for_a_task_that_lists_a_package_file(self):
+        rg = fc.fc_readguard
+        self.assertEqual(self.installing(["src/a.py"])["installers"], [])  # no package file in files:
+        self.assertEqual(rg.installers(self.wt, ["package.json"]), ["npm"])  # a package.json and no lockfile anywhere
+        self.assertEqual(rg.installers(self.wt, ["web/package.json", "src/a.py"]), ["npm"])
+        (self.wt / "web").mkdir(); (self.wt / "web" / "pnpm-lock.yaml").write_text("")
+        self.assertEqual(rg.installers(self.wt, ["web/package.json"]), ["pnpm"])  # the lockfile beside the package.json decides
+        self.assertEqual(rg.installers(self.wt, ["yarn.lock"]), ["yarn"])
+        g = self.installing(["package.json", "package-lock.json"])
+        self.assertIsNone(rg.refusal("Bash", {"command": "npm install left-pad"}, g))
+        self.assertIsNotNone(rg.refusal("Bash", {"command": "bun install"}, g))
+        self.assertIsNotNone(rg.refusal("Bash", {"command": "bun install"}, self.g))  # the plain guard of setUp: no installers
+
+    def test_a_refused_package_manager_command_says_so_instead_of_the_read_only_text(self):
+        rg = fc.fc_readguard
+        none = rg.refusal("Bash", {"command": "bun install"}, self.g)
+        self.assertIn("may not install", none); self.assertIn("CONTRADICTION", none)
+        g = self.installing(["package.json", "bun.lock"])
+        for c in ("bun --version", "~/.bun/bin/bun install", "cd app && bun install 2>&1 | tail -30", "bun add zod --registry x"):
+            self.assertIn("`bun install` and `bun add <package>", rg.refusal("Bash", {"command": c}, g), c)
+        self.assertIn("context pack", rg.refusal("Bash", {"command": "cat src/c.py"}, g))  # any other command keeps the read-only text
+        self.assertIn("`bun install` and `bun add <package>`", rg.refusal("Bash", {"command": "cat src/c.py"}, g))  # and says what else is allowed
+        self.assertNotIn("bun add", rg.refusal("Bash", {"command": "cat src/c.py"}, self.g))
+
     def test_the_script_answers_both_event_shapes_and_logs_each_refusal(self):
         rg, me = fc.fc_readguard, os.path.realpath(fc.fc_readguard.__file__)
         self.assertEqual(rg.command(str(self.path)), f"python3 -I {shlex.quote(me)} {shlex.quote(str(self.path))}")

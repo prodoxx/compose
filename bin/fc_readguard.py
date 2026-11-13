@@ -23,13 +23,30 @@ def pack_paths(pack):
     return out
 
 
-def write_guard(wt, files, pack, extra=()):
-    """Write {"root", "allow", "log"} to guard_file(wt) and return that path. `allow` holds the absolute paths of `files`, of
-    pack_paths(pack), and of `extra` (absolute paths the prompt itself tells the model to read); `log` is `<wt parent>/<wt name>.refused`."""
+LOCK_MANAGERS = {"bun.lock": "bun", "bun.lockb": "bun", "package-lock.json": "npm", "npm-shrinkwrap.json": "npm", "pnpm-lock.yaml": "pnpm", "yarn.lock": "yarn"}
+
+
+def installers(wt, files):
+    """The package managers a task may run, as the guard's `installers`: none unless its `files` name a package.json or a lockfile (a task that
+    adds a dependency edits one and must install it, which the sandbox of an implementer cannot do for itself). The managers are the ones whose
+    lockfile `files` names or that sits at the clone's root or beside a listed package.json, else npm."""
+    names = {os.path.basename(f) for f in files}
+    if not names & ({"package.json"} | set(LOCK_MANAGERS)):
+        return []
+    dirs = {"", *(os.path.dirname(f) for f in files if os.path.basename(f) == "package.json")}
+    found = {LOCK_MANAGERS[n] for n in names if n in LOCK_MANAGERS}
+    found |= {m for d in dirs for n, m in LOCK_MANAGERS.items() if os.path.exists(os.path.join(wt, d, n))}
+    return sorted(found) or ["npm"]
+
+
+def write_guard(wt, files, pack, extra=(), installs=()):
+    """Write {"root", "allow", "installers", "log"} to guard_file(wt) and return that path. `allow` holds the absolute paths of `files`, of
+    pack_paths(pack), and of `extra` (absolute paths the prompt itself tells the model to read); `installers` the package managers whose
+    plain `install` and `add` the model may run (see `installers`); `log` is `<wt parent>/<wt name>.refused`."""
     root = os.path.realpath(wt)
     allow = sorted({os.path.realpath(os.path.join(root, f)) for f in [*files, *pack_paths(pack), *extra]})
     path = guard_file(wt)
-    path.write_text(json.dumps({"root": root, "allow": allow, "log": str(path.parent / (Path(wt).name + ".refused"))}, indent=2))
+    path.write_text(json.dumps({"root": root, "allow": allow, "installers": sorted(installs), "log": str(path.parent / (Path(wt).name + ".refused"))}, indent=2))
     return path
 
 
@@ -139,6 +156,54 @@ def view(cmd, root, allow):
     return measure(words, root, allow) or viewer(words, root, allow)
 
 
+PACKAGE_MANAGERS = ("bun", "bunx", "npm", "npx", "pnpm", "yarn")
+INSTALL_FLAGS = {"-d", "-D", "--dev", "--save-dev", "-E", "--exact", "--save-exact", "--optional", "-O", "--save-optional", "--peer", "--ignore-scripts"}
+PACKAGE_RE = re.compile(r"(@[A-Za-z0-9._~-]+/)?[A-Za-z0-9._~-]+(@[A-Za-z0-9._~^<>=*|+-]+)?")
+
+
+def cut_words(words):
+    """`words` without a trailing `| head <n>` or `| tail <n>`; None for any other pipe."""
+    if "|" not in words:
+        return words
+    i = words.index("|")
+    cut = words[i + 1:]
+    return words[:i] if cut and cut[0] in ("head", "tail") and len(cut) - 1 == count_len(cut[1:]) else None
+
+
+def install(cmd, root, managers):
+    """Whether bash line `cmd` is a plain `<manager> install|i|add [flags] [package[@version]...]` of one of `managers`, alone or after
+    `cd <a directory of the clone> &&`, and ended at most by `| head` or `| tail` with a line count. No other flag (a registry, a global or
+    another directory), package spec (a URL, a path), pipe, redirect, second command, substitution or glob."""
+    words = words_of(cmd)
+    if not words:
+        return False
+    if words[0] == "cd" and len(words) > 3 and words[2] == "&&":
+        there = os.path.realpath(os.path.join(root, words[1]))
+        if there != root and not there.startswith(root + os.sep):
+            return False
+        words = words[3:]
+    words = cut_words(words)
+    if not words or len(words) < 2 or words[0] not in managers or words[1] not in ("install", "i", "add"):
+        return False
+    flags = [w for w in words[2:] if w.startswith("-")]
+    specs = [w for w in words[2:] if not w.startswith("-")]
+    return all(f in INSTALL_FLAGS for f in flags) and all(PACKAGE_RE.fullmatch(x) and ".." not in x for x in specs) and (words[1] != "add" or bool(specs))
+
+
+def installs_why(cmd, managers):
+    """The reply to a package manager command the guard refused, so the model stops trying variants; None for any other command."""
+    words = words_of(cmd) or cmd.split()
+    words = words[3:] if words[:1] == ["cd"] and words[2:3] == ["&&"] else words
+    if not words or words[0].split("/")[-1] not in PACKAGE_MANAGERS:
+        return None
+    if not managers:
+        return ("Blocked: this task may not install or run anything: its files: name no package.json or lockfile, and a package manager is never "
+                "allowed for it. Do not try another form; if the brief needs a dependency, end your reply with a CONTRADICTION line saying so.")
+    return ("Blocked: the only package manager commands allowed here are `{m} install` and `{m} add <package>[@version]...` (flags -d, -E, --optional, "
+            "--peer, --ignore-scripts), each alone or after `cd <directory of this clone> &&`, with at most `| head -N` or `| tail -N`. "
+            "No other form works: not `{m} --version`, a full path to {m}, `export PATH=...`, a second command, a registry flag, or `npm view`.").format(m=managers[0])
+
+
 def refusal(tool, args, guard):
     """None when the call is allowed, else the reply text for the model. `guard` is the loaded guard dict."""
     why = ("Blocked: you may read only the files the context pack names (or a directory directly holding one), and in bash only "
@@ -146,14 +211,16 @@ def refusal(tool, args, guard):
            "For anything else, run trail ask \"<question>\".")
     tool = (tool or "").lower()
     root, allow = guard["root"], set(guard["allow"])
+    if guard.get("installers"):
+        why += " This task may also run `{} install` and `{} add <package>`, each alone.".format(guard["installers"][0], guard["installers"][0])
     if tool == "bash":
         cmd = (args.get("command") or "").strip()
         if (cmd in ("trail ask", "trail callers") or cmd.startswith(("trail ask ", "trail callers "))) \
                 and not any(x in cmd for x in (";", "&", "|", "`", "$(", "<", ">", "\n")):
             return None
-        if view(cmd, root, allow):
+        if view(cmd, root, allow) or install(cmd, root, guard.get("installers") or []):
             return None
-        return why
+        return installs_why(cmd, guard.get("installers") or []) or why
     p = args.get("file_path") or args.get("path")
     if tool == "read":
         if p and os.path.realpath(os.path.join(root, p)) in allow:

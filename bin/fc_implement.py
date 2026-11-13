@@ -241,8 +241,9 @@ def run_task(repo, proj, task, attempts, model=None, reset_files=False, tag=""):
     words = "\n".join([goal.group(1) if goal else body] + [(wt / f).read_text() for f in meta["protected"] if (wt / f).exists()])
     section = fc_libapi.section(wt, meta["files"], words)
     pack = fc_trailpack.trail_pack(wt, f"{meta.get('title', '')}: {(goal.group(1) if goal else body)[:400]}", repo=repo, cap=12000 - len(section))
+    managers = fc_readguard.installers(wt, meta["files"])  # a task that lists a package file adds a dependency, and only it can install it
     fc_readguard.write_guard(wt, meta["files"] + meta["protected"] + (nodes := fc_figma.code_nodes(proj, wt, meta)), pack,
-                             extra=[proj / "results" / f"{tid}.test.log"])  # the retry prompt sends the model to read it
+                             extra=[proj / "results" / f"{tid}.test.log"], installs=managers)  # the retry prompt sends the model to read it
     context = (f"CONTEXT PACK from the repo's trail graph (exact file:line, with source). Use it instead of exploring. "
                f"If you need more, run `trail ask \"<question>\"` or `trail callers <symbol>`; do not open unrelated files.\n{pack}\n\n"
                if pack else "")
@@ -260,7 +261,9 @@ def run_task(repo, proj, task, attempts, model=None, reset_files=False, tag=""):
               f"Files you must NOT edit: {abs_protected}.\n" + (f"Figma nodes this task builds, as Framelink JSON (read, never edit): {', '.join(nodes)}.\n" if nodes else "") +
               f"Done means this command exits 0: {meta['test']}\n"
               "Do not run it, or any other test or build: compose runs the test after your turn ends and sends you what failed. "
-              "Read the test file, edit, and end your turn.\n"
+              "Read the test file, edit, and end your turn.\n" +
+              (f"The files above include a package file, so you may run `{managers[0]} install` and `{managers[0]} add <package>[@version]` to add the dependencies "
+               "the task names and update the lockfile: one command alone, from the root or a directory under it. That is the only shell command besides reading files.\n" if managers else "") +
               "The test contains cases beyond the examples listed here, so implement the described behavior, not the examples. "
               "Read only the test file and the files named above; do not explore other docs or directories. "
               "When the test pins a line width, measure with `wc -L <file>` (longest line) or `awk '{print length}' <file>` instead of counting. "
