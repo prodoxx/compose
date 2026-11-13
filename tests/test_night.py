@@ -475,6 +475,7 @@ class Answerer(unittest.TestCase):
             self.assertEqual(run.call_args.args[0][run.call_args.args[0].index("--effort") + 1], "high")
             self.assertEqual(len(fc_claude.claude_once(self.repo, "p")[1]), 1500)
             self.assertNotIn("--effort", run.call_args.args[0])
+            self.assertEqual(len(fc_claude.claude_once(self.repo, "p", keep=None)[1]), 5000)  # None keeps the whole reply
 
 def entry(ident, feature, kind="story", state="Todo"):
     return {"id": ident, "title": ident, "state": state, "kind": kind, "feature": feature, "track": "t", "wave": 1, "waits_on": []}
@@ -545,7 +546,7 @@ class Prep(unittest.TestCase):
         raise AssertionError(f"unexpected compose call {args}")
 
     def print_of(self, ident):
-        return fp.prep_print(f"{self.titles[ident]}\n{self.descriptions[ident]}", "")
+        return fp.prep_print(f"{self.titles[ident]}\n{self.descriptions[ident]}")
 
     def finish_worker(self, ident):
         self.gone.add(self.state["prep"][ident]["pid"])
@@ -595,7 +596,33 @@ class Prep(unittest.TestCase):
         self.claude.return_value = (None, 'no json "here"', 4, {})
         fp.run_prep(self.repo, "NEB-12")
         self.assertEqual(self.docs, {}); self.assertEqual(len(self.events), 1)
-        self.assertTrue(self.events[0].startswith("event factory=prep-failed ticket=NEB-12 why=\"no json 'here'"))
+        self.assertEqual(self.events[0], "event factory=prep-failed ticket=NEB-12 why=\"no JSON object with a questions list or drop in the reply of 14 characters, which begins: no json 'here'\"")
+
+    def test_a_long_reply_is_read_whole_and_a_failure_says_why_in_one_sentence(self):
+        # NEB-303: a reply over 8000 characters was cut at the front, so its JSON never parsed and the event's why was a slice from mid-word
+        code = [f"src/file{i}.ts:{i}-{i + 9} (a long description of what this code does {i})" for i in range(300)]
+        self.reply(code=code)
+        self.assertEqual(fp.run_prep(self.repo, "NEB-12")["status"], "prepared")
+        self.assertIsNone(self.claude.call_args.kwargs["keep"])
+        self.assertIn("src/file299.ts:299-308", self.docs[fp.PREP_TITLE])
+        self.claude.return_value = (None, "x" * 9000, 4, {})
+        fp.run_prep(self.repo, "NEB-12")
+        self.assertIn("in the reply of 9000 characters, which begins: xxxx", self.events[-1])
+        self.claude.return_value = (None, "  ", 4, {})
+        fp.run_prep(self.repo, "NEB-12")
+        self.assertIn('why="the reply was empty"', self.events[-1])
+
+    def test_a_section_linear_does_not_keep_names_the_first_word_that_differs(self):
+        self.reply(built=["one two three four five six seven"])
+        cli = fp.fc_factoryturn.compose_cli.side_effect
+        def clobbering(args, stdin=None, pane=None):  # every save is rewritten, so the retry fails too
+            out = cli(args, stdin, pane)
+            if args[:3] == ["linear", "doc", "update"]:
+                self.docs = {t: body.replace("five", "fiver") for t, body in self.docs.items()}
+            return out
+        fp.fc_factoryturn.compose_cli.side_effect = clobbering
+        self.assertEqual(fp.run_prep(self.repo, "NEB-12")["status"], "failed")
+        self.assertIn("did not keep the section of NEB-12: word 34 reads 'fiver', not 'five', after 'one two three four'", self.events[-1])
 
     def test_drop_removes_the_old_section_whole(self):
         self.docs[fp.PREP_TITLE] = "## NEB-12: Billing\n\nx\n\n## NEB-11: Sign in\n\ny\n"
@@ -606,13 +633,33 @@ class Prep(unittest.TestCase):
         self.assertIn("x", self.claude.call_args.args[1])  # the old section went into the prompt
 
     def test_refresh_drops_sections_of_tickets_now_ready_and_requeues_changed_ones(self):
-        self.state["prep"] = {"NEB-11": {"print": "old", "at": 1.0, "pid": None}, "NEB-12": {"print": self.print_of("NEB-12"), "at": 1.0, "pid": None}}
+        self.state["prep"] = {"NEB-11": {"print": fp.PRINT_TAG + "old", "at": 1.0, "pid": None}, "NEB-12": {"print": self.print_of("NEB-12"), "at": 1.0, "pid": None}}
         self.docs[fp.PREP_TITLE] = "## NEB-11: Sign in\n\nx\n\n## NEB-12: Billing\n\ny\n"
         self.results["NEB-11"] = rd("NEB-11", ready=True)
         fp.refresh(self.repo, self.state, ["event factory=verified story=NEB-10 project=sign-in"], 100.0, self.out)
         self.assertNotIn("NEB-11", self.docs[fp.PREP_TITLE]); self.assertNotIn("NEB-11", self.state["prep"])
         self.descriptions["NEB-12"] = "changed"; fp.refresh(self.repo, self.state, [], 100.0 + fp.REFRESH_SECONDS, self.out)
         self.assertEqual(self.state["prep"]["NEB-12"]["print"], None)  # queued: the next idle turn prepares it again
+
+    def test_a_feature_edit_neither_requeues_a_prepared_ticket_nor_revives_a_given_up_one(self):
+        # NEB-160's description was edited 28 times in a night: NEB-297, 303, 305 under it were prepared 27 times, and a failure got its attempts back each time
+        self.descriptions["NEB-9"] = "feature v1"
+        self.state["prep"] = {"NEB-11": {"print": self.print_of("NEB-11"), "at": 1.0, "pid": None, "layer": "story"},
+                              "NEB-12": {"print": self.print_of("NEB-12"), "at": 1.0, "pid": 6000, "layer": "stories", "attempts": 1, "gave_up": True}}
+        self.gone.add(6000)
+        for n in range(3):
+            self.descriptions["NEB-9"] = f"feature v{n + 2}"
+            fp.refresh(self.repo, self.state, ["event factory=changed ticket=NEB-9"], 100.0 + n * fp.REFRESH_SECONDS, self.out)
+        self.assertEqual(self.state["prep"]["NEB-11"]["print"], self.print_of("NEB-11"))
+        gave_up = self.state["prep"]["NEB-12"]
+        self.assertEqual((gave_up["print"], gave_up["gave_up"], gave_up["attempts"]), (self.print_of("NEB-12"), True, 1))
+        self.assertNotIn(["linear", "get", "NEB-9", "--json", "--repo", str(self.repo)], self.cli_calls)  # the feature is not even read
+
+    def test_a_print_of_an_older_kind_is_adopted_not_taken_for_a_change(self):
+        self.state["prep"] = {"NEB-11": {"print": "0123456789abcdef", "at": 1.0, "pid": None, "layer": "story", "attempts": 1, "gave_up": True}}
+        fp.refresh(self.repo, self.state, ["event factory=changed"], 100.0, self.out)
+        rec = self.state["prep"]["NEB-11"]
+        self.assertEqual((rec["print"], rec["gave_up"], rec["attempts"]), (self.print_of("NEB-11"), True, 1))
 
     def test_refresh_drops_a_ticket_that_is_in_progress(self):
         self.state["prep"] = {"NEB-12": {"print": self.print_of("NEB-12"), "at": 1.0, "pid": None}}
@@ -627,7 +674,7 @@ class Prep(unittest.TestCase):
         self.assertNotIn("NEB-11", self.docs[fp.PREP_TITLE]); self.assertIn("## NEB-12: Billing", self.docs[fp.PREP_TITLE])
 
     def test_refresh_waits_for_its_trigger_or_the_clock(self):
-        self.state["prep"] = {"NEB-12": {"print": "old", "at": 1.0, "pid": None}}; self.state["prep_checked"] = 100.0
+        self.state["prep"] = {"NEB-12": {"print": fp.PRINT_TAG + "old", "at": 1.0, "pid": None}}; self.state["prep_checked"] = 100.0
         fp.refresh(self.repo, self.state, ["event factory=offer ticket=NEB-12"], 200.0, self.out)
         self.assertEqual(self.cli_calls, [])
 

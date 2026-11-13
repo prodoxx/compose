@@ -28,8 +28,12 @@ PRD_ASK = ("You prepare the product owner's PRD session; the project has no PRD 
            "or drop its questions against what is true now; set drop when none still applies. Reply with only JSON: "
            '{"code": [str], "built": [str], "open": [str], "questions": [{"question": str, "recommendation": str, "why": str}], "drop": bool}.')
 
-def prep_print(ticket_text: str, feature_text: str) -> str:
-    return hashlib.sha256(f"{ticket_text}\0{feature_text}".encode()).hexdigest()[:16]
+PRINT_TAG = "t1:"  # a ticket's print as this version computes it: a print without the tag is an older kind (see refresh)
+
+def prep_print(ticket_text: str) -> str:
+    """What a ticket's prep is about: the ticket's own title and description. Its feature's text is left out on purpose: a feature is edited
+    many times a night (by the manager, by compose) and each edit would prepare every ticket under it again."""
+    return PRINT_TAG + hashlib.sha256(ticket_text.encode()).hexdigest()[:16]
 
 def _q(text, n=None) -> str:
     return " ".join(str(text).replace('"', "'").split())[:n]
@@ -79,11 +83,14 @@ def _issue(repo, ident) -> dict:
         raise ValueError(f"no issue {ident}")
     return got
 
-def _texts(repo, issue) -> tuple:
-    """(the ticket's title and description, its feature's description): what a change to either would reopen."""
+def _ticket_text(issue) -> str:
+    """The ticket's title and description: what a change to it reopens its prep."""
+    return f"{issue.get('title') or ''}\n{issue.get('description') or ''}"
+
+def _feature_text(repo, issue) -> str:
+    """The description of the ticket's feature, which the prep reads but a change to it does not reopen the prep."""
     parent = (issue.get("parent") or {}).get("identifier")
-    feature = _issue(repo, parent).get("description") or "" if parent else ""
-    return f"{issue.get('title') or ''}\n{issue.get('description') or ''}", feature
+    return _issue(repo, parent).get("description") or "" if parent else ""
 
 def candidates(repo, offer_id, limit) -> list:
     """The next tickets that need planning, from the offer on in delivery order: a feature without stories, or a story not specced."""
@@ -175,10 +182,15 @@ def write_section(repo, ident, title, text) -> str:
         kept = _old_section(find_doc(repo)["content"], ident)
         if fc_plan.same_words(kept, text or ""):  # Linear stores the markdown its own way, and its rewrites keep coming: what counts is that the words stayed
             return url
-    want = fc_plan.linear_markdown(text or "").split("\n")
-    got = fc_plan.linear_markdown(kept).split("\n")
-    line = next((n for n in range(max(len(want), len(got))) if want[n:n + 1] != got[n:n + 1]), 0)
-    raise RuntimeError(f"the prep document did not keep the section of {ident}: line {line + 1} reads {(got[line:line + 1] or ['nothing'])[0][:60]!r}, not {(want[line:line + 1] or ['nothing'])[0][:60]!r}")
+    raise RuntimeError(f"the prep document did not keep the section of {ident}: {_first_difference(kept, text or '')}")
+
+def _first_difference(got, want) -> str:
+    """Where the stored section first differs from the written one, by word (the check compares words, so a line says too little):
+    the stored word and the written word at that place, with the words before it."""
+    words = lambda t: re.findall(r"[^\W_]+", fc_plan.linear_markdown(t))
+    g, w = words(got), words(want)
+    n = next((n for n in range(max(len(g), len(w))) if [x.lower() for x in g[n:n + 1]] != [x.lower() for x in w[n:n + 1]]), 0)
+    return f"word {n + 1} reads {(g[n:n + 1] or ['nothing'])[0]!r}, not {(w[n:n + 1] or ['nothing'])[0]!r}, after {' '.join(w[max(0, n - 4):n]) or 'the start'!r}"
 
 def _running(rec, now) -> bool:
     """Whether the record's worker still runs: a pid older than the worker's timeout is another process's."""
@@ -211,6 +223,13 @@ def parse_reply(reply):
             objs.append(v)
     return objs[-1] if objs else None
 
+def _unparsed(reply) -> str:
+    """Why a reply gave no prep, as one short sentence for an event: how long the reply was and how it begins."""
+    text = reply.strip()
+    if not text:
+        return "the reply was empty"
+    return f"no JSON object with a questions list or drop in the reply of {len(text)} characters, which begins: {_q(text, 50)}"
+
 def _strings(value) -> list:
     return [_line(x) for x in value if _line(x)] if isinstance(value, list) else []
 
@@ -237,7 +256,7 @@ def _subject(repo, ident) -> tuple:
         return PRD_TITLE, "prd", prd_prompt(seed, fc_nightstate.notes_tail(repo), _old_section(content, ident))
     issue = _issue(repo, ident)
     title = _line(issue.get("title") or "") or ident
-    feature = _texts(repo, issue)[1]
+    feature = _feature_text(repo, issue)
     try:
         plan = fc_delivery.product_plan(repo)
     except (RuntimeError, SystemExit):
@@ -252,10 +271,10 @@ def run_prep(repo, ident) -> dict:
     since = fc_nightstate.night_since(repo)
     try:
         title, layer, prompt = _subject(repo, ident)
-        reply = fc_claude.claude_once(repo, prompt, timeout=1800, model=fc_claude.claude_id(model), tools="Read,Grep,Glob", effort=effort, keep=8000)[1]
+        reply = fc_claude.claude_once(repo, prompt, timeout=1800, model=fc_claude.claude_id(model), tools="Read,Grep,Glob", effort=effort, keep=None)[1]  # the whole reply: the JSON object opens it
         got = parse_reply(reply)
         if got is None:
-            fc_factorystate.add_event(repo, f'event factory=prep-failed ticket={ident} why="{_q(reply.strip(), 120)}"')
+            fc_factorystate.add_event(repo, f'event factory=prep-failed ticket={ident} why="{_unparsed(reply)}"')
             _outcome(repo, ident, "failed")
             return {"ticket": ident, "status": "failed"}
         found = _clean(got)
@@ -274,7 +293,7 @@ def run_prep(repo, ident) -> dict:
         fc_factorystate.add_event(repo, f"event factory=prepared ticket={ident} questions={len(found['questions'])}  (ready for the next planning session: {_q(url)})")
         return {"ticket": ident, "status": "prepared", "questions": len(found["questions"])}
     except ERRORS as e:
-        fc_factorystate.add_event(repo, f'event factory=prep-failed ticket={ident} why="{_q(str(e) or type(e).__name__, 120)}"')
+        fc_factorystate.add_event(repo, f'event factory=prep-failed ticket={ident} why="{_q(str(e) or type(e).__name__, 240)}"')
         try:
             _outcome(repo, ident, "failed")
         except OSError:
@@ -307,8 +326,8 @@ def refresh(repo, state, lines, now, out) -> None:
             if gone:
                 write_section(repo, ident, _line(issue.get("title") or "") or ident, None)
                 del prep[ident]
-            elif rec.get("print") is not None and prep_print(*_texts(repo, issue)) != rec["print"]:
-                rec.update(print=None, gave_up=False, attempts=0)  # a changed ticket deserves a fresh try
+            elif rec.get("print") is not None:
+                _requeue_if_changed(rec, prep_print(_ticket_text(issue)))
         except ERRORS:
             continue
     try:  # a worker's late write can bring back a section refresh dropped: nothing in state names it, so it goes
@@ -317,6 +336,15 @@ def refresh(repo, state, lines, now, out) -> None:
                 write_section(repo, ident, ident, None)
     except ERRORS:
         pass
+
+def _requeue_if_changed(rec, now_print) -> None:
+    """Queue the ticket's prep again when its own text changed since the print the record holds; a given-up ticket gets a fresh try with it."""
+    if now_print == rec["print"]:
+        return
+    if str(rec["print"]).startswith(PRINT_TAG):
+        rec.update(print=None, gave_up=False, attempts=0)
+    else:
+        rec["print"] = now_print  # an older kind of print also covered the feature's text: it says nothing about a change to the ticket
 
 def prd_found(state):
     """The factory's last PRD lookup: True, False, or None when it has none (night prep prepares the PRD only on False)."""
@@ -368,7 +396,7 @@ def prep_idle(repo, state, offer, now, out) -> None:
             if rec and (rec.get("print") is not None or rec.get("gave_up")):
                 continue
             try:
-                fingerprint = prep_print(*_texts(repo, _issue(repo, c["id"])))
+                fingerprint = prep_print(_ticket_text(_issue(repo, c["id"])))
             except ERRORS:
                 continue
             pid = fc_nightstate.spawn_once(repo, ["factory", "prep", "--repo", str(repo), "--ticket", c["id"]], "night-prep.log")

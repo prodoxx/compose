@@ -45,6 +45,7 @@ def repo_instructions(cwd):
 
 def claude_once(cwd, prompt, timeout=900, model=None, tools="Read,Edit,Write,Bash,Grep,Glob", effort=None, keep=1500):
     """One-shot baseline through Claude Code on the subscription, with only `tools`. Marginal cost $0; the CLI's own cost figure is recorded for reference.
+    The reply text it returns is its last `keep` characters (a verdict comes last), or the whole reply when `keep` is None (a caller that parses a JSON object out of it).
     It starts lean, without the user's CLAUDE.md, skills, plugins, hooks, and MCP servers, which cost ~200K input tokens a call;
     the repo's own CLAUDE.md and AGENTS.md go into its system prompt instead."""
     # --model is explicit because ~/.claude/settings.json may carry a launcher-injected default that headless runs cannot use.
@@ -69,7 +70,8 @@ def claude_once(cwd, prompt, timeout=900, model=None, tools="Read,Edit,Write,Bas
     usage = out.get("usage", {})
     tokens_in = usage.get("input_tokens", 0) + usage.get("cache_read_input_tokens", 0) + usage.get("cache_creation_input_tokens", 0)
     fc_core.LEDGER.add("claude-subscription", tokens_in, usage.get("output_tokens", 0), 0.0)
-    return None, str(out.get("result", ""))[-keep:], out.get("num_turns", 0), {"tokens_in": tokens_in, "tokens_out": usage.get("output_tokens", 0),
+    reply = str(out.get("result", ""))
+    return None, (reply if keep is None else reply[-keep:]), out.get("num_turns", 0), {"tokens_in": tokens_in, "tokens_out": usage.get("output_tokens", 0),
                                                                                 "cost": 0.0, "reference_cost": out.get("total_cost_usd")}
 
 def claude_json(system, user, model, timeout=300, effort=None):
