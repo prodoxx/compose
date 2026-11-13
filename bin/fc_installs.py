@@ -1,4 +1,4 @@
-"""The installs a checkout runs on: which git-ignored dependency directories are copied and which are made.
+"""The installs a checkout runs on: which git-ignored dependency directories are copied and which are made, and the files a generate step makes.
 Imports only fc_core. fc_worktree.ready_checkout decides which of them each checkout gets."""
 import shutil, sys
 from pathlib import Path
@@ -48,3 +48,11 @@ def sync_venv(wt, d):
     r = fc_core.sh(["uv", "sync", "--frozen", "--quiet"], venv.parent, check=False)
     if r.returncode:
         fc_core.say(f"warning: uv sync --frozen failed in {venv.parent}; `uv run` there makes the venv: {(r.stderr or r.stdout).strip()[-300:]}")
+
+def generate(wt, cmd):
+    """Run verify.json `generate` (for example `bun run db:generate`) in the checkout `wt`: it makes the git-ignored files a build or an e2e
+    check reads that no install makes (a generated Prisma client, compiled schemas), which a fresh clone lacks. Its failure is said and does not
+    stop the checkout: the check that needed the files fails with its own message."""
+    r = fc_core.sh(cmd, wt, check=False)
+    if r.returncode:
+        fc_core.say(f"warning: generate `{cmd}` failed in {wt}: {fc_core.scrub((r.stderr or r.stdout).strip()[-300:])}")

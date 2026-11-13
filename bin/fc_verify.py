@@ -315,7 +315,7 @@ def verify_root(repo, proj, cfg):
     if not chain:
         return repo, fc_worktree.review_base(repo, cfg) or trunk, None
     fc_core.sh(["git", "checkout", "-q", chain[-1]], wt)
-    fc_worktree.ready_checkout(repo, wt, install=cfg.get("install"))
+    fc_worktree.ready_checkout(repo, wt, install=cfg.get("install"), generate=cfg.get("generate"))
     fc_core.say(f"verify at    stack top {chain[-1]} ({len(chain)} layer(s) on {trunk}); fixes commit on that layer")
     return wt, trunk, wt
 
@@ -440,7 +440,7 @@ def verify_rounds(repo, proj, cfg, a, rounds, t0, left_out=()):
         lap = time.time()
     for rnd in range(a.fix + 1):
         if cfg.get("main_repo"):  # a fix round may have changed the lockfile
-            fc_worktree.ready_checkout(cfg["main_repo"], repo, install=cfg.get("install"))
+            fc_worktree.ready_checkout(cfg["main_repo"], repo, install=cfg.get("install"), generate=cfg.get("generate"))
         ok, report, findings = run_stages(repo, proj, cfg, a, tests)
         if fc_fixround.checkout_moved(stands_on, branch()):  # a fix commit stays on the branch; only a checkout moves it, and then the stages judged other code
             fc_core.say(fc_fixround.void_message(repo, stands_on, branch()))

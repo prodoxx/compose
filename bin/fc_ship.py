@@ -42,7 +42,7 @@ class InstallFailed(RuntimeError):
 def ready(repo, wt, cfg):
     """fc_worktree.ready_checkout with verify.json `install`, its failure (a broken lockfile, a tool not on PATH) raised as InstallFailed."""
     try:
-        fc_worktree.ready_checkout(repo, wt, install=cfg.get("install"))
+        fc_worktree.ready_checkout(repo, wt, install=cfg.get("install"), generate=cfg.get("generate"))
     except (RuntimeError, OSError) as e:
         lines = [l for l in fc_core.scrub(str(e)).splitlines()[1:] if l.strip()] or [str(e)]
         raise InstallFailed("\n".join(lines[-12:]))

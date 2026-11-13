@@ -407,5 +407,5 @@ def cmd_top(a):
     if not chain:
         sys.exit("no unmerged layers; the trunk already is the top")
     fc_core.sh(["git", "checkout", "-q", "--detach", chain[-1]], wt)
-    fc_worktree.ready_checkout(repo, wt, install=fc_core.project_config(proj).get("install"))
+    fc_worktree.ready_checkout(repo, wt, install=fc_core.project_config(proj).get("install"), generate=fc_core.project_config(proj).get("generate"))
     print(f"stack top {chain[-1]} ({len(chain)} layers on {trunk}) checked out at:\n{wt}")

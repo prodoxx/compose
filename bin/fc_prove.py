@@ -146,7 +146,7 @@ def prove_root(repo, proj, cfg, only):
     if fc_layers.STACK_STOP:
         sys.exit(f"prove FAIL  nothing proved or recorded: {fc_layers.STACK_STOP}")
     fc_core.sh(["git", "checkout", "-q", chain[-1]], wt)
-    fc_worktree.ready_checkout(repo, wt, install=cfg.get("install"))
+    fc_worktree.ready_checkout(repo, wt, install=cfg.get("install"), generate=cfg.get("generate"))
     fc_core.say(f"prove  at    {chain[-1]}, the stack below {ids[0]} ({len(chain)} layer(s) on {trunk})")
     olds = (repo, fc_core.main_checkout(repo))
     return wt, {**cfg, **{k: fc_verify.at_root(cfg[k], olds, wt) for k in ("checks", "e2e", "e2e_setup", "e2e_env") if k in cfg}, "main_repo": repo}, wt

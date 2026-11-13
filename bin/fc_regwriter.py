@@ -41,7 +41,7 @@ def start_writer(repo, proj, meta, result):
     else:
         path = proj / "worktrees" / f"regress-{tid}"
         fc_core.sh(["git", "worktree", "add", "-q", str(path), branch], repo)
-    fc_worktree.ready_checkout(repo, path, install=fc_core.project_config(proj).get("install"))
+    fc_worktree.ready_checkout(repo, path, install=fc_core.project_config(proj).get("install"), generate=fc_core.project_config(proj).get("generate"))
     model = "tests" if "tests" in fc_config.CREW_MODELS else "groundwork" if "groundwork" in fc_config.CREW_MODELS else None
     fc_crew.cmd_crew(argparse.Namespace(repo=str(repo), project=proj.name, action="start", role=f"tests-{tid}", title=f"tests {tid}",
                                         brief=writer_brief(meta, diff), force=False, cwd=str(path), leased=True, model=model))

@@ -193,7 +193,7 @@ def run_task(repo, proj, task, attempts, model=None, reset_files=False, tag=""):
     fc_core.sh(["git", "clone", "--quiet", "--shared", "--no-hardlinks", str(repo), str(wt)], repo)
     base_name, base = task_base(repo, proj, meta)
     fc_core.sh(["git", "checkout", "-q", "-b", branch, base], wt)  # a stacked task starts from its lower layer's tip
-    fc_worktree.ready_checkout(repo, wt, borrow=not fc_worktree.names_lockfile(meta), install=fc_core.project_config(proj).get("install"))
+    fc_worktree.ready_checkout(repo, wt, borrow=not fc_worktree.names_lockfile(meta), install=fc_core.project_config(proj).get("install"), generate=fc_core.project_config(proj).get("generate"))
     for name in ("opencode.jsonc", "opencode.json"):  # untracked local config the implementer needs
         if (repo / name).exists() and not (wt / name).exists():
             shutil.copy(repo / name, wt / name)
@@ -429,7 +429,7 @@ def run_task(repo, proj, task, attempts, model=None, reset_files=False, tag=""):
         entry = {"attempt": n, **({"cut_short": True} if cut else {}), "seconds": round(time.time() - t0, 1), "tool_calls": tools, "usage": usage,
                  "test_exit": test.returncode, "tampered": tampered, **({"broke": broke} if broke else {}), **({"base unknown": cannot} if cannot else {}), **({"red on base (baseline unknown)": red_on_base} if red_on_base else {}), "lines": lines, "new_docs": new_docs, "stray": stray,
                  "refused": fc_readguard.refused(wt) - ref_before,
-                 "reply": reply[-1500:], "test_output": (test.stdout + test.stderr)[-3000:]}
+                 "reply": reply[-1500:], "test_output": fc_core.excerpt(test.stdout + test.stderr)}
         log.append(entry)
         progress("running")
         if isinstance(session, dict):
@@ -459,7 +459,7 @@ def run_task(repo, proj, task, attempts, model=None, reset_files=False, tag=""):
         if test.returncode != 0:
             summary = entry["summary"]
             problems.append(f"The test still fails.\nCommand: {meta['test']}\nExit code: {test.returncode}\n"
-                            + (f"What failed:\n{summary}\n" if summary else "") + f"Output (tail):\n{output[-1000:]}"
+                            + (f"What failed:\n{summary}\n" if summary else "") + f"Output (its head, the lines from its first failure, its tail; a cut says how much it dropped):\n{fc_core.excerpt(output, 2000)}"
                             + f"\nFull output: {log_path.resolve()}; read it before you change anything.")
         if over:
             problems.append(f"Your change is {lines} lines (added plus deleted); the hard limit is {fc_config.MAX_DIFF_LINES}. Shrink it: revert "

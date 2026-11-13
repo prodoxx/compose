@@ -35,7 +35,7 @@ def broken_base(proj, meta, red, base_name, branch, wt):
     fc_core.say(f"{meta['id']} broken  test exits {red.returncode} on {base_name} before any change: an environment problem, so no implementer turn")
     result = {"id": meta["id"], "title": meta.get("title"), "status": "broken_base", "model": meta["model"], "attempts": 0,
               "seconds": 0.0, "cost": 0.0, "branch": branch, "worktree": str(wt), "diffstat": "",
-              "log": [{"base_exit": red.returncode, "test_output": (red.stdout + red.stderr)[-3000:]}]}
+              "log": [{"base_exit": red.returncode, "test_output": fc_core.excerpt(red.stdout + red.stderr)}]}
     (proj / "results").mkdir(exist_ok=True)
     fc_core.atomic_write((proj / "results" / f"{meta['id']}.json"), json.dumps(result, indent=2))
     fc_linear.linear_event(proj, meta, "failed", result)

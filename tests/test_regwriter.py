@@ -78,7 +78,7 @@ class Writer(unittest.TestCase):
     def test_plain_worktree_ready_with_install_and_started(self):
         path, ready, crew = self.start()
         self.assertEqual(path, self.proj / "worktrees" / "regress-001")
-        ready.assert_called_once_with(self.repo, path, install="make deps")
+        ready.assert_called_once_with(self.repo, path, install="make deps", generate=None)
         want = dict(repo=str(self.repo), project="p", action="start", role="tests-001", title="tests 001", force=False, cwd=str(path), leased=True)
         self.assertEqual({k: crew[k] for k in want}, want)
         self.assertIn("+fixed", crew["brief"])

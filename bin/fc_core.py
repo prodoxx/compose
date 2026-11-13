@@ -307,6 +307,30 @@ def scrub(text):
         text = text.replace(v, REDACTED)
     return text
 
+OUTPUT_CHARS = 3000  # what a task result keeps of a failed test's output
+FAILURE_RE = re.compile(r"^[ \t]*(?:error\b|fail(?:ed|ure)?\b|not ok\b|--- FAIL|traceback|panic:|[\w.]*(?:error|exception)\b:?|\d+\) )", re.M | re.I)  # a line that starts like a failure, not a warning that says "errors"
+
+def excerpt(output, limit=OUTPUT_CHARS):
+    """`output` when it fits in `limit` characters, else its head, the lines from its first failure (one line of context before it), and its
+    tail, a marker for each cut that says how much it dropped. A plain tail kept bundler warnings and lost the failure before them,
+    and said nothing of the cut."""
+    if len(output) <= limit:
+        return output
+    head, mid = limit // 5, limit // 4
+    tail_at = len(output) - (limit - head - mid)
+    pieces, hit = [(0, head)], FAILURE_RE.search(output, head)
+    if hit:
+        before = output.rfind("\n", 0, hit.start())  # the line above the failure's
+        start = max(head, output.rfind("\n", 0, max(before, 0)) + 1)
+        if start < tail_at:
+            pieces.append((start, min(start + mid, tail_at)))
+    pieces.append((tail_at, len(output)))
+    out, at = "", 0
+    for a, b in pieces:
+        out += (f"\n[... {a - at} characters cut ...]\n" if a > at else "") + output[a:b]
+        at = b
+    return out
+
 class Scrubbed:
     """A text stream that scrubs what it writes: the CLI's stdout and stderr, which a detached run writes to results/<cmd>.log."""
     def __init__(self, stream):

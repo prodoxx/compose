@@ -407,7 +407,7 @@ def test_worktree(proj, tid):
         if path.exists():
             return path
         fc_core.sh(["git", "worktree", "add", "-q", "-B", branch, str(path), "HEAD"], wt)
-    fc_worktree.ready_checkout(wt, path, install=fc_core.project_config(proj).get("install"))
+    fc_worktree.ready_checkout(wt, path, install=fc_core.project_config(proj).get("install"), generate=fc_core.project_config(proj).get("generate"))
     return path
 
 def not_ready_line(tid, last):

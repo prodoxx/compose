@@ -216,6 +216,7 @@ A `.venv` of a uv project (a `uv.lock` beside it) is not shared at all: each che
 A linked one made every clone import whichever clone last ran `uv run`, and a task that rewrote `uv.lock` left the project worktree's venv pointing at that task's clone.
 A passed lockfile task never hands its venv to the project worktree for the same reason.
 A project whose build output depends on where `node_modules` lives sets `install` in verify.json, and each clone runs that command instead.
+A project whose build or e2e check reads git-ignored files no install makes (a generated Prisma client) sets `generate` in verify.json, for example `bun run db:generate`, and each fresh clone and verify's worktree runs it after the installs.
 
 ## Model choices
 

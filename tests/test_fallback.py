@@ -261,6 +261,28 @@ class ReadyCheckout(unittest.TestCase):
         self.assertFalse((self.repo / "node_modules").is_symlink())
 
 
+    def test_generate_runs_in_the_checkout_after_the_links_and_after_an_install_that_is_up_to_date(self):
+        # #452: a fresh clone lacks the git-ignored files a generate step makes (a Prisma client), so its first e2e check failed at the build
+        (self.repo / "node_modules" / "jest").mkdir(parents=True)
+        self.ready(deps=["node_modules"], generate="bun run db:generate")
+        self.assertEqual(self.ran[-1], ("bun run db:generate", self.wt))
+        self.assertTrue((self.wt / "node_modules").is_symlink())  # the install is still borrowed: generate does not replace it
+        self.locks = ["bun.lock"]
+        self.ready(install="bun install", generate="bun run db:generate")
+        self.ready(install="bun install", generate="bun run db:generate")  # the install is skipped the second time, the generate is not
+        self.assertEqual([c for c, _ in self.ran if isinstance(c, str)], ["bun run db:generate", "bun install", "bun run db:generate", "bun run db:generate"])
+        self.ran.clear()
+        self.ready(deps=["node_modules"])
+        self.assertEqual([c for c, _ in self.ran if isinstance(c, str)], [])  # unset: nothing runs
+
+    def test_a_generate_that_fails_is_said_and_does_not_stop_the_checkout(self):
+        said = []
+        sh = self.sh
+        self.sh = lambda cmd, cwd=None, *a, **k: mock.Mock(stdout="", stderr="prisma: no schema", returncode=1) if cmd == "bun run db:generate" else sh(cmd, cwd, *a, **k)
+        with mock.patch.object(fc.fc_core, "say", said.append):
+            self.ready(generate="bun run db:generate")
+        self.assertTrue(said and "bun run db:generate" in said[0] and "prisma: no schema" in said[0])
+
     def uv_project(self, venv=".venv"):
         """The project worktree has a venv, and the clone the uv.lock beside it."""
         (self.repo / venv).mkdir(parents=True); (self.repo / venv / "pyvenv.cfg").write_text("home = /usr/bin\n")

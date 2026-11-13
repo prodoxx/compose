@@ -475,7 +475,16 @@ def stamp_trail_wiring(wt):
         stamp.parent.mkdir(parents=True, exist_ok=True)
         stamp.write_text(json.dumps({"version": version, "hosts": ["claude"], "opts": {"global": False, "mcp": True, "hooks": True, "statusline": True}}))
 
-def ready_checkout(repo, wt, borrow=True, install=None):
+def ready_checkout(repo, wt, borrow=True, install=None, generate=None):
+    """Make a task clone or the CLI's worktree runnable like the main checkout: see link_installs for the installs and env files.
+    `generate` (verify.json `generate`, for example `bun run db:generate`) then runs in the checkout, every time: it makes the git-ignored
+    files a build or an e2e check reads that no install makes (a generated Prisma client, compiled schemas), which a fresh clone lacks. Its
+    failure is said and does not stop the checkout: the check that needed it fails with its own message."""
+    link_installs(repo, wt, borrow, install)
+    if generate:
+        fc_installs.generate(wt, generate)
+
+def link_installs(repo, wt, borrow=True, install=None):
     """Make a task clone or the CLI's worktree runnable like the main checkout: symlink each git-ignored dependency install
     (node_modules at any depth, vendor, .venv) and each git-ignored .env or .env.* file from it, and keep those links and
     trail's graph out of git status through the checkout's info/exclude. A link is a file to git, so a `node_modules/` rule would not cover it; `/client/node_modules` does.
