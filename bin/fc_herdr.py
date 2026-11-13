@@ -17,6 +17,10 @@ def herdr_env():
     return os.environ.get("HERDR_ENV") == "1" and bool(os.environ.get("HERDR_SOCKET_PATH")) and not os.environ.get("COMPOSE_NO_HERDR")
 
 PANE_MAKERS = (("tab", "create"), ("pane", "split"), ("workspace", "create"))
+TYPED_LINE_MAX = 900  # bytes: herdr types an agent's command into a new pane's shell, and until zsh starts its line editor the tty is in
+# canonical mode and keeps only 1024 bytes of a line, Enter included (herdr 0.9.3 loses the rest without a word; 0.9.5 answers
+# agent_start_input_failed). A Claude teammate's command stays under this (fc_claude.spill_settings) rather than race the shell.
+START_RETRY = ("agent_pane_busy", "agent_name_not_found", "agent_start_input_failed")  # the new pane's shell is not ready yet
 SHELL_GUARD = fc_host.SHELL_GUARD
 def herdr_argv(args):
     """The herdr command line for `args`. A new pane gets the herdr server's env, not ours, so a call that makes one passes the
@@ -156,10 +160,19 @@ def shell_startup_check(home):
     return False, ("; ".join(found) + ", which asks 'Would you like to update? [Y/n]' in every new shell and takes the first letter of "
                    "the agent command compose types into a teammate's pane, so its start times out")
 
-def herdr_start_crew(*args, tries=8):
+def start_input_failed(e):
+    """The start error `e` as one sentence: agent_start_input_failed says what happened (the command is longer than the 1024 bytes a
+    shell that has not started its line editor takes), not only a code."""
+    if "agent_start_input_failed" not in str(e):
+        return str(e)
+    return (f"{e}: the launch command did not reach the new pane's shell whole (a tty takes 1024 bytes of a line until the shell is ready) "
+            "and the shell never became ready in time; start it again")
+
+def herdr_start_crew(*args, tries=12):
     """`herdr agent start` for a teammate, retried while its pane is still coming up: starts running in parallel (designcrews,
     testcrews) race each other and the new pane answers agent_pane_busy until its shell is there, or agent_name_not_found while herdr
-    has not yet registered the name the start waits for (the session may be up under its pane's default name: it is renamed).
+    has not yet registered the name the start waits for (the session may be up under its pane's default name: it is renamed), or answers
+    agent_start_input_failed while the command is longer than the 1024 bytes a shell still starting takes (herdr says to retry).
     A shell prompt on the new pane takes the typed command's first letters, so one on screen is answered first (pane_unblock), and a
     start that times out on one is answered once and started again; a timeout that stays says what the pane shows (pane_diagnosis)."""
     pane = args[args.index("--pane") + 1] if "--pane" in args else None
@@ -186,9 +199,11 @@ def herdr_start_crew(*args, tries=8):
                     continue
                 if "timeout" in str(e) and (why := pane_diagnosis(pane)):
                     raise RuntimeError(f"{e}: {why}") from e
-            if not any(c in str(e) for c in ("agent_pane_busy", "agent_name_not_found")) or i == tries - 1:
+            if not any(c in str(e) for c in START_RETRY) or i == tries - 1:
+                if "agent_start_input_failed" in str(e):
+                    raise RuntimeError(start_input_failed(e)) from e
                 raise
-            time.sleep(0.5 * (i + 1))
+            time.sleep(min(0.5 * (i + 1), 3))
 
 def pane_processes(pane):
     """The processes running in `pane` in front of its shell: empty when the pane holds nothing but an idle shell."""
@@ -348,7 +363,7 @@ def herdr_implementer_pane(space, cwd, env, label=IMPLEMENTERS_TAB):
     r = herdr("pane", "split", panes[-1]["pane_id"], "--direction", direction, "--cwd", str(cwd), *env_args, "--no-focus", check=True)
     return r["pane"]["pane_id"]
 
-def herdr_agent_start(*args, tries=8):
+def herdr_agent_start(*args, tries=12):
     """`herdr agent start`, retried while the pane is still coming up: a pane split a moment ago answers agent_pane_busy
     until its shell prompt is there, which is the harness racing itself and never a reason to fail a task. A shell prompt on the
     pane is answered like herdr_start_crew does, and a timeout that stays says what the pane shows."""
@@ -359,13 +374,13 @@ def herdr_agent_start(*args, tries=8):
         if err == "timeout" and pane and not answered and pane_unblock(pane):
             answered = True
             continue
-        if err not in ("agent_pane_busy", "agent_name_not_found") or i == tries - 1:
+        if err not in START_RETRY or i == tries - 1:
             break
-        time.sleep(0.5 * (i + 1))
+        time.sleep(min(0.5 * (i + 1), 3))
     if err:
         if err == "timeout" and pane and (why := pane_diagnosis(pane)):
             err = f"{err}: {why}"
-        raise RuntimeError(f"herdr agent start: {err}")
+        raise RuntimeError(start_input_failed(f"herdr agent start: {err}"))
     if "--pane" in args:
         agent_pids(args[args.index("--pane") + 1])
     return started

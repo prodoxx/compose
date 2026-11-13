@@ -56,6 +56,9 @@ In Rex a block's label is the agent's identity, so a label you change by hand lo
 compose keeps the id of the project's Rex session in `.compose/<project>/results/rex.json` and names the session back when something renamed it.
 Rex's SessionStart hook tells every Claude Code session to name its session after its task, so a teammate would rename the shared project session; compose's teammates are told not to, and a rename that happens anyway is undone on compose's next call.
 
+herdr types a teammate's command into its tab's new shell, and until that shell has started its line editor the tty keeps only 1024 bytes of a line (herdr 0.9.5 answers `agent_start_input_failed`, which compose retries; 0.9.3 dropped the rest without a word).
+A Claude teammate's `--settings` and its MCP deny list grow with the machine, so they go in `.compose/<project>/results/crew/<name>.settings` (the deny list as `permissions.deny`, which Claude Code applies as it does `--disallowedTools`) and the typed command carries only the path.
+
 ## `compose stages`
 
 herdr draws every verify stage on a pane of its own.

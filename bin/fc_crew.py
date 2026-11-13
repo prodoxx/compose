@@ -298,6 +298,8 @@ def cmd_crew(a):
               *( [] if fc_mcp.keeps_commands(a.role) else ["--disable-slash-commands"]),  # the team lead keeps `/compact` for the compactor
               *(["--add-dir", str(work)] if work else []), "--permission-mode", "auto", "--allowedTools", "Bash(npx -y lavish-axi:*)",
               "Bash(compose frame0:*)"]  # `compose frame0 up|draw|export|pages|lint` runs with no prompt in the session that draws; the flag swallows what follows, so it stays last
+    if kind == "claude":  # the settings and the MCP patterns grow with the machine (50 servers: 2.5 KB), past what a starting shell's tty keeps of a typed line (#461)
+        argv = fc_claude.spill_settings(argv, crew_dir(proj) / f"{name}.settings")
     try:
         made = fc_fleet.start_teammate(proj, space, title, cwd, env, agent, kind, program, argv)
     except fc_fleet.StartFailed as e:

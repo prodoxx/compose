@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import contextlib, importlib.machinery, importlib.util, io, json, os, tempfile, unittest
+import contextlib, importlib.machinery, importlib.util, io, json, os, shlex, tempfile, unittest
 from pathlib import Path
 from unittest import mock
 import shutil, subprocess, sys, time
@@ -168,7 +168,7 @@ class Crew(unittest.TestCase):
         start = calls[4]
         self.assertEqual(start[2], "shop-q-neb-12")
         self.assertIn("claude", start)
-        self.assertEqual(json.loads(start[start.index("--settings") + 1])["attribution"], {"commit": "", "pr": ""})  # no co-author trailer on a crew commit
+        self.assertEqual(json.loads(Path(start[start.index("--settings") + 1]).read_text())["attribution"], {"commit": "", "pr": ""})  # no co-author trailer on a crew commit; the settings file keeps the typed command short (#461)
         self.assertFalse(any("brief.md" in str(x) for x in start))  # a session launched on a prompt works on it at once and never shows herdr the idle box its start waits for
         self.assertEqual(calls[8][2], "shop-q-neb-12")
         self.assertIn("brief.md", calls[8][3])  # the brief goes in once the session is idle and its box is on screen
@@ -1051,6 +1051,26 @@ class StartPaneBusy(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "agent_pane_busy"):
             self.run_start(busy=99)
 
+    def test_a_command_the_new_panes_shell_could_not_take_whole_is_retried_until_it_can(self):
+        """#461: herdr 0.9.5 answers agent_start_input_failed while the shell is still starting and its tty keeps 1024 bytes of a line; it says to retry."""
+        calls = []
+        def herdr(*args, **kw):
+            calls.append(args)
+            if args[:2] == ("agent", "start") and [c[:2] for c in calls].count(("agent", "start")) <= 5:
+                raise RuntimeError("herdr agent start: agent_start_input_failed")
+            return {}
+        with mock.patch.object(fc.fc_herdr, "herdr", herdr):
+            fc.fc_herdr.herdr_start_crew("shop-design-086", "--kind", "claude", "--pane", "wJ:p3")
+        self.assertEqual([c[:2] for c in calls].count(("agent", "start")), 6)
+
+    def test_a_command_that_never_arrives_whole_says_so(self):
+        def herdr(*args, **kw):
+            if args[:2] == ("agent", "start"):
+                raise RuntimeError("herdr agent start: agent_start_input_failed")
+            return {}
+        with mock.patch.object(fc.fc_herdr, "herdr", herdr), self.assertRaisesRegex(RuntimeError, "agent_start_input_failed: the launch command did not reach the new pane's shell whole"):
+            fc.fc_herdr.herdr_start_crew("shop-design-086", "--kind", "claude", "--pane", "wJ:p3")
+
     def run_timeout(self, live):
         calls = []
         def herdr(*args, **kw):
@@ -1109,7 +1129,7 @@ class RestrictedStart(unittest.TestCase):
                                                     "compose-extra@x": True, "my-compose@x": True, "figmatic@x": True}}
     P = ["claude_ai_Claude_Docs", "claude_ai_Figma", "claude_ai_Google_Calendar", "claude_ai_Linear", "claude_ai_Notion", "frame0", "framelink-figma", "graft", "plugin_product-management_figma", "trail"]
 
-    def start(self, role, model="claude:claude-opus-5-5", effort=None, mcpjson=None, **kw):
+    def start(self, role, model="claude:claude-opus-5-5", effort=None, mcpjson=None, raw=False, **kw):
         proj = Path(tempfile.mkdtemp()) / ".compose" / "shop"
         proj.mkdir(parents=True)
         if mcpjson is not None:  # the session's cwd (crew_workdir below) holds this .mcp.json
@@ -1132,7 +1152,17 @@ class RestrictedStart(unittest.TestCase):
                 mock.patch("pathlib.Path.home", return_value=home):
             fc.fc_crew.cmd_crew(a)
         start = next(c for c in calls if c[:2] == ("agent", "start"))
-        return list(start[start.index("--") + 1:])
+        args = list(start[start.index("--") + 1:])
+        return args if raw else self.expand(args)
+
+    @staticmethod
+    def expand(args):
+        """The argv as a session sees it: the `--settings` file read back inline, its `permissions.deny` patterns as `--disallowedTools` after it
+        (what the typed command carries instead, so it stays under a starting shell's 1024 bytes of tty line: #461)."""
+        i = args.index("--settings")
+        settings = json.loads(Path(args[i + 1]).read_text())
+        deny = settings.pop("permissions", {}).get("deny")
+        return [*args[:i + 1], json.dumps(settings), *(["--disallowedTools", *deny] if deny else []), *args[i + 2:]]
 
     def patterns(self, args):
         self.assertIn("--disallowedTools", args)
@@ -1231,6 +1261,33 @@ class RestrictedStart(unittest.TestCase):
                 env = json.loads(args[args.index("--settings") + 1])["env"]
                 self.assertEqual(env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"], "150000")  # the env var outranks --autocompact and the user's own settings
                 self.assertNotIn("--autocompact", args)
+
+    def test_a_long_launch_command_keeps_its_settings_and_patterns_in_a_file(self):
+        """#461: 50 MCP servers made the typed command 2.5 KB; a starting shell's tty keeps 1024 bytes of a line, so it was cut and never ran."""
+        self.P = [f"server_{i}" for i in range(60)]
+        for role in ("planner", "orchestrator", "designer"):
+            with self.subTest(role=role):
+                args = self.start(role, raw=True)
+                self.assertLess(len(shlex.join(["claude", *args]).encode()), fc.fc_herdr.TYPED_LINE_MAX)
+                self.assertNotIn("--disallowedTools", args)
+                settings = json.loads(Path(args[args.index("--settings") + 1]).read_text())
+                self.assertEqual(set(settings["permissions"]["deny"]), {f"mcp__server_{i}__*" for i in range(60)})
+                self.assertEqual(settings["env"]["ENABLE_TOOL_SEARCH"], "true")  # the rest of the inline settings moved with them
+                self.assertIn("enabledPlugins", settings)
+                self.assertEqual(args[-3:], ["--allowedTools", "Bash(npx -y lavish-axi:*)", "Bash(compose frame0:*)"])  # it swallows what follows, so it stays last
+
+    def test_a_command_with_no_patterns_spills_only_its_settings(self):
+        path = Path(tempfile.mkdtemp()) / "x.settings"
+        argv = fc.fc_claude.spill_settings(["--model", "m", "--settings", json.dumps({"env": {"A": "1"}}), "--permission-mode", "auto"], path)
+        self.assertEqual(argv, ["--model", "m", "--settings", str(path), "--permission-mode", "auto"])
+        self.assertEqual(json.loads(path.read_text()), {"env": {"A": "1"}})
+
+    def test_the_settings_file_is_named_for_the_teammate_and_never_listed_as_one(self):
+        args = self.start("planner", raw=True)
+        path = Path(args[args.index("--settings") + 1])
+        self.assertEqual(path.name, "shop-planner.settings")
+        self.assertEqual(sorted(p.name for p in path.parent.glob("*.json")), ["shop-planner.json"])  # `crew list` reads every *.json here as a teammate
+
 
 LINEAR_LINE = ("Linear is the record: read and write it with `compose linear` (get, list, create, update, comment), never a Linear MCP tool; "
                "write what you learn and decide there, never to files.")

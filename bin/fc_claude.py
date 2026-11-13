@@ -36,6 +36,24 @@ def crew_settings(role, cwd):
     return json.dumps({"attribution": {"commit": "", "pr": ""}, "env": env,
                        "enabledPlugins": {k: False for k in enabled if not k.startswith("compose@") and not (keep and k.startswith("figma@"))}})
 
+def spill_settings(argv, path):
+    """`argv` of a Claude teammate with its `--settings` JSON and its `--disallowedTools` patterns moved into the file `path`, so the
+    command typed into the pane stays short. Both grow with the machine (one pattern per installed MCP server, one entry per plugin),
+    and a typed line past fc_herdr.TYPED_LINE_MAX (1024 bytes in the tty) is cut by a shell that is still starting. The patterns become `permissions.deny`,
+    which Claude Code applies as it does the flag (the same tools stay out of the session)."""
+    argv = list(argv)
+    i = argv.index("--settings")
+    settings = json.loads(argv[i + 1])
+    if "--disallowedTools" in argv:
+        j = argv.index("--disallowedTools")
+        end = next((k for k in range(j + 1, len(argv)) if argv[k].startswith("--")), len(argv))
+        settings["permissions"] = {**settings.get("permissions", {}), "deny": argv[j + 1:end]}
+        del argv[j:end]
+        i = argv.index("--settings")
+    fc_core.atomic_write(path, json.dumps(settings, indent=2))
+    argv[i + 1] = str(path)
+    return argv
+
 REPO_INSTRUCTIONS = ("CLAUDE.md", ".claude/CLAUDE.md", "AGENTS.md")
 def repo_instructions(cwd):
     """The repo's own instruction files at `cwd`, for a session started in --restricted, which drops every CLAUDE.md with the
