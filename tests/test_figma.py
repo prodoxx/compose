@@ -1099,6 +1099,25 @@ class FigmaJudgeScreens(unittest.TestCase):
                 res = self.judge(("MET", 0.0), screens)
                 self.assertEqual((res["status"], res["criteria"][0]["choice"]), ("passed", "MET"))
 
+    def test_the_second_ask_is_a_check_that_points_at_the_element_and_must_clear_the_threshold_too(self):
+        """#466: "twice" asked the same question with the same images, and a second NOT_MET of any strength failed the criterion."""
+        shots = fc.fc_figma.fc_figmashots
+        res = self.judge(("MET", 0.0), [("NOT_MET", 0.9), ("NOT_MET", 0.8)])
+        first, second = (q["c0"]["instructions"]["rules"] for _, q in self.screen_states)
+        self.assertEqual((first, second), (shots.SCREEN_RULES, shots.SCREEN_RULES + shots.CONFIRM_RULES))
+        self.assertIn("point at", second)
+        row = res["criteria"][0]
+        self.assertEqual((row["screen"]["again"], row["screen"]["again_p_not_met"]), ("NOT_MET", 0.8))
+        self.assertIn("p_not_met 0.9, then 0.8 when asked to point at the element", row["evidence"])
+        self.assertIn("part's cut edge or the white margin", row["evidence"])
+        res = self.judge(("MET", 0.0), [("NOT_MET", 0.9), ("NOT_MET", 0.5)])  # a weak second NOT_MET is no second opinion
+        self.assertEqual((res["status"], res["criteria"][0]["choice"], res["criteria"][0]["screen"]["violated"]), ("passed", "MET", False))
+
+    def test_jev_is_told_a_cut_edge_continues_in_the_next_part_and_the_margin_is_not_the_design(self):
+        rules = fc.fc_figma.fc_figmashots.SCREEN_RULES
+        for text in ("meet edge to edge", "continues at the top of the next", "never clipping, truncation or overlap", "white margin", "point at inside the frame"):
+            self.assertIn(text, rules)
+
     def test_the_screens_settle_a_criterion_the_tree_left_unclear_but_never_lift_a_confirmed_violation(self):
         res = self.judge(("UNCLEAR", 0.0), [("MET", 0.0)])
         self.assertEqual((res["status"], res["criteria"][0]["by"]), ("passed", "screens"))

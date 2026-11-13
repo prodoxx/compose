@@ -41,7 +41,7 @@ Closed shadow roots and cross-origin iframes are out of reach; drive those with 
 - `agent.py` - the step loop: observe, choose, act, check the page changed.
 - `browser.py` and `snapshot.js` - the CDP connection and the in-page snapshot of actions, text and fields.
 - `model.py` and `questions.py` - the Jev and text-model calls and their budgets.
-- `tiles.py` - cuts Figma renders into tiles for compose's Figma judge (`compose figma tree`).
+- `tiles.py` - cuts Figma renders into tiles for compose's Figma judge (`compose figma tree`), with a white margin around the frame and cuts through the quietest row.
 
 ## Tests
 
