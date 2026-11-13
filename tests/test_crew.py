@@ -118,6 +118,41 @@ class Crew(unittest.TestCase):
             self.assertIn(says, brief)
             self.assertIn("Never loop or poll `compose linear`", brief)  # every crew brief, whatever the role
 
+    def start_in(self, cwd=None, **kw):
+        """The brief file a `crew start` of `tests-001` wrote, with a fake herdr."""
+        def herdr(*args, **k):
+            if args[:2] == ("agent", "list"):
+                return {"agents": []}
+            if args[:2] == ("tab", "create"):
+                return {"tab": {"tab_id": "w9:t3"}, "root_pane": {"pane_id": "w9:p7"}}
+            if args[:2] == ("agent", "get"):
+                return {"agent": {"agent_status": "working"}}
+            return {}
+        a = type("A", (), {"action": "start", "role": "tests-001", "title": "tests 001", "brief": "Write the test.", "cwd": cwd, **kw})
+        with mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), mock.patch.object(fc.fc_herdr, "herdr", herdr), \
+                mock.patch.object(fc.fc_herdr, "herdr_env", return_value=True), mock.patch.object(fc.fc_herdr, "herdr_space", return_value="w9"), mock.patch.object(fc.fc_herdr, "herdr_find_space", return_value="w9"), \
+                mock.patch.object(fc.fc_claude, "claude_trusted", return_value=True), mock.patch("builtins.print"):
+            fc.fc_crew.cmd_crew(a)
+        return (self.proj / "results" / "crew" / "shop-tests-001.brief.md").read_text()
+
+    def test_a_test_writer_in_a_leased_worktree_is_told_that_one_is_its_worktree_and_the_leads_is_not(self):
+        """#458: the brief named the project worktree as "your worktree", and writers edited test files in the lead's checkout."""
+        lead = fc.fc_herdr.project_worktree(self.proj)
+        leased = Path(tempfile.mkdtemp()).resolve()
+        brief = self.start_in(cwd=str(leased), leased=True)
+        self.assertIn(f"your worktree is {leased}. The project worktree {lead} is the team lead's: never edit, switch branches in, or commit there", brief)
+        self.assertNotIn(f"your worktree is {lead}", brief)
+        self.assertIn(f"compose report --repo {lead} --project shop --as shop-tests-001", brief)  # reports still reach the project
+        self.assertEqual(fc.fc_crew.crew_record(self.proj, "shop-tests-001")["cwd"], str(leased))
+
+    def test_a_teammate_in_the_project_worktree_is_told_that_is_its_worktree(self):
+        lead = fc.fc_herdr.project_worktree(self.proj)
+        for cwd in (None, str(lead)):
+            with self.subTest(cwd=cwd):
+                brief = self.start_in(cwd=cwd)
+                self.assertIn(f"your worktree is {lead}. ", brief)
+                self.assertNotIn("is the team lead's: never edit", brief)
+
     def test_start_stops_on_a_low_battery_before_claiming_or_opening_anything_unless_forced(self):
         calls = []
         a = type("A", (), {"action": "start", "role": "planner", "title": "planner", "brief": "Go."})

@@ -86,15 +86,17 @@ def parallel_gap(message):
         return "says `parallel: none` without a reason"
     return None
 
-def crew_preamble(proj, name, title, reports_to=None):
+def crew_preamble(proj, name, title, reports_to=None, workdir=None):
     """`reports_to` is the starter's watch key (`manager`, or a role such as `orchestrator`): a planner the engineering manager started
-    reports to it, not to a team lead that may not exist."""
+    reports to it, not to a team lead that may not exist. `workdir`: the worktree of its own (a test writer's leased one, a --cwd or
+    --work-repo one) when it is not the project's, which is then the lead's and only the `--repo` of the reports."""
     direct = name == fc_herdr.agent_name(proj.name, "orchestrator") or reports_to == "manager"
     up = "the engineering manager, who relays to the product owner" if direct else f"{fc_herdr.agent_name(proj.name, 'orchestrator')}, your team lead"
     report = f"compose report --repo {fc_herdr.project_worktree(proj)} --project {proj.name} --as {name}"
     parallel_rule = (f"Every `working` report you send ends with {PARALLEL_FORM}: what else can start now, and what you started; "
                      "`compose watch` raises a stall for one without it.\n") if name == fc_herdr.agent_name(proj.name, "orchestrator") else ""
     handoff = handoff_rule(proj, name) if name == fc_herdr.agent_name(proj.name, "orchestrator") else ""
+    lead_checkout = f"The project worktree {fc_herdr.project_worktree(proj)} is the team lead's: never edit, switch branches in, or commit there; it is only the `--repo` of the `compose report` commands above. " if workdir else ""
     return (f"You are {name}, teammate on compose project {proj.name} ({title}), in your own herdr tab. You report to {up}.\n"
             f"Report every change that matters, one line each; never stop without one:\n"
             f"- `{report} needs-user \"<the question, with your recommendation>\"` when you wait for the product owner\n"
@@ -123,7 +125,7 @@ def crew_preamble(proj, name, title, reports_to=None):
             f"directly: under `compose timed` they get scratch config, no workspace, no keys.\n"
             f"macOS and zsh: call `{report}` written out in full, never from a shell variable or alias (zsh does not word-split a command held in a variable). "
             f"BSD sed is `sed -i '' <expr> <file>`. Write and edit files with the Write and Edit tools, never inline `node -e` or `python3 -c`. "
-            f"Every `cd` names the exact absolute path; your worktree is {fc_herdr.project_worktree(proj)}. "
+            f"Every `cd` names the exact absolute path; your worktree is {workdir or fc_herdr.project_worktree(proj)}. {lead_checkout}"
             f"`trail note` learnings go in the commit only in a repo that tracks `.trail/`; when `git check-ignore -q .trail` succeeds there, leave them out of the commit, never `git add -f`. "
             f"Load Monitor schema with ToolSearch before first use. `sleep` longer than a few seconds is blocked: use a background until-loop.\n"
             f"Never end a turn on a wait that cannot wake you (Monitor expires silently): wait with a Bash background command that exits when it is true (`until <test>; do sleep 1; done`); run `compose watch` that way.\n"
@@ -270,7 +272,7 @@ def cmd_crew(a):
     brief_file = crew_dir(proj) / f"{name}.brief.md"  # the session's first prompt points here, so no later prompt can be mistaken for the brief
     reports_to = os.environ.get("COMPOSE_ROLE") or "manager"  # who started it is who it reports to: the engineering manager has no role
     started_by = fc_core.session_id()  # and which session of that role: two engineering managers on one project are told apart by it
-    brief_file.write_text(fc_core.scrub(crew_preamble(proj, name, title, reports_to) + brief))
+    brief_file.write_text(fc_core.scrub(crew_preamble(proj, name, title, reports_to, work or (Path(cwd) if Path(cwd).resolve() != Path(wt).resolve() else None)) + brief))
     first = f"Your brief is the file {brief_file}. Read it now and follow it."
     try:  # pi runs no Claude hooks: watch compares the skill files with these and tells the team lead when they changed
         skill = {"skill": fc_hooks.skill_hashes()} if model.startswith("pi:") or h else {}
@@ -298,8 +300,7 @@ def cmd_crew(a):
               *( [] if fc_mcp.keeps_commands(a.role) else ["--disable-slash-commands"]),  # the team lead keeps `/compact` for the compactor
               *(["--add-dir", str(work)] if work else []), "--permission-mode", "auto", "--allowedTools", "Bash(npx -y lavish-axi:*)",
               "Bash(compose frame0:*)"]  # `compose frame0 up|draw|export|pages|lint` runs with no prompt in the session that draws; the flag swallows what follows, so it stays last
-    if kind == "claude":  # the settings and the MCP patterns grow with the machine (50 servers: 2.5 KB), past what a starting shell's tty keeps of a typed line (#461)
-        argv = fc_claude.spill_settings(argv, crew_dir(proj) / f"{name}.settings")
+    argv = fc_claude.spill_settings(argv, crew_dir(proj) / f"{name}.settings") if kind == "claude" else argv  # 50 MCP servers make the command 2.5 KB: past a starting shell's tty line (#461)
     try:
         made = fc_fleet.start_teammate(proj, space, title, cwd, env, agent, kind, program, argv)
     except fc_fleet.StartFailed as e:
