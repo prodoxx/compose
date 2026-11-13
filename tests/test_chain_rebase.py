@@ -106,10 +106,40 @@ class Chain(unittest.TestCase):
         linear, _ = self.linearize(dag, ["a"])
         self.assertEqual((linear, [(r["onto"], r["upstream"]) for r in dag.rebases]), (["a"], [("main", "OLD")]))
 
+    def test_commits_the_base_holds_under_other_hashes_are_dropped_from_the_replay(self):
+        """#450: the layer carries copies of the lower layers' commits; git compares them with the upstream side only, so they are dropped here."""
+        dag = Dag({"T": [], "c1": ["T"], "c2": ["c1"], "c3": ["c2"], "c1'": ["T"], "c2'": ["c1'"], "c3'": ["c2'"], "D": ["c3'"]},
+                  {"main": "T", "p3": "c3", "d": "D"})
+        linear, _ = self.linearize(dag, ["p3", "d"])
+        (r,) = [r for r in dag.rebases if r["b"] == "d"]
+        self.assertEqual((linear, r["onto"], r["upstream"], r["interactive"], sorted(r["drop"])), (["p3", "d"], "p3", "T", True, ["c1'", "c2'", "c3'"]))
+        self.assertEqual([c for c in dag.commits if c.endswith("*")], ["D*"])  # only the layer's own commit went onto p3
+
+    def test_a_layer_with_nothing_of_its_own_becomes_the_layer_below(self):
+        dag = Dag({"T": [], "c1": ["T"], "c1'": ["T"]}, {"main": "T", "p1": "c1", "d": "c1'"})
+        linear, _ = self.linearize(dag, ["p1", "d"])
+        self.assertEqual((linear, dag.rebases, dag.tips["d"]), (["p1", "d"], [{"b": "d", "reset": "p1"}], "c1"))
+
     def test_a_layer_with_no_copies_is_rebased_the_plain_way(self):
         dag = Dag({"T": [], "c1": ["T"], "d1": ["T"]}, {"main": "T", "p1": "c1", "d": "d1"})
         self.linearize(dag, ["p1", "d"])
         self.assertEqual([(r["onto"], r["upstream"], r["interactive"], r["drop"]) for r in dag.rebases], [("p1", "T", False, [])])
+
+    def test_the_todo_editor_removes_only_the_picks_of_the_dropped_commits(self):
+        todo = Path(tempfile.mkdtemp()) / "todo"
+        todo.write_text("pick 1111111 Add the arm catalog\npick 2222222 the layer's own\npick 3333333 Another copy\n# Rebase\n")
+        env = {**os.environ, "COMPOSE_DROP": "1111111aaaa 3333333bbbb"}
+        subprocess.run([sys.executable, "-c", L.DROP_PICKS, str(todo)], env=env, check=True)
+        self.assertEqual(todo.read_text(), "pick 2222222 the layer's own\n# Rebase\n")
+
+    def test_a_stop_names_the_commit_and_says_which_copies_the_hand_fix_drops(self):
+        dag = Dag({"T": [], "c1": ["T"], "c1'": ["T"], "D": ["c1'"]}, {"main": "T", "p1": "c1", "d": "D"}, conflicts={("d", "p1"): ["a.py"]})
+        linear, said = self.linearize(dag, ["p1", "d"])
+        self.assertEqual(linear, ["p1"])
+        self.assertEqual(L.STACK_STOP, "d conflicts when rebased onto p1 in a.py (at abc1234 the layer's own change); the layers below it are kept. Resolve by hand: "
+                                       "git checkout d && git rebase -i --onto p1 T (the commit it shares with p1) (drop c1', which p1 holds already), then re-run")
+        self.assertEqual(said, ["stack  STOP  " + L.STACK_STOP])
+
 
 
 if __name__ == "__main__":

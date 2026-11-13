@@ -1,4 +1,4 @@
-import hashlib, json, os, re, subprocess, sys, tempfile, time
+import hashlib, json, os, re, shlex, subprocess, sys, tempfile, time
 from pathlib import Path
 import fc_core, fc_config, fc_herdr, fc_tasks, fc_worktree
 
@@ -103,10 +103,33 @@ def chain_order(repo, proj):
 
 STACK_STOP = ""  # why the last linearize stopped short, with the commands that resolve it; empty when the chain is whole
 
-def chain_conflict(b, prev, files, upstream, source):
-    """The STACK_STOP of a chain rebase of `b` onto `prev` that conflicted in `files`, with the command that resolves it."""
-    return (f"{b} conflicts when rebased onto {prev} in {files}; the layers below it are kept. Resolve by hand: "
-            f"git checkout {b} && git rebase --onto {prev} {upstream} ({source}), then re-run")
+def chain_conflict(b, prev, files, upstream, source, commit="", drop=()):
+    """The STACK_STOP of a chain rebase of `b` onto `prev` that conflicted in `files` (at `commit`, "<sha> <subject>", when git
+    says which), with the command that resolves it. `drop`: the commits of b that prev holds already under other hashes; the
+    rebase left them out, so the command does too (an interactive rebase with them removed)."""
+    git = f"git rebase {'-i ' if drop else ''}--onto {prev} {upstream}"
+    left = f" (drop {', '.join(d[:7] for d in drop)}, which {prev} holds already)" if drop else ""
+    return (f"{b} conflicts when rebased onto {prev} in {files}" + (f" (at {commit})" if commit else "") + "; the layers below it are kept. Resolve by hand: "
+            f"git checkout {b} && {git} ({source}){left}, then re-run")
+
+DROP_PICKS = ("import os, sys; drop = os.environ['COMPOSE_DROP'].split(); todo = open(sys.argv[1]).read().splitlines(True); "
+              "keep = [l for l in todo if not (l.startswith('pick ') and any(d.startswith(l.split()[1]) for d in drop))]; open(sys.argv[1], 'w').writelines(keep)")
+
+def already_in_base(repo, base, b, upstream):
+    """The commits of `upstream..b` whose change `base` holds already under another hash (the same patch-id: git cherry), oldest first.
+    `git rebase --onto base upstream` compares them with `upstream` only, so copies of a lower layer's commits that sit in `base`
+    and not in `upstream` would be replayed, and conflict where the layer below changed the same file later."""
+    out = fc_core.sh(["git", "cherry", base, b, upstream], repo, check=False).stdout
+    return [l.split()[1] for l in out.splitlines() if l.startswith("- ")]
+
+def rebase_layer(wt, prev, upstream, b, drop=()):
+    """Rebase the checked out `b` onto `prev`, replaying `upstream..b` without the commits in `drop`. The completed process."""
+    if not drop:
+        return fc_core.sh(["git", "rebase", "-q", "--onto", prev, upstream], wt, check=False)
+    if all(c in drop for c in fc_core.sh(["git", "rev-list", "--no-merges", f"{upstream}..{b}"], wt).stdout.split()):
+        return fc_core.sh(["git", "reset", "-q", "--hard", prev], wt, check=False)  # b adds nothing of its own: it is prev
+    env = {**os.environ, "COMPOSE_DROP": " ".join(drop), "GIT_SEQUENCE_EDITOR": f"{shlex.quote(sys.executable)} -c {shlex.quote(DROP_PICKS)}"}
+    return fc_core.sh(["git", "rebase", "-q", "-i", "--no-autosquash", "--empty=drop", "--onto", prev, upstream], wt, check=False, env=env)
 
 def linearize(repo, proj, trunk, wt, through=()):
     with fc_worktree.STACK_LOCK:
@@ -158,13 +181,15 @@ def _linearize(repo, proj, trunk, wt, through=()):
             upstream, source = max(old, key=lambda o: int(fc_core.sh(["git", "rev-list", "--count", f"{trunk}..{o[0]}"], repo).stdout)) if old else (prev, "no old base found: a plain rebase")
             before[b] = fc_core.sh(["git", "rev-parse", b], repo).stdout.strip()
             tips.append((b, before[b]))
+            drop = already_in_base(repo, prev, b, upstream)
             fc_core.sh(["git", "checkout", "-q", b], wt)
-            r = fc_core.sh(["git", "rebase", "-q", "--onto", prev, upstream], wt, check=False)
+            r = rebase_layer(wt, prev, upstream, b, drop)
             if r.returncode:
                 files = ", ".join(fc_core.sh(["git", "diff", "--name-only", "--diff-filter=U"], wt, check=False).stdout.split()) or "no file git names"
+                at = fc_core.sh(["git", "log", "-1", "--format=%h %s", "REBASE_HEAD"], wt, check=False).stdout.strip()
                 fc_core.sh(["git", "rebase", "--abort"], wt, check=False)
                 fc_core.sh(["git", "checkout", "-q", "--detach", trunk], wt, check=False)
-                STACK_STOP = chain_conflict(b, prev, files, upstream, source)
+                STACK_STOP = chain_conflict(b, prev, files, upstream, source, at, drop)
                 fc_core.say(f"stack  STOP  {STACK_STOP}")
                 break
         linear.append(b)
