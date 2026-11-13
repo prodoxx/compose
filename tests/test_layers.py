@@ -222,17 +222,24 @@ class PrText(unittest.TestCase):
         self.assertIsNone(fc.fc_stack.pr_text(f, 72))
         f.write_text(WRITTEN.replace("\n\n## Why", "\n\n\n## Why\n").replace("on load\n", "on load\n\n\n"))
         self.assertEqual(fc.fc_stack.pr_text(f, 72), ("Keep the toggle's state across reloads",
-                         ["The toggle forgot its state on every reload.", "This stores it."], ["- Store the toggle's state", "- Read it back on load"]))
+                         ["The toggle forgot its state on every reload.", "This stores it."], ["- Store the toggle's state", "- Read it back on load"], []))
+        f.write_text(WRITTEN + "\n## How it was tested\n- Unit tests: the state survives a reload\n")
+        self.assertEqual(fc.fc_stack.pr_text(f, 72)[3], ["- Unit tests: the state survives a reload"])
         for text, why in [("Keep it\n## Why\nx\n## What changed\n- y", "line 1 must be `# <title>`"),
                           ("# JS-7: Keep it\n## Why\nx\n## What changed\n- y", "ticket key or (i/n)"),
                           ("# Keep it (2/3)\n## Why\nx\n## What changed\n- y", "ticket key or (i/n)"),
                           ("# " + "x" * 73 + "\n## Why\nx\n## What changed\n- y", "the title is 73 characters, at most 72"),
-                          ("# Keep it\nintro\n## Why\nx\n## What changed\n- y", "`## Why` then `## What changed`, nothing else"),
-                          ("# Keep it\n## What changed\n- y\n## Why\nx", "`## Why` then `## What changed`, nothing else"),
-                          ("# Keep it\n## Why\nx\n## What changed\n- y\n### More\n", "`## Why` then `## What changed`, nothing else"),
+                          ("# Keep it\nintro\n## Why\nx\n## What changed\n- y", "`## Why`, `## What changed` and optionally `## How it was tested`, nothing else"),
+                          ("# Keep it\n## What changed\n- y\n## Why\nx", "`## Why`, `## What changed` and optionally `## How it was tested`, nothing else"),
+                          ("# Keep it\n## Why\nx\n## What changed\n- y\n### More\n", "`## Why`, `## What changed` and optionally `## How it was tested`, nothing else"),
                           ("# Keep it\n## Why\n\n## What changed\n- y", "must not be empty"),
                           ("# Keep it\n## Why\nx\nFixes o/r#9\n## What changed\n- y", "compose adds the Fixes and Part of lines"),
-                          ("# Keep it\n## Why\nx\n## What changed\n- y\nz", "must be a `- ` bullet")]:
+                          ("# Keep it\n## Why\nx\n## What changed\n- y\nz", "must be a `- ` bullet"),
+                          ("# Keep it\n## Why\nx\n## What changed\n- y\n## How it was tested\n", "leave the section out"),
+                          ("# Keep it\n## Why\nx\n## What changed\n- y\n## How it was tested\nran it", "`## How it was tested` must be a `- ` bullet"),
+                          ("# Keep it\n## Why\nx\n## What changed\n- y\n## How it was tested\n- " + "x" * 161, "161 characters, at most 160"),
+                          ("# Keep it\n## Why\nx\n## What changed\n- y\n## How it was tested\n- compose verify passed", "compose adds that line"),
+                          ("# Keep it\n## Why\nx\n## What changed\n- y\n## How it was tested\n- z\n## Tickets\n- t", "nothing else")]:
             f.write_text(text)
             with self.assertRaises(ValueError) as e:
                 fc.fc_stack.pr_text(f, 72)

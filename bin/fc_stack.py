@@ -160,9 +160,9 @@ def reviewer_command(cmd, repo):
 
 def layer_body(repo, proj, l, metas, layers=(), written=None):
     """A layer's PR body: `## Why` (layer_why), `## What changed` (one line per task, the subject of its first commit that is
-    not one of its test commits, else its title; one per groundwork commit), `## How it was tested` (each test command and
-    passing verify check once, as a reviewer can run it (reviewer_command), then whether compose verify passed) and `## Tickets` (its tasks' Linear links), each left out
-    when empty. `written` (pr_text's Why and What changed lines) replaces the first two, its Why followed by the issue_lines.
+    not one of its test commits, else its title; one per groundwork commit), `## How it was tested` (how_tested) and
+    `## Tickets` (its tasks' Linear links), each left out when empty. `written` (pr_text's Why, What changed and How it was tested
+    lines) replaces the first two, its Why followed by the issue_lines, and its How it was tested bullets lead how_tested's.
     `layers` is the whole stack, bottom first, so an issue's `Fixes` lands on the layer that completes it; without
     it, every task not in this layer is still to come. The layer's size stays on its `layer` line, out of the body."""
     res = Path(proj) / "results"
@@ -178,16 +178,44 @@ def layer_body(repo, proj, l, metas, layers=(), written=None):
             continue
         own = [c for c in commits if not set(fc_layers.commit_facts(repo, c)[0]) <= set(m["protected"])]
         changed.append(subject(own[0]) if own else fc_layers.commit_message(m))
-    verify = read("verify")
-    checks = [c["cmd"] for c in ((verify.get("rounds") or [{}])[-1].get("checks") or []) if c.get("exit") == 0]
-    how = list(dict.fromkeys(f"`{t}`" for t in map(lambda c: reviewer_command(c, repo), [*(m["test"] for m in tasks), *checks]) if t))
-    if verify:
-        how.append("compose verify passed" if verify.get("passed") else "compose verify failed")
     why, changed = ([*written[0], *issue_lines(proj, l, metas, list(layers))], written[1]) if written else \
         (layer_why(proj, l, metas, list(layers)), [f"- {x}" for x in changed])
+    tested = how_tested(repo, tasks, read("verify"), written[2] if written else [])
     sections = [("Why", why), ("What changed", changed),
-                ("How it was tested", [f"- {x}" for x in how]), ("Tickets", [f"- {linear_url(proj, m['linear'])}" for m in tasks])]
+                ("How it was tested", tested), ("Tickets", [f"- {linear_url(proj, m['linear'])}" for m in tasks])]
     return "\n\n".join(f"## {h}\n" + "\n".join(lines) for h, lines in sections if lines)
+
+INLINE_CMD = 80  # a longer command is a data dump in the list: it moves to the collapsed block
+
+def how_tested(repo, tasks, verify, said=()):
+    """A layer's `## How it was tested` lines, written for a reviewer who wants to know what was checked and how to rerun it.
+    `said` (the team lead's bullets) says what each test proves; without it each task's test is named by the task's title,
+    its command inline when it is short. Then one `Project checks` line with the short checks verify passed that no task
+    names, then whether compose verify passed, then every command too long to read inline (or, with `said`, every task's
+    command) in a collapsed `Commands to rerun` block, each named by its task. Commands are as a reviewer runs them (reviewer_command)."""
+    seen, own = set(), []
+    for m in tasks:
+        cmd = reviewer_command(m["test"], repo)
+        if cmd and cmd not in seen:
+            seen.add(cmd)
+            own.append((m.get("title") or m["id"], cmd))
+    passed = [c["cmd"] for c in ((verify.get("rounds") or [{}])[-1].get("checks") or []) if c.get("exit") == 0]
+    checks = [c for c in dict.fromkeys(filter(None, (reviewer_command(c, repo) for c in passed))) if c not in seen]
+    lines, rerun = list(said), []
+    for label, cmd in own:
+        if said or len(cmd) > INLINE_CMD:
+            rerun.append(f"- {label}: `{cmd}`")
+        if not said:
+            lines.append(f"- {label}: `{cmd}`" if len(cmd) <= INLINE_CMD else f"- {label}")
+    short = [c for c in checks if len(c) <= INLINE_CMD]
+    rerun += [f"- Project check: `{c}`" for c in checks if len(c) > INLINE_CMD]
+    if checks:
+        lines.append("- Project checks: " + ", ".join(f"`{c}`" for c in short) if short else "- Project checks, in the commands below")
+    if verify:
+        lines.append("- compose verify passed" if verify.get("passed") else "- compose verify failed")
+    if rerun:
+        lines += ["", "<details><summary>Commands to rerun</summary>", "", *rerun, "", "</details>"]
+    return lines
 
 def pr_names(layers):
     """Each layer's PR text file name, from what it holds (`001-002`, `groundwork`, `groundwork-after-003`), so a renumbered
@@ -202,10 +230,14 @@ def pr_names(layers):
 
 ISSUE_LINE_RE = re.compile(r"^(-\s*)?(Fixes|Closes|Resolves|Part of)\b", re.I)
 
+TESTED_CHARS = 160  # one How it was tested bullet: what was checked and why, not the command
+
 def pr_text(path, room):
     """The team lead's text for a layer's PR from its file, or None when there is none: line 1 `# <title>` (at most `room`
-    characters, no ticket key or `(i/n)`), then `## Why` (prose, no issue lines) and `## What changed` (`- ` bullets), nothing
-    else. Returns (title, Why lines, What changed lines); anything else raises ValueError with the reason, never a guess."""
+    characters, no ticket key or `(i/n)`), then `## Why` (prose, no issue lines), `## What changed` (`- ` bullets) and, optionally,
+    `## How it was tested` (`- ` bullets of at most TESTED_CHARS, what each test proves; compose adds the commands and the verify
+    line), nothing else. Returns (title, Why lines, What changed lines, How it was tested lines, [] when left out); anything else
+    raises ValueError with the reason, never a guess."""
     if not path.exists():
         return None
     lines = path.read_text().splitlines()
@@ -217,22 +249,31 @@ def pr_text(path, room):
     if len(title) > room:
         raise ValueError(f"the title is {len(title)} characters, at most {room}")
     heads = [i for i, x in enumerate(lines) if x.startswith("#")][1:]
-    if [lines[i] for i in heads] != ["## Why", "## What changed"] or any(x.strip() for x in lines[1:heads[0]]):
-        raise ValueError("after the title it must be `## Why` then `## What changed`, nothing else")
+    if [lines[i] for i in heads] not in (["## Why", "## What changed"], ["## Why", "## What changed", "## How it was tested"]) \
+            or any(x.strip() for x in lines[1:heads[0]]):
+        raise ValueError("after the title it must be `## Why`, `## What changed` and optionally `## How it was tested`, nothing else")
     strip = lambda part: "\n".join(part).strip().splitlines()
-    why, changed = strip(lines[heads[0] + 1:heads[1]]), strip(lines[heads[1] + 1:])
+    why, changed, tested = [*(strip(lines[a + 1:b]) for a, b in zip(heads, [*heads[1:], len(lines)])), []][:3]
     if not why or not changed:
         raise ValueError("`## Why` and `## What changed` must not be empty")
+    if len(heads) == 3 and not tested:
+        raise ValueError("`## How it was tested` must not be empty; leave the section out for compose's own")
     if any(ISSUE_LINE_RE.match(x) for x in why):
         raise ValueError("`## Why` names an issue to fix; compose adds the Fixes and Part of lines")
-    if any(x.strip() and not x.startswith("- ") for x in changed):
-        raise ValueError("every line of `## What changed` must be a `- ` bullet")
-    return title, why, changed
+    for name, part in (("What changed", changed), ("How it was tested", tested)):
+        if any(x.strip() and not x.startswith("- ") for x in part):
+            raise ValueError(f"every line of `## {name}` must be a `- ` bullet")
+    if long := next((x for x in tested if len(x) - 2 > TESTED_CHARS), None):
+        raise ValueError(f"a `## How it was tested` bullet is {len(long) - 2} characters, at most {TESTED_CHARS}: say what it checks, compose adds the command")
+    if any(re.search(r"compose verify", x, re.I) for x in tested):
+        raise ValueError("`## How it was tested` names compose verify; compose adds that line")
+    return title, why, changed, [x for x in tested if x.strip()]
 
 def layer_pr(repo, proj, l, n, metas, layers=()):
     """A layer's PR title and body, and where they came from: the team lead's file `pr/<name>.md` (pr_names, pr_text) gives the
     title, Why and What changed; without a valid one they are generated from the layer's commits and stories (layer_title,
-    layer_body). The Jira key, ` (i/n)`, the issue lines, How it was tested and Tickets are always compose's.
+    layer_body); its How it was tested bullets, when it has them, lead that section. The Jira key, ` (i/n)`, the issue lines, the
+    test commands, the verify line and Tickets are always compose's.
     Returns (title, body, `written: <file>` or `generated: <what to do about the file>`)."""
     stack = list(layers) or [l]
     name = pr_names(stack)[next((i for i, x in enumerate(stack) if x["branch"] == l["branch"]), 0)]
@@ -240,7 +281,8 @@ def layer_pr(repo, proj, l, n, metas, layers=()):
     shown = f".compose/{Path(proj).name}/pr/{name}.md"
     try:
         written = pr_text(path, TITLE_CHARS - len(title_prefix(proj)))
-        source = f"written: {shown}" if written else f"generated: write {shown}"
+        source = (f"written: {shown}" if written[3] else f"written: {shown}, How it was tested generated: add it to the file") \
+            if written else f"generated: write {shown}"
     except ValueError as e:
         written, source = None, f"generated: {shown} refused: {e}"
     title = layer_title(repo, proj, l, n, metas, written and written[0])

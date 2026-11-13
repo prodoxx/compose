@@ -203,7 +203,7 @@ class PrBody(FakeCommits):
         s = self.body(["001", "002"], self.TASK_COMMITS)
         self.assertEqual(list(s), ["Why", "What changed", "How it was tested", "Tickets"])
         self.assertEqual(s["What changed"], ["- Build the toggle", "- Build the panel"])  # one line per task, its test commits folded in
-        self.assertEqual(s["How it was tested"], ["- `python3 -m unittest tests.toggle`"])  # one line per command
+        self.assertEqual(s["How it was tested"], ["- Build 001: `python3 -m unittest tests.toggle`"])  # one line per command, named by its first task
         self.assertEqual(s["Tickets"], ["- [NEB-1](https://linear.app/acme/issue/NEB-1)", "- [NEB-2](https://linear.app/acme/issue/NEB-2)"])
 
     def test_why_is_the_story_title_and_first_plain_sentence_never_a_brief_card_id_or_linear_escape(self):
@@ -232,16 +232,34 @@ class PrBody(FakeCommits):
     def test_verify_is_reported_last_after_the_checks_it_passed_only_when_its_results_exist(self):
         checks = [{"cmd": "make lint", "exit": 1}, {"cmd": "make all", "exit": 0}, {"cmd": "python3 -m unittest tests.toggle", "exit": 0}]
         s = self.body(["001"], self.TASK_COMMITS[:1], verify={"passed": True, "rounds": [{"checks": checks[:1]}, {"checks": checks}]})
-        self.assertEqual(s["How it was tested"], ["- `python3 -m unittest tests.toggle`", "- `make all`", "- compose verify passed"])
+        self.assertEqual(s["How it was tested"], ["- Build 001: `python3 -m unittest tests.toggle`", "- Project checks: `make all`", "- compose verify passed"])
         s = self.body(["001"], [[("Cover more", ["t004.test"], "")]], verify={"passed": False, "rounds": [{}, {}]})
-        self.assertEqual(s["How it was tested"], ["- `python3 -m unittest tests.toggle`", "- compose verify failed"])
+        self.assertEqual(s["How it was tested"], ["- Build 001: `python3 -m unittest tests.toggle`", "- compose verify failed"])
         self.assertEqual(s["What changed"], ["- Build 001"])  # only test commits: the task's own title
 
     def test_how_it_was_tested_has_commands_a_reviewer_can_run_not_this_machines_paths_or_local_scripts(self):
         checks = [{"cmd": f"bun test {self.repo}/src/a.test.ts", "exit": 0}, {"cmd": f"bash {self.repo}/.compose/p/e2e/probe.sh", "exit": 0},
                   {"cmd": f"bash {Path.home()}/elsewhere/x.sh", "exit": 0}, {"cmd": "bash .compose/p/e2e/probe.sh", "exit": 0}]
         s = self.body(["001"], self.TASK_COMMITS[:1], verify={"passed": True, "rounds": [{"checks": checks}]})
-        self.assertEqual(s["How it was tested"], ["- `python3 -m unittest tests.toggle`", "- `bun test src/a.test.ts`", "- compose verify passed"])
+        self.assertEqual(s["How it was tested"], ["- Build 001: `python3 -m unittest tests.toggle`", "- Project checks: `bun test src/a.test.ts`", "- compose verify passed"])
+
+    LONG = "file -b icons/icon-128.png | grep -q '^PNG image data, 128 x 128' && git diff --quiet main -- public/"
+
+    def test_a_long_command_is_named_by_its_task_and_folded_into_the_commands_to_rerun(self):
+        checks = [{"cmd": "make all", "exit": 0}, {"cmd": "make e2e TARGET=" + "x" * 80, "exit": 0}]
+        with mock.patch.object(self, "METAS", [{**self.METAS[0], "title": "Size the icons", "test": self.LONG}, *self.METAS[1:]]):
+            s = self.body(["001"], self.TASK_COMMITS[:1], verify={"passed": True, "rounds": [{"checks": checks}]})
+        self.assertEqual(s["How it was tested"], ["- Size the icons", "- Project checks: `make all`", "- compose verify passed",
+                         "<details><summary>Commands to rerun</summary>", f"- Size the icons: `{self.LONG}`",
+                         f"- Project check: `make e2e TARGET={'x' * 80}`", "</details>"])
+
+    def test_the_team_leads_tested_bullets_lead_and_every_task_command_moves_to_the_commands_to_rerun(self):
+        (self.proj / "pr").mkdir(exist_ok=True)
+        (self.proj / "pr" / "001.md").write_text("# Keep it\n\n## Why\nIt broke.\n\n## What changed\n- Keep it\n\n"
+                                                 "## How it was tested\n- Unit tests: the toggle survives a reload\n")
+        s = self.body(["001"], self.TASK_COMMITS[:1], verify={"passed": True, "rounds": [{"checks": [{"cmd": "make all", "exit": 0}]}]})
+        self.assertEqual(s["How it was tested"], ["- Unit tests: the toggle survives a reload", "- Project checks: `make all`", "- compose verify passed",
+                         "<details><summary>Commands to rerun</summary>", f"- Build 001: `python3 -m unittest tests.toggle`", "</details>"])
 
     def test_a_groundwork_layer_says_in_one_sentence_what_it_prepares_with_no_issues_tests_or_tickets(self):
         s = self.body(["groundwork", "groundwork"], [[("Ignore build output", ["a.txt"], "Keeps dist out of review.")], [("Pin the toolchain", ["b.txt"], "")]])
