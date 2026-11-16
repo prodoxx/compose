@@ -12,8 +12,7 @@ import fc_steps, fc_auth, fc_checks, fc_textmodel
 
 CLI = str(Path(__file__).resolve().parents[1] / "bin" / "compose.py")
 TOOLS = {"herdr": "0.9.3", "treehouse": "v3.1.2", "trail": "0.23.0", "gh": "gh version 2.94.0", "pi": "1.0.3", "claude": "2.1.301 (Claude Code)", "npx": "11.19.0", "bp": ""}
-SKILLS = (".claude/skills/herdr/SKILL.md", ".claude/plugins/marketplaces/i-have-adhd/skills/i-have-adhd/SKILL.md",
-          ".claude/plugins/cache/official/superpowers/7.0.0/skills/writing-plans/SKILL.md", ".config/figma-context-mcp/.env")
+SKILLS = (".claude/skills/herdr/SKILL.md", ".claude/plugins/cache/official/superpowers/7.0.0/skills/writing-plans/SKILL.md", ".config/figma-context-mcp/.env")
 
 
 class Doctor(unittest.TestCase):
@@ -66,7 +65,7 @@ class Doctor(unittest.TestCase):
             self.fake("treehouse", "v2.0.1")
             self.fake("gh", "gh version 2.94.0", body='[ "$1" = stack ] && exit 1')
             (self.home / SKILLS[0]).unlink()
-            (self.home / SKILLS[2]).unlink()
+            (self.home / SKILLS[1]).unlink()
             (self.home / ".claude.json").unlink()
             self.assertEqual(self.deps(), (["herdr", "gh stack", "herdr skill"], [
                 "MISSING: herdr: 0.8.0 is older than 0.9.3 (install: see https://herdr.dev)",
@@ -185,7 +184,7 @@ class DoctorNotes(unittest.TestCase):
     setUp, fake, herdr_config = Doctor.setUp, Doctor.fake, Doctor.herdr_config
     CURL = "curl -fsSL https://claude.ai/install.sh | bash"
     ROWS = (("claude", "claude", CURL, "required", False, "manual"), ("gh", "gh", "brew install gh", "required", False, "run"),
-            ("i-have-adhd skill", lambda c: (False, ""), "claude plugin install a", "required", True, "run"),
+            ("herdr skill", lambda c: (False, ""), "claude plugin install a", "required", True, "run"),
             ("superpowers", lambda c: (False, ""), "claude plugin install b", "default", True, "run"),
             ("herdr claude integration", lambda c: (True, ""), "herdr integration install claude", "default", True, "run"),
             ("uv", lambda c: (False, ""), "brew install uv", "default", False, "run"))
@@ -206,12 +205,12 @@ class DoctorNotes(unittest.TestCase):
         (self.bin / "claude").unlink()
         code, lines = self.doctor()
         missing = [l for l in lines if l.startswith("MISSING")]
-        self.assertEqual((code, self.bad, len(missing)), (1, ["claude", "i-have-adhd skill"], 2))
+        self.assertEqual((code, self.bad, len(missing)), (1, ["claude", "herdr skill"], 2))
         self.assertTrue(re.match(r"MISSING: claude\b", missing[0]) and self.CURL in missing[0] and missing[1].startswith("MISSING: uv"), missing)
         wait = [l for l in lines if l.startswith("waiting on Claude Code: ")]
         self.assertEqual(len(wait), 1, lines)
         self.assertGreater(lines.index(wait[0]), lines.index(missing[0]))
-        self.assertEqual([n in wait[0] for n in ("i-have-adhd skill", "superpowers", "herdr claude integration", "uv", "gh")], [True, True, False, False, False])
+        self.assertEqual([n in wait[0] for n in ("herdr skill", "superpowers", "herdr claude integration", "uv", "gh")], [True, True, False, False, False])
 
     def test_old_keys_warn_once_by_name_and_file(self):
         cfg, env = self.home / "config.json", self.home / ".env"

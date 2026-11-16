@@ -26,7 +26,6 @@ CALLERS = ("COMPOSE_TEST_SLOT",  # the slot of a `compose timed` running the sui
 INSTALLED = {  # what compose's required tools keep in a home, faked so `compose init` goes ahead without the user's machine
     ".local/share/gh/extensions/gh-stack/gh-stack": "#!/bin/sh\necho 'gh stack (fake)'\n",
     ".claude/skills/herdr/SKILL.md": "# herdr (fake)\n",
-    ".claude/plugins/marketplaces/i-have-adhd/skills/i-have-adhd/SKILL.md": "# i-have-adhd (fake)\n",
 }
 
 

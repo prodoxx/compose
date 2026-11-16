@@ -544,7 +544,7 @@ class ClaudeOptional(unittest.TestCase):
         p = mock.patch.dict(fc_harness.HARNESSES, {"other": row}); p.start(); self.addCleanup(p.stop)
 
     def test_claude_only_names_are_steps_rows(self):
-        self.assertEqual(fc_steps.CLAUDE_ONLY, ("claude", "herdr skill", "i-have-adhd skill", "compose skill link"))
+        self.assertEqual(fc_steps.CLAUDE_ONLY, ("claude", "herdr skill", "compose skill link"))
         self.assertLessEqual(set(fc_steps.CLAUDE_ONLY), {r[0] for r in fc_steps.STEPS})
 
     def test_other_harness_is_codex_only_with_the_binary_and_a_link_to_the_checkout(self):
@@ -580,7 +580,7 @@ class ClaudeOptional(unittest.TestCase):
 
 
 import fc_finish, fc_prompt, fc_setup
-ONLY_CLAUDE, NOT_READY = ("claude", "herdr skill", "i-have-adhd skill", "compose skill link"), "compose is installed but not ready:"
+ONLY_CLAUDE, NOT_READY = ("claude", "herdr skill", "compose skill link"), "compose is installed but not ready:"
 
 
 class FinishWithoutClaude(unittest.TestCase):
@@ -675,14 +675,14 @@ class DoctorWithoutClaude(unittest.TestCase):
         self.assertEqual(lines["claude"], CLAUDE_LINE + " - optional, Codex is set up")
         for name in ("herdr skill", "compose skill link"): self.assertTrue(lines[name].endswith(OPTIONAL), lines[name])
         self.assertEqual(len(waiting), 1)
-        self.assertIn("i-have-adhd skill", waiting[0])
+        self.assertIn("herdr claude integration", waiting[0])
 
     def test_codex_set_up_with_claude_installed_still_makes_its_rows_optional(self):
         self.tools(claude=True, codex=True, link=True)
         bad, lines, waiting = self.deps()
         self.assertFalse(set(bad) & set(ONLY_CLAUDE))
         self.assertNotIn("claude", lines)
-        for name in ("herdr skill", "i-have-adhd skill", "compose skill link"): self.assertTrue(lines[name].endswith(OPTIONAL), lines[name])
+        for name in ("herdr skill", "compose skill link"): self.assertTrue(lines[name].endswith(OPTIONAL), lines[name])
 
     def test_the_note_names_whichever_harness_row_is_set_up(self):
         row = {**fc_harness.HARNESSES.get("codex", {}), "name": "Other", "exe": "other", "home_env": "OTHER_HOME", "home": "~/.other"}

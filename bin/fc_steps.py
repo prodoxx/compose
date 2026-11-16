@@ -76,7 +76,7 @@ def check(row, checkout):
             return False, f"{'.'.join(map(str, v))} is older than {floor}"
     return True, ""
 
-CLAUDE_ONLY = ("claude", "herdr skill", "i-have-adhd skill", "compose skill link")
+CLAUDE_ONLY = ("claude", "herdr skill", "compose skill link")
 
 def other_harness(checkout):
     """The first installed harness whose skill link points at this checkout (e.g. "codex"), else None."""
@@ -99,7 +99,6 @@ STEPS = (  # the rows, in setup order
     ("claude", "claude", "curl -fsSL https://claude.ai/install.sh | bash", "required", False, "manual"),
     ("herdr", "herdr", "curl -fsSL https://herdr.dev/install.sh | sh", "required", False, "run"),
     ("herdr skill", ".claude/skills/herdr/SKILL.md", "mkdir -p ~/.claude/skills/herdr && herdr --skill > ~/.claude/skills/herdr/SKILL.md", "required", False, "run"),
-    ("i-have-adhd skill", ".claude/plugins/marketplaces/i-have-adhd/skills/i-have-adhd/SKILL.md", "claude plugin marketplace add ayghri/i-have-adhd", "required", True, "run"),
     ("pi", "pi", "npm install -g --ignore-scripts @earendil-works/pi-coding-agent", "required", False, "run"),
     ("pi openrouter-fast provider", lambda co: (fc_pi.provider_declared(fc_pi.PI_MODELS), ""), "compose setup", "required", False, "write"),
     ("compose CLI link", lambda co: owned_link("compose CLI link", co), "compose setup", "required", False, "write"),

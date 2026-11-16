@@ -32,7 +32,6 @@ Without `claude` on the PATH it runs every step that does not need it, skips the
 | Codex commands | default | writes the `skills/compose-<name>` command skills under `CODEX_HOME`; ok when `codex` is not on the PATH | no |
 | Codex hooks | default | writes `hooks.json` and the trust records in `config.toml` under `CODEX_HOME`; ok when `codex` is not on the PATH | no |
 | Keys | required | saves the OpenRouter key, the TypeSafe key, and the Linear key into `~/.compose/auth.json` | no |
-| i-have-adhd skill | required | adds the marketplace | yes |
 | Homebrew, uv, jev | default | installs Homebrew when missing, uv, and the `jev/` environment | no |
 | trail, treehouse | default | installs `@trailhq/trail-code` and treehouse | no |
 | bp, Chromium | default | links `bp` into `~/.local/bin` and installs Playwright's Chromium | no |

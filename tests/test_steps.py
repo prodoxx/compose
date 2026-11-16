@@ -8,7 +8,7 @@ for _m in [m for m in sys.modules if m.startswith("fc_") and m not in ("fc_cost"
 import fc_config, fc_steps, fc_pi, fc_worktree
 R, D, G, c = "required", "default", "designer", True
 ROWS = [("Homebrew", D, "interactive"), ("git", R, "manual"), ("npx", R, "run"), ("gh", R, "run"), ("gh auth", R, "interactive"), ("gh stack", R, "run"),
-        ("claude", R, "manual"), ("herdr", R, "run"), ("herdr skill", R, "run"), ("i-have-adhd skill", R, "run", c), ("pi", R, "run"),
+        ("claude", R, "manual"), ("herdr", R, "run"), ("herdr skill", R, "run"), ("pi", R, "run"),
         ("pi openrouter-fast provider", R, "write"), ("compose CLI link", R, "write"), ("compose skill link", R, "write"),
         ("Codex skill link", D, "write"), ("Codex commands", D, "write"), ("Codex hooks", D, "write"), ("~/.local/bin on PATH", R, "manual"),
         ("OpenRouter key", R, "key"), ("TypeSafe key", R, "key"), ("Linear key", R, "key"), ("uv", D, "run"), ("jev", D, "run"),
@@ -185,7 +185,6 @@ class RowFixes(unittest.TestCase):
     def test_other_rows_keep_place_level_mode_and_install(self):
         rows = [r for r in fc_steps.STEPS if r[0] != "trail"]
         self.assertEqual([(r[0], r[3], r[5], r[4]) for r in rows], [(n, l, m, bool(x)) for n, l, m, *x in ROWS])
-        more = {"gh stack": "gh extension install github/gh-stack", "claude": "curl -fsSL https://claude.ai/install.sh | bash",
-                "i-have-adhd skill": "claude plugin marketplace add ayghri/i-have-adhd", "git rerere": "git config --global rerere.enabled true",
+        more = {"gh stack": "gh extension install github/gh-stack", "claude": "curl -fsSL https://claude.ai/install.sh | bash", "git rerere": "git config --global rerere.enabled true",
                 "treehouse": fc_worktree.TREEHOUSE_INSTALL, "framelink-figma": fc_steps.FRAMELINK_ADD, "TEXT_MODEL lines": "compose setup"}
         self.assertEqual({n: self.rows[n][2] for n in {**INSTALLS, **more}}, {**INSTALLS, **more})
