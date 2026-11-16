@@ -949,6 +949,28 @@ class LinearCancel(unittest.TestCase):
                              (1, f"shop is under {mode}: a cancel changes Linear only on the product owner's own go; cancel it once {mode} is off"))
         self.assertEqual(self.writes(), [])
 
+    def test_cancel_minds_only_the_posture_of_the_project_the_issue_belongs_to(self):
+        def project(name, feature, mode=None):
+            d = self.repo / ".compose" / name / "results"; d.mkdir(parents=True, exist_ok=True)
+            (d.parent / "verify.json").write_text("{}"); (d.parent / "linear.json").write_text(json.dumps({"feature": feature}))
+            if mode:
+                (d / "yolo.json").write_text(json.dumps({"mode": mode}))
+        project("redesign", "ENG-1", "yolo"); project("qa", "ENG-2")
+        self.issue["parent"] = {"identifier": "ENG-5", "parent": {"identifier": "ENG-2", "parent": None}}  # a task of qa's feature
+        with redirect_stdout(io.StringIO()) as out:
+            fc.fc_linear_cmd.cmd_linear(self.a("cancel", "ENG-7", body="x"))
+        self.assertEqual(out.getvalue().strip(), "canceled ENG-7")
+        self.calls.clear()
+        self.issue["parent"] = {"identifier": "ENG-1", "parent": None}  # a story of redesign's feature, whoever cancels it
+        self.assertEqual(self.fails(fc.fc_linear_cmd.cmd_linear, self.a("cancel", "ENG-7", body="x", project="qa")),
+                         (1, "redesign is under yolo: a cancel changes Linear only on the product owner's own go; cancel it once yolo is off"))
+        self.assertEqual(self.writes(), [])
+        self.issue["parent"] = None  # an issue no project is built on: the project the command names decides
+        self.assertEqual(self.fails(fc.fc_linear_cmd.cmd_linear, self.a("cancel", "ENG-7", body="x", project="redesign"))[0], 1)
+        with redirect_stdout(io.StringIO()) as out:
+            fc.fc_linear_cmd.cmd_linear(self.a("cancel", "ENG-7", body="x", project="qa"))
+        self.assertEqual(out.getvalue().strip(), "canceled ENG-7")
+
 
 class LinearNoProject(unittest.TestCase):
     REFUSAL = (1, "ENG-7 is not in project Shop; pass --any-project to use it")

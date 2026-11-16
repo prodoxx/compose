@@ -410,22 +410,49 @@ def verb_comment(a):
     fc_linear.linear_comment(issue, body)
     print(f"commented on {issue['identifier']}")
 
-def under_posture(repo):
-    """The name and mode of a compose project of the repo under away or yolo, or None; every project counts, as the repo has one Linear project."""
-    for name, (_, proj) in sorted(fc_core.all_projects(Path(repo).resolve()).items()):
+def linked_ids(proj):
+    """The Linear issues a compose project is built on: its linear.json feature, stories, and design epic."""
+    try:
+        link = json.loads((proj / "linear.json").read_text())
+    except (OSError, ValueError):
+        return set()
+    return {i for i in [link.get("feature"), link.get("design_epic"), *(link.get("stories") or [])] if isinstance(i, str)}
+
+def under_posture(repo, issue=None, project=None):
+    """The name and mode of the compose project under away or yolo that the write touches, or None. With `issue` (its identifier and
+    its ancestors' identifiers), the projects built on that issue or one of its ancestors count; when none is, the project the command
+    names (--project), else the one whose worktree the command runs in, counts. Without an issue, as for a reconcile of the whole
+    Linear project, every project counts."""
+    projects = sorted(fc_core.all_projects(Path(repo).resolve()).items())
+    project = project or next((n for n, (wt, _) in projects if Path(wt).resolve() == Path(repo).resolve()), None)
+    if issue:
+        owners = [(n, p) for n, (_, p) in projects if linked_ids(p) & set(issue)]
+        scope = owners or [(n, p) for n, (_, p) in projects if n == project] or ([] if project else [(n, p) for n, (_, p) in projects])
+    else:
+        scope = [(n, p) for n, (_, p) in projects]
+    for name, proj in scope:
         if y := fc_tasks.yolo_state(proj):
             return name, y["mode"]
 
+def lineage(issue):
+    """The issue's identifier and its ancestors' identifiers, nearest first."""
+    out = []
+    while issue:
+        out.append(issue["identifier"])
+        issue = issue.get("parent")
+    return out
+
 def verb_cancel(a):
-    if posture := under_posture(a.repo):
-        sys.exit(f"{posture[0]} is under {posture[1]}: a cancel changes Linear only on the product owner's own go; cancel it once {posture[1]} is off")
     if not a.target:
         sys.exit("cancel needs an issue id")
     if len(a.target) > 1:
         sys.exit("cancel takes the reason from --file <path> or stdin, not from the command line: "
                  f"compose linear cancel {a.target[0]} --file <path>")
     scope = "query($id: String!) { issue(id: $id) { id identifier title project { id name } } }"
-    issue = fc_linear.linear_gql(scope, {"id": a.target[0]})["issue"]
+    issue = fc_linear.linear_gql(scope.replace("project {", "parent { identifier parent { identifier parent { identifier } } } project {"),
+                                 {"id": a.target[0]})["issue"]
+    if posture := under_posture(a.repo, lineage(issue), getattr(a, "project", None)):
+        sys.exit(f"{posture[0]} is under {posture[1]}: a cancel changes Linear only on the product owner's own go; cancel it once {posture[1]} is off")
     in_scope(issue, a)
     reason = read_body(a).strip()
     if not reason:
