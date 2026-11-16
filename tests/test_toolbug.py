@@ -54,7 +54,7 @@ class Text(unittest.TestCase):
                              "## Environment\n\n- compose: abc1234\n- OS: at ~/x\n\n## Symptom\n\n<user> saw it\n\n## Root cause\n\nnot found\n\n## Reproduction\n\nrun\n")
             self.assertEqual(tb.issue_text("# x: y\n## Symptom\nz\n## Environment\nold /opt/stuff\n## Fix\npatch\n")[1],
                              "## Symptom\n\nz\n\n## Environment\n\n- compose: abc1234\n- OS: at ~/x\n\n## Fix\n\npatch\n\n## Root cause\n\nnot found\n")
-            for bad in ("crew start: hangs\n## Summary\nx\n", "#crew: hangs\n"):
+            for bad in ("crew start: hangs\n## Summary\nx\n", "#crew: hangs\n", "# crew start: " + "h" * 80 + "\n## Summary\nx\n"):
                 with self.assertRaises(ValueError):
                     tb.issue_text(bad)
 

@@ -39,6 +39,8 @@ def issue_text(raw, login=None):
     if not first.startswith("# "):
         raise ValueError("line 1 must be `# <command>: <symptom>`")
     title = first[2:].strip()
+    if why := fc_core.long_title(title):
+        raise ValueError(f"line 1 is the issue title: {why}")
     parts = re.split(r"(?m)^## ", rest)
     preamble = parts[0].strip()
     sections = [[name.strip(), content.strip()] for name, _, content in (p.partition("\n") for p in parts[1:])]

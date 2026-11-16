@@ -67,6 +67,7 @@ You only find and file the bug: never edit, commit, push, or fix anything in the
 A fix is a later, separate job. Your one output is a GitHub issue.
 1. Reproduce bug in your worktree (read-only: look, run, never change), find root cause.
 2. Write body file outside the compose repo (e.g. under /tmp): line 1 `# <command>: <symptom>`, then sections of issue #1 (`gh issue view 1 --repo {repo}`).
+   Title under 80 characters, plain words, what breaks for the user; open the body with what happened, what should have, and why it matters (sections/0w.md).
 3. File: `compose tool-bug file --project {project} --entry "{at}" --body <file>`. Exit 2: open issue exists;
    `--comment <n>` if same bug, `--new` if not.
 {variant}{retros}"""

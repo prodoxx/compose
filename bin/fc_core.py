@@ -452,3 +452,12 @@ def project_after(proj):
 def tilde(text):
     """text (a path or a line) with the home directory followed by / shown as ~/."""
     return str(text).replace(str(Path.home()) + "/", "~/")
+
+TITLE_MAX = 80  # a ticket title is read in lists: what changes and where, in plain words (sections/0w.md)
+
+def long_title(title):
+    """Why a ticket title is refused, or None: over TITLE_MAX characters, the details belong in the description."""
+    if len(title) <= TITLE_MAX:
+        return None
+    return (f"the title is {len(title)} characters, over {TITLE_MAX}: say what changes and where in plain words "
+            f"(`<area>: <what changes>`) and move the details to the description (sections/0w.md)")

@@ -111,6 +111,9 @@ The shaping conversation is the engineering manager's; inside a terminal host th
 
 ### 0d. Design work: the designer: read sections/0d.md
 
+### 0w. Write tickets a person can read at a glance: read sections/0w.md
+Every title, description, and acceptance criterion compose writes follows it: plain words, the point first, details after.
+
 ### 0r. Pick up where the last session stopped
 Everything is on disk, so a restart is a non-event.
 When the product owner asks what is going on or for an update, run `compose status --repo <wt>` and report its `in flight` lines (a run or verify alive, with its time against the last one and its stage) and who the engineering manager is, before anything else; a team lead waiting on a background verify looks idle in herdr.

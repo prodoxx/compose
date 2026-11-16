@@ -318,6 +318,8 @@ def verb_next_task_id(a):
 def verb_create(a):
     if not a.title:
         sys.exit("create needs --title")
+    if why := fc_core.long_title(a.title):
+        sys.exit(f"create: {why}")
     p = linear_project(a.repo)
     team = fc_linear.linear_gql("query($id: String!) { team(id: $id) { name states { nodes { id name } } labels(first: 250) { nodes { id name } } } }",
                                 {"id": p["team"]["id"]})["team"]
@@ -353,6 +355,8 @@ def verb_update(a):
     if not (writes or a.title or a.parent or a.state or a.label or a.add_label or a.drop_label or a.priority is not None or a.blocked_by is not None or add or drop):
         sys.exit("update needs --title, --state, --parent, --label, --add-label, --drop-label, --priority, --blocked-by, --add-blocked-by, --drop-blocked-by, "
                  "or a body: --section, --append, or --description with --file or stdin")
+    if a.title and (why := fc_core.long_title(a.title)):
+        sys.exit(f"update: {why}")
     if a.blocked_by is not None and (add or drop):
         sys.exit("update takes --blocked-by (the whole list) or --add-blocked-by/--drop-blocked-by, not both")
     prio = priority(a)  # a bad value refuses before the issue is read

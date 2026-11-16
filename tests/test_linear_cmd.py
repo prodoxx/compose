@@ -446,6 +446,13 @@ class LinearCreate(unittest.TestCase):
         self.assertIn("has no label 'perf'", self.fails(fc.fc_linear_cmd.verb_create, self.args("create", title="Fix it", label=["perf"]))[1])
         self.assertFalse([q for q, _ in self.calls if "issueCreate" in q])
 
+    def test_a_title_over_80_characters_is_refused_with_the_plain_title_rule(self):
+        code, msg = self.fails(fc.fc_linear_cmd.verb_create, self.args("create", title="x" * 81))
+        self.assertEqual(code, 1)
+        self.assertTrue(msg.startswith("create: the title is 81 characters, over 80"), msg)
+        self.assertIn("sections/0w.md", msg)
+        self.assertEqual(self.calls, [])
+
 
 class LinearUpdate(unittest.TestCase):
     READ, UPDATE = "issue(id: $id) { id identifier description project { id name } team { name states { nodes { id name } } labels(first: 250) { nodes { id name } } } }", "issueUpdate(id: $id, input: $in) { success }"
@@ -617,6 +624,11 @@ class LinearUpdate(unittest.TestCase):
         want = (1, "update needs --title, --state, --parent, --label, --add-label, --drop-label, --priority, --blocked-by, --add-blocked-by, --drop-blocked-by, "
                    "or a body: --section, --append, or --description with --file or stdin")
         self.assertEqual(self.fails(fc.fc_linear_cmd.verb_update, self.args("update", "ENG-7")), want)
+        self.assertEqual(self.calls, [])
+
+    def test_a_title_over_80_characters_refuses_before_reading_the_issue(self):
+        code, msg = self.fails(fc.fc_linear_cmd.verb_update, self.args("update", "ENG-7", title="y" * 90))
+        self.assertEqual((code, msg.split(":", 2)[:2]), (1, ["update", " the title is 90 characters, over 80"]))
         self.assertEqual(self.calls, [])
 
     def test_replace_section_ends_a_section_at_the_next_heading_of_its_level_or_higher(self):
