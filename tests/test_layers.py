@@ -340,6 +340,31 @@ class FakedRegister(unittest.TestCase):
         self.assertEqual(self.register(submit=True, gate=lambda *a: self.fail("the gate ran")), [])
         self.assertEqual(len(self.built), 1)
 
+    def test_a_check_only_call_stands_the_layers_runs_the_gate_on_them_and_touches_no_gh_stack(self):
+        """#456: verify stands the layers as a submit would and runs the per-layer gate, and never initialises, submits or renames anything."""
+        for t in ("001", "002", "003"):
+            self.result(t, "passed")
+        self.chain, self.layers = self.ORDER, [{"branch": "compose/p-layer-01"}, {"branch": "compose/p-layer-02"}]
+        asked = []
+        with mock.patch.object(fc.fc_worktree, "rename_legacy_branches") as rename:
+            got = self.register(check_only=True, gate=lambda *a: asked.append(a[2]) or "a reason a submit would STOP with")
+        self.assertEqual((got, asked, fc.fc_layers.STACK_STOP, rename.call_count), ([["compose/p-layer-01", "compose/p-layer-02"]], [self.layers], "", 0))  # a gh call would have raised
+        self.assertEqual([l for l in self.said if "STOP" in l], [])
+        self.layers = None  # a plain call renames a legacy branch name first
+        with mock.patch.object(fc.fc_worktree, "rename_legacy_branches") as rename:
+            self.register()
+        self.assertEqual(rename.call_count, 1)
+
+    def test_a_check_only_call_leaves_out_the_tasks_a_submit_would_hold_and_runs_no_gate_without_layers(self):
+        for t, status in (("001", "passed"), ("002", "passed"), ("003", "failed")):
+            self.result(t, status)
+        self.chain, self.layers = self.ORDER[:2], [{"branch": "compose/p-layer-01"}]
+        self.assertEqual(self.register(check_only=True, gate=lambda *a: ""), [["compose/p-layer-01"]])
+        self.assertEqual(self.through, [["compose/p-001", "compose/p-002"]])  # 003 failed: the layers hold the two below it
+        self.assertIn("stack  hold  003 is failed; 003 not submitted", self.said)
+        self.layers = None
+        self.assertEqual(self.register(check_only=True, gate=lambda *a: self.fail("the gate ran")), [])
+
     def test_the_layers_differ_from_the_chain_in_every_file_but_the_ones_a_held_task_protects(self):
         tasks = [{"id": "001", "protected": ["t001.test"]}, {"id": "002", "protected": ["t002.test", "shared.test"]}, {"id": "003", "protected": ["t003.test"]}]
         self.assertEqual(fc.fc_layers.differing_files(["003.src", "t003.test", "t002.test"], tasks, []), ["003.src", "t003.test", "t002.test"])

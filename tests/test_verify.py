@@ -61,6 +61,65 @@ class SufficiencyVerify(unittest.TestCase):
                     self.assertEqual((code2, final2["passed"], len(rounds2)), (code, ok, 1))
 
 
+class LayerPassVerify(unittest.TestCase):
+    """#456: verify checked only the stack top, so a layer that failed on its own tree was found by `compose stack --submit`, one layer per submit."""
+    REFUSALS = ["layer 1 of 3 (compose/p-layer-01) fails `lint` on its own tree. A layer must pass without the layers above it: fix it, then run `compose verify` again",
+                "layer 2 of 3 (compose/p-layer-02) fails `lint` on its own tree. A layer must pass without the layers above it: fix it, then run `compose verify` again"]
+
+    def run_verify(self, ok=True, cfg=None, refusals=(), **kw):
+        """verify_rounds on a stack (cfg has `main_repo`) with the stages faked and layer_pass answering `refusals`; (exit code, printed, verify.json, layer_pass mock, said)."""
+        proj = Path(tempfile.mkdtemp()) / "feat"; proj.mkdir()
+        out, said = io.StringIO(), []
+        args = {"fix": 0, "skip_review": True, **kw}
+        with mock.patch.object(fc.fc_verify, "run_stages", return_value=(ok, {"checks": []}, "" if ok else "finding")), mock.patch.object(fc_ledger, "verify_record"), \
+                mock.patch.object(fc.fc_verify, "verify_failed") as failed, mock.patch.object(fc.fc_linear, "linear_reconcile"), mock.patch.object(fc.fc_core, "say", said.append), \
+                mock.patch.object(fc.fc_worktree, "review_base", return_value="main"), mock.patch.object(fc.fc_worktree, "dirty_paths", return_value=set()), mock.patch.object(fc.fc_worktree, "ready_checkout"), \
+                mock.patch.object(fc.fc_verify.fc_reroute, "after_round", return_value=([], {})), mock.patch.object(fc.fc_layergate, "layer_pass", return_value=list(refusals)) as layers, \
+                mock.patch.object(fc.fc_core, "sh", return_value=subprocess.CompletedProcess([], 0, "headsha\n", "")), contextlib.redirect_stdout(out), self.assertRaises(SystemExit) as cm:
+            fc.fc_verify.verify_rounds(Path(tempfile.mkdtemp()), proj, {"main_repo": "/main", **(cfg or {})}, type("A", (), args)(), [], time.time(), kw.get("left_out", ()))
+        return cm.exception.code, out.getvalue(), json.loads((proj / "results" / "verify.json").read_text()) if (proj / "results" / "verify.json").exists() else None, layers, said, failed
+
+    def test_a_pass_with_layers_that_fail_on_their_own_tree_fails_names_every_one_and_records_them(self):
+        code, out, final, layers, said, failed = self.run_verify(refusals=self.REFUSALS)
+        self.assertEqual((code, final["passed"], final["layers"], final["head"]), (1, False, self.REFUSALS, "headsha"))
+        for r in self.REFUSALS:
+            self.assertIn(r, out)
+        self.assertTrue(any(l.startswith("verify FAIL  wall") for l in said), said)
+        self.assertNotIn("Unresolved after the fix budget", out)  # nothing a fix round can change: the layers are named, with what to do
+        failed.assert_not_called()
+
+    def test_layers_that_pass_leave_the_verdict_alone_and_the_gate_gets_the_main_checkout_and_the_fresh_flag(self):
+        code, out, final, layers, *_ = self.run_verify(fresh=True)
+        self.assertEqual((code, final["passed"], "layers" in final), (0, True, False))
+        self.assertEqual([c.args[0] for c in layers.call_args_list], ["/main"])
+        self.assertTrue(layers.call_args.args[2].fresh)
+
+    def test_the_layers_are_not_checked_after_a_failed_round_in_a_partial_run_without_a_stack_or_when_verify_json_turns_them_off(self):
+        for name, kw in (("a failed round", {"ok": False}), ("a smoke run", {"left_out": ("e2e",)}), ("review only", {"review_only": True}),
+                         ("off", {"cfg": {"layer_checks": False}}), ("no stack", {"cfg": {"main_repo": None}})):
+            with self.subTest(name):
+                *_, layers, said, failed = self.run_verify(refusals=self.REFUSALS, **kw)
+                layers.assert_not_called()
+
+    def test_layer_pass_stands_the_layers_check_only_with_verifys_gate_and_returns_what_it_refused(self):
+        def stand(repo, proj, trunk, **kw):
+            self.assertEqual((repo, trunk, kw["check_only"]), ("/main", "main", True))
+            kw["gate"](repo, proj, ["l1", "l2"], trunk, "/wt")
+            return [["l1", "l2"]]
+        a = type("A", (), {"fresh": True})()
+        with mock.patch.object(fc.fc_core, "current_branch", return_value="main"), mock.patch.object(fc.fc_stack, "register_stack", side_effect=stand), \
+                mock.patch.object(fc.fc_layergate, "layer_refusals", return_value=["r1", "r2"]) as refusals:
+            self.assertEqual(fc.fc_layergate.layer_pass("/main", Path("/p"), a), ["r1", "r2"])
+        self.assertEqual(refusals.call_args.args[1:], (Path("/p"), ["l1", "l2"], "main", "/wt", True))
+        self.assertEqual(refusals.call_args.kwargs, {"again": "compose verify"})
+
+    def test_layer_pass_says_when_the_layers_did_not_stand_and_fails_nothing(self):
+        said = []
+        with mock.patch.object(fc.fc_core, "current_branch", return_value="main"), mock.patch.object(fc.fc_stack, "register_stack", return_value=[]), mock.patch.object(fc.fc_core, "say", said.append):
+            self.assertEqual(fc.fc_layergate.layer_pass("/main", Path("/p"), type("A", (), {})()), [])
+        self.assertEqual(said, ["layers not checked: the layers did not stand (see the line above); a submit stops there too"])
+
+
 class FixRoundRules(unittest.TestCase):
     """The decisions a verify round makes about the checkout and about the files of its fix, from plain facts."""
     def test_the_checkout_moved_when_the_branch_is_not_the_one_the_stages_started_on(self):

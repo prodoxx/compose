@@ -396,7 +396,7 @@ def held_tasks(order, statuses, finished, after=None):
             held.append(t)
     return held
 
-def register_stack(repo, proj, trunk, submit=False, preview=False, gate=None):
+def register_stack(repo, proj, trunk, submit=False, preview=False, gate=None, check_only=False):
     """Make the project's passed task branches one gh stack, layer by layer, without touching the user's checkout. Branches built
     in parallel from trunk are rebased onto the layer below (tasks own disjoint files, so this is normally clean; a conflict
     stops the chain there, is reported, and nothing is built or registered). The stack itself is review layers on the real base (fc_worktree.review_base: `review_base`, else the default
@@ -407,12 +407,15 @@ def register_stack(repo, proj, trunk, submit=False, preview=False, gate=None):
     first moves onto the names a new project gets (fc_worktree.rename_legacy_branches). A base ahead of its upstream would put
     its unpushed commits into the PRs: the stack says so, and a submit stops before anything changes. `gate(repo, proj, layers,
     trunk, wt)` runs on a submit once the layers stand and before anything is pushed; the reason it returns, when it returns one,
-    stops the submit the same way."""
+    stops the submit the same way. `check_only` (verify's gate, #456) stands the layers exactly as a submit would, held tasks left out, and runs
+    `gate` on them (whatever it returns is the caller's to read, never a STOP), then stops: no gh stack is initialised, nothing is pushed, and a
+    legacy branch name is left as it is. It returns [layer branches] when the layers stood, [] when they did not (STACK_STOP says why)."""
     if why := head_problem(repo, proj):
         fc_layers.STACK_STOP = why
         fc_core.say(f"stack  STOP  {why}")
         return []
-    fc_worktree.rename_legacy_branches(repo, proj)
+    if not check_only:
+        fc_worktree.rename_legacy_branches(repo, proj)
     if not fc_worktree.stack_order(repo, proj):
         return []
     cfg = fc_core.project_config(proj)
@@ -433,7 +436,7 @@ def register_stack(repo, proj, trunk, submit=False, preview=False, gate=None):
     if level == "warn":
         fc_core.say(f"stack  WARN  {said}")
     held, through = [], ()
-    if submit:
+    if submit or check_only:
         metas = fc_tasks.code_tasks(fc_tasks.load_tasks(proj))
         by_id = {m["id"]: m for m in metas}
         order = fc_worktree.layer_order(metas)
@@ -476,6 +479,11 @@ def register_stack(repo, proj, trunk, submit=False, preview=False, gate=None):
     layers = fc_layers.build_layers(repo, proj, built, trunk, linear, wt, budget, cap, held=held, landed=landed)
     if layers is None:
         return []
+    if check_only:
+        if layers and gate:
+            gate(repo, proj, layers, trunk, wt)
+        fc_core.sh(["git", "checkout", "-q", "--detach", trunk], wt, check=False)
+        return [[l["branch"] for l in layers]] if layers else []
     stack, stack_base = ([l["branch"] for l in layers], base) if layers else (linear, trunk)
     # A stack from an earlier wave is rebuilt with the grown chain: every existing stack that holds any of these branches is
     # unstacked locally (GitHub side untouched), then one init registers the whole chain.

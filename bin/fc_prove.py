@@ -1,7 +1,7 @@
 import hashlib, json, os, re, sys, time
 from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
-import fc_core, fc_config, fc_models, fc_textmodel, fc_tasks, fc_worktree, fc_layers, fc_jev, fc_verify, fc_ledger
+import fc_core, fc_config, fc_models, fc_textmodel, fc_tasks, fc_worktree, fc_layers, fc_jev, fc_layergate, fc_verify, fc_ledger
 
 
 # A query or fragment key that forces a flag or experiment variant for whoever opens the URL, which no real user's page carries.
@@ -149,7 +149,7 @@ def prove_root(repo, proj, cfg, only):
     fc_worktree.ready_checkout(repo, wt, install=cfg.get("install"), generate=cfg.get("generate"))
     fc_core.say(f"prove  at    {chain[-1]}, the stack below {ids[0]} ({len(chain)} layer(s) on {trunk})")
     olds = (repo, fc_core.main_checkout(repo))
-    return wt, {**cfg, **{k: fc_verify.at_root(cfg[k], olds, wt) for k in ("checks", "e2e", "e2e_setup", "e2e_env") if k in cfg}, "main_repo": repo}, wt
+    return wt, {**cfg, **{k: fc_layergate.at_root(cfg[k], olds, wt) for k in ("checks", "e2e", "e2e_setup", "e2e_env") if k in cfg}, "main_repo": repo}, wt
 
 def cmd_prove(a):
     repo, proj, cfg = verify_config(a)
@@ -221,8 +221,8 @@ def cmd_prototype(a):
     root, _, wt = fc_verify.verify_root(repo, proj, cfg)
     try:
         if root != repo:
-            cfg = {**cfg, **{k: fc_verify.at_root(cfg[k], (repo, fc_core.main_checkout(repo)), root) for k in ("e2e_setup", "e2e_env") if k in cfg}}
-            cases = fc_verify.at_root(cases, (repo, fc_core.main_checkout(repo)), root)
+            cfg = {**cfg, **{k: fc_layergate.at_root(cfg[k], (repo, fc_core.main_checkout(repo)), root) for k in ("e2e_setup", "e2e_env") if k in cfg}}
+            cases = fc_layergate.at_root(cases, (repo, fc_core.main_checkout(repo)), root)
         report = {"e2e": []}
         fc_verify.e2e_stage(root, {**cfg, "e2e": cases}, {}, report, [], proj / "results" / "prototype", keep=True)
     finally:

@@ -42,12 +42,12 @@ class FakedLayerChecks(Faked):
         for out, script in (('error: Script not found "build-storybook"', "build-storybook"), ('npm error Missing script: "test:storybook"', "test:storybook"),
                             ("ERR_PNPM_NO_SCRIPT  Missing script: build-storybook", "build-storybook"), ('Command "build-storybook" not found.', "build-storybook"),
                             ('Usage Error: Couldn\'t find a script named "lint".', "lint"), ("FAIL src/a.test.ts > renders", None), ("", None)):
-            self.assertEqual(fc.fc_ship.missing_script(out), script, out)
+            self.assertEqual(fc.fc_layergate.missing_script(out), script, out)
 
     def test_a_project_without_checks_says_so_and_checks_nothing(self):
         said = []
         with mock.patch.object(fc.fc_core, "say", said.append):
-            self.assertEqual(fc.fc_ship.layer_checks(self.root, self.proj, [], "compose/p", self.root), "")
+            self.assertEqual(fc.fc_layergate.layer_checks(self.root, self.proj, [], "compose/p", self.root), "")
         self.assertEqual(said, ["layers no checks in verify.json: the layers are not checked before submit"])
 
 
@@ -139,8 +139,8 @@ class FakedGateRun(unittest.TestCase):
         self.layers = [{"branch": f"compose/p-layer-0{i}", "tested": []} for i in (1, 2, 3)]
         self.at, self.runs, self.results, self.said = "", [], {}, []
         for target, name, fake in ((fc.fc_core, "sh", self.sh), (fc.fc_core, "say", self.said.append), (fc.fc_core, "main_checkout", lambda r: r),
-                                   (fc.fc_stack, "layer_base", lambda *a: "main"), (fc.fc_ship, "run_check", self.run_check), (fc.fc_ship, "ready", lambda *a, **k: None),
-                                   (fc.fc_ship, "layer_commands", lambda proj, l, checks, top: list(checks)), (fc.fc_verify, "at_root", lambda cmds, roots, wt: cmds),
+                                   (fc.fc_stack, "layer_base", lambda *a: "main"), (fc.fc_layergate, "run_check", self.run_check), (fc.fc_layergate, "ready", lambda *a, **k: None),
+                                   (fc.fc_layergate, "layer_commands", lambda proj, l, checks, top: list(checks)), (fc.fc_layergate, "at_root", lambda cmds, roots, wt: cmds),
                                    (fc.fc_green, "tree_of", lambda repo, tip: f"tree-{tip}")):
             patch = mock.patch.object(target, name, fake)
             patch.start(); self.addCleanup(patch.stop)
@@ -155,17 +155,45 @@ class FakedGateRun(unittest.TestCase):
         return self.results.get((self.at, c), (0, ""))
 
     def check(self, **kw):
-        return fc.fc_ship.layer_checks(self.root, self.proj, self.layers, "compose/p", self.root, **kw)
+        return fc.fc_layergate.layer_checks(self.root, self.proj, self.layers, "compose/p", self.root, **kw)
 
     def ran(self):
         return [b.removeprefix("compose/p-") for b, _ in self.runs]
 
-    def test_a_failing_layer_refuses_the_submit_names_it_and_the_layers_above_never_run(self):
+    def test_a_failing_layer_refuses_the_submit_names_it_and_the_layers_above_are_still_checked(self):
         self.results[("compose/p-layer-02", "c")] = (1, "boom")
         why = self.check()
         self.assertIn("layer 2 of 3 (compose/p-layer-02) fails `c` on its own tree (it names no failing test, so it cannot be compared with the base)", why)
         self.assertIn("Nothing was pushed", why)
-        self.assertEqual(self.ran(), ["layer-01", "layer-02"])
+        self.assertNotIn("layer 3 of 3", why)
+        self.assertEqual(self.ran(), ["layer-01", "layer-02", "layer-03"])
+
+    def test_every_layer_that_fails_is_named_at_once_so_one_fix_covers_them_all(self):
+        """#456: each layer that failed on its own tree was found by a separate submit, one fix-and-resubmit round per layer."""
+        for at in ("compose/p-layer-01", "compose/p-layer-02"):
+            self.results[(at, "c")] = (1, "boom")
+        refusals = fc.fc_layergate.layer_refusals(self.root, self.proj, self.layers, "compose/p", self.root)
+        self.assertEqual([r.split(" fails")[0] for r in refusals], ["layer 1 of 3 (compose/p-layer-01)", "layer 2 of 3 (compose/p-layer-02)"])
+        self.assertEqual(self.ran(), ["layer-01", "layer-02", "layer-03"])
+        self.assertIn("layers FAIL  2 of 3 layer(s) fail on their own tree", self.said)
+        self.assertEqual(self.check(fresh=True).count("fails `c` on its own tree"), 2)  # the one reason a submit stops with holds both
+
+    def test_a_layer_that_fails_where_the_top_passes_says_it_needs_a_commit_from_above(self):
+        self.results[("compose/p-layer-01", "c")] = (1, "boom")
+        fc.fc_green.record(self.proj, "tree-tip-compose/p-layer-03", "c", 0)  # verify ran it green on the top
+        [one] = fc.fc_layergate.layer_refusals(self.root, self.proj, self.layers, "compose/p", self.root)
+        self.assertIn(f"(it names no failing test, so it cannot be compared with the base; {fc.fc_layergate.NEEDS_ABOVE})", one)
+        self.results[("compose/p-layer-03", "c")] = (1, "boom")  # the top itself failing is nothing a commit from above fixes
+        fc.fc_green.record(self.proj, "tree-tip-compose/p-layer-03", "c", 1)
+        refusals = fc.fc_layergate.layer_refusals(self.root, self.proj, self.layers, "compose/p", self.root, fresh=True)
+        self.assertEqual(len(refusals), 2)
+        self.assertTrue(all(fc.fc_layergate.NEEDS_ABOVE not in r for r in refusals))
+
+    def test_a_verify_asking_has_nothing_to_push_and_names_itself_for_the_run_after_the_fix(self):
+        self.results[("compose/p-layer-02", "c")] = (1, "boom")
+        [one] = fc.fc_layergate.layer_refusals(self.root, self.proj, self.layers, "compose/p", self.root, again="compose verify")
+        self.assertNotIn("Nothing was pushed", one)
+        self.assertTrue(one.endswith("then run `compose verify` again"))
 
     def test_a_check_whose_script_a_later_layer_adds_waits_and_the_top_still_refuses_it(self):
         missing = (1, 'error: Script not found "build-storybook"')
@@ -197,13 +225,13 @@ class FakedLayerDecisions(unittest.TestCase):
     def test_a_layer_is_unchanged_only_when_its_stamp_or_lean_stamp_was_kept_and_never_on_a_fresh_run(self):
         seen = {"b1": "s1", "b2": "s2:base:top"}
         for branch, fresh, want in (("b1", False, True), ("b2", False, True), ("b3", False, False), ("b1", True, False)):
-            self.assertEqual(fc.fc_ship.unchanged_layer(seen, branch, "s1" if branch == "b1" else "s2", "s2:base:top", fresh), want, (branch, fresh))
-        self.assertFalse(fc.fc_ship.unchanged_layer(seen, "b1", "changed", "changed:base:top"))
+            self.assertEqual(fc.fc_layergate.unchanged_layer(seen, branch, "s1" if branch == "b1" else "s2", "s2:base:top", fresh), want, (branch, fresh))
+        self.assertFalse(fc.fc_layergate.unchanged_layer(seen, "b1", "changed", "changed:base:top"))
 
     def test_a_failing_check_waits_below_the_top_for_a_script_it_names_and_is_refused_when_it_names_no_test(self):
         state = lambda exit, failing=(), unknown=False: {"exit": exit, "failing": list(failing), "unknown": unknown}
         missing = 'error: Script not found "build"'
-        outcome = lambda s, top=False, c="c", own=("c",), out="": fc.fc_ship.check_outcome(s, top, c, set(own), out)
+        outcome = lambda s, top=False, c="c", own=("c",), out="": fc.fc_layergate.check_outcome(s, top, c, set(own), out)
         self.assertEqual(outcome(state(1, unknown=True), out=missing), ("later", "build"))
         self.assertEqual(outcome(state(1, unknown=True), top=True, out=missing)[0], "refuse")  # the top runs every check
         self.assertEqual(outcome(state(1, unknown=True), own=(), out=missing)[0], "refuse")  # a command that is not one of the project's checks
@@ -213,7 +241,7 @@ class FakedLayerDecisions(unittest.TestCase):
         self.assertEqual(outcome(state(0)), ("pass", None))
 
     def test_a_failure_the_base_shares_outside_the_stack_is_accepted_and_the_others_refuse_with_their_reason(self):
-        why = lambda new=(), hit=(), ok=(), unknown=False: fc.fc_ship.base_why(list(new), list(hit), list(ok), unknown, "b" * 40)
+        why = lambda new=(), hit=(), ok=(), unknown=False: fc.fc_layergate.base_why(list(new), list(hit), list(ok), unknown, "b" * 40)
         self.assertEqual(why(ok=["old"]), "")
         self.assertEqual(why(), "")
         self.assertEqual(why(new=["n"]), f"passes on the base {'b' * 9}, fails here: n")

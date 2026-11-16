@@ -583,7 +583,7 @@ class FixScope(unittest.TestCase):
                    mock.patch.object(fc_ledger, "run_id", side_effect=lambda proj, t: f"run-{t}"), mock.patch.object(fc.fc_verify, "run_stages", stage), mock.patch.object(fc.fc_verify, "changed_files", lambda repo: dict(touched)),
                    mock.patch.object(fc.fc_worktree, "stack_order", return_value=["t/001", "t/002"] if layers else []), mock.patch.object(fc.fc_worktree, "review_base", return_value="main"), mock.patch.object(fc.fc_worktree, "dirty_paths", return_value=[]),
                    mock.patch.object(fc.fc_implement, "implementer", fixer), mock.patch.object(fc.fc_implement.fc_trailpack, "trail_pack", return_value=""), mock.patch.object(fc.fc_worktree, "ready_checkout"), mock.patch.object(fc.fc_proc, "run", return_value=mock.Mock(returncode=0)),
-                   mock.patch.object(fc.fc_verify, "verify_failed"), mock.patch.object(fc_ledger, "verify_record"), mock.patch.object(fc.fc_core, "say", said.append), mock.patch.object(fc.fc_core, "sh", git_says(""))]
+                   mock.patch.object(fc.fc_verify, "verify_failed"), mock.patch.object(fc.fc_layergate, "layer_pass", return_value=[]), mock.patch.object(fc_ledger, "verify_record"), mock.patch.object(fc.fc_core, "say", said.append), mock.patch.object(fc.fc_core, "sh", git_says(""))]
         with contextlib.ExitStack() as stack:
             for p in patches: stack.enter_context(p)
             with self.assertRaises(SystemExit) as exit:
@@ -756,7 +756,7 @@ class LedgerRerun(unittest.TestCase):
         with mock.patch.object(fc.fc_verify, "run_stages", run), mock.patch.object(fc_ledger, "verify_record", note("record")), \
              mock.patch.object(fc.fc_accept, "jev_sufficiency", note("sufficiency", "judged")), mock.patch.object(fc_reroute, "after_round", cu), mock.patch.object(fc.fc_implement, "implementer", fixer), \
              mock.patch.object(fc.fc_worktree, "review_base", return_value="BASE"), mock.patch.object(fc.fc_worktree, "dirty_paths", return_value=[]), mock.patch.object(fc.fc_worktree, "ready_checkout"), \
-             mock.patch.object(fc.fc_verify, "verify_failed"), mock.patch.object(fc.fc_linear, "linear_reconcile"), mock.patch.object(fc.fc_core, "say"), mock.patch.object(fc.fc_core, "sh", git_says("")):
+             mock.patch.object(fc.fc_verify, "verify_failed"), mock.patch.object(fc.fc_layergate, "layer_pass", return_value=[]), mock.patch.object(fc.fc_linear, "linear_reconcile"), mock.patch.object(fc.fc_core, "say"), mock.patch.object(fc.fc_core, "sh", git_says("")):
             with self.assertRaises(SystemExit) as exit:
                 fc.fc_verify.verify_rounds(repo, proj, {"main_repo": main} if main else {}, SimpleNamespace(fix=fix, skip_review=False), rounds, 0)
         return exit.exception.code, order, run.call_args_list, rounds, cu.call_args_list, fixer, json.loads((proj / "results" / "verify.json").read_text())["passed"], repo, proj, reports

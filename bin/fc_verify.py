@@ -1,7 +1,7 @@
 import itertools, json, os, re, shutil, subprocess, sys, tempfile, time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-import fc_core, fc_proc, fc_config, fc_tasks, fc_ledger, fc_linear, fc_models, fc_herdr, fc_fleet, fc_worktree, fc_layers, fc_change, fc_routecost, fc_implement, fc_green, fc_gate, fc_init, fc_jev, fc_accept, fc_reroute, fc_costevent, fc_review, fc_history, fc_load, fc_trailpack, fc_update, fc_fixround, fc_keepout
+import fc_core, fc_proc, fc_config, fc_tasks, fc_ledger, fc_linear, fc_models, fc_herdr, fc_fleet, fc_worktree, fc_layers, fc_change, fc_routecost, fc_implement, fc_green, fc_gate, fc_init, fc_jev, fc_accept, fc_reroute, fc_costevent, fc_review, fc_history, fc_load, fc_trailpack, fc_update, fc_fixround, fc_layergate, fc_keepout
 
 CHECK_TIMEOUT = 900  # seconds a check may run; past it the check fails, named as a timeout
 
@@ -331,27 +331,6 @@ def verify_root(repo, proj, cfg):
     fc_core.say(f"verify at    stack top {chain[-1]} ({len(chain)} layer(s) on {trunk}); fixes commit on that layer")
     return wt, trunk, wt
 
-def at_root(value, olds, root):
-    """`value` with every absolute path under one of `olds` (the project worktree, the main checkout) moved under `root`, in
-    every string, inside dicts and lists too. Longest prefix first, each matched as a whole path: a path already at `root` (the
-    slot lives under the main checkout) is never moved again, so a second call changes nothing, and ~/code/app never matches ~/code/app-2/x.
-    A project's `.compose/` is git-ignored: a path in it moves only when it exists under `root` (the link stack_worktree makes),
-    else it stays where the file is, so an e2e driver kept in the project worktree is still found."""
-    olds = sorted({str(o) for o in olds} - {str(root)}, key=len, reverse=True)
-    if not olds:
-        return value
-    path = re.compile(r"(?<![\w.~-])(?:" + "|".join(map(re.escape, olds)) + r")(?=/|$|[\s\"'`;:&|()<>,=])")
-    if isinstance(value, dict):
-        return {k: at_root(v, olds, root) for k, v in value.items()}
-    if isinstance(value, list):
-        return [at_root(v, olds, root) for v in value]
-    def moved(m):
-        if re.match(re.escape(str(root)) + r"(?=/|$|[\s\"'`;:&|()<>,=])", m.string[m.start():]):
-            return m.group(0)  # already at `root`, which lives under an old one: moving it again doubles it
-        tail = re.match(r"/\.compose(?:/[^\s\"'`;:&|()<>,=]*)?", m.string[m.end():])
-        return m.group(0) if tail and not Path(str(root) + tail.group(0)).exists() else str(root)
-    return path.sub(moved, value) if isinstance(value, str) else value
-
 def cmd_verify(a):
     proj = fc_core.project_dir(a); repo = Path(a.repo).resolve()
     fc_update.refuse_while_building(proj, repo)
@@ -381,7 +360,7 @@ def cmd_verify(a):
         # Checks and e2e cases (setup, driver, assert, env, every string) may name the main checkout or the project worktree
         # by absolute path; run them against the stack top.
         olds = (repo, fc_core.main_checkout(repo))
-        cfg.update({k: at_root(cfg[k], olds, root) for k in ("checks", "e2e", "e2e_setup", "e2e_env") if k in cfg})
+        cfg.update({k: fc_layergate.at_root(cfg[k], olds, root) for k in ("checks", "e2e", "e2e_setup", "e2e_env") if k in cfg})
         cfg["main_repo"] = repo
     try:
         fc_reroute.before_verify(repo, proj, tasks, base)
@@ -561,8 +540,13 @@ def verify_rounds(repo, proj, cfg, a, rounds, t0, left_out=()):
                 break
         else:
             break
-    final = {"rounds": rounds, "passed": ok, "rejected_fixes": rejected, "seconds": round(time.time() - t0, 1), "cost": fc_core.LEDGER.snapshot(),
-             "head": (sha := fc_core.sh(["git", "rev-parse", "HEAD"], repo, check=False).stdout.strip())}
+    sha = fc_core.sh(["git", "rev-parse", "HEAD"], repo, check=False).stdout.strip()  # the verified top, read before the layers are stood: that moves the worktree
+    layered = fc_layergate.layer_pass(cfg["main_repo"], proj, a) if ok and cfg.get("main_repo") and not left_out and not getattr(a, "review_only", False) and cfg.get("layer_checks", True) else []
+    ok = ok and not layered
+    final = {"rounds": rounds, "passed": ok, "rejected_fixes": rejected, "seconds": round(time.time() - t0, 1), "cost": fc_core.LEDGER.snapshot(), "head": sha}
+    if layered:
+        final["layers"] = layered
+        print("\n\n".join(layered))
     if left_out:
         final["left_out"] = left_out
     (proj / "results").mkdir(exist_ok=True)
@@ -588,7 +572,7 @@ def verify_rounds(repo, proj, cfg, a, rounds, t0, left_out=()):
     if ok and not left_out:
         fc_linear.linear_reconcile(proj, verified=True)
     fc_core.say(fc_core.LEDGER.line())
-    if not ok and not left_out and not lost:  # a smoke run is a sign of life only; its findings never reach the reflect screen
+    if not ok and not left_out and not lost and not layered:  # a smoke run is a sign of life only; its findings never reach the reflect screen
         print("\nUnresolved after the fix budget. Escalate to the team lead with the confirmed findings above.")
         verify_failed(proj, rounds, findings)
     if ok and (space := fc_fleet.project_space(proj)):  # a failed run keeps its tab to read, like a missed task's pane

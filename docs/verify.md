@@ -25,6 +25,12 @@ Verify reads `.compose/<project>/verify.json`.
 
 `commit_convention` (`{"types": [...], "example": "feat: ..."}`) makes every commit the CLI makes, and every teammate brief, start with a type prefix: tests are `test`, docs `docs`, dependencies and config `chore` or `build`, fixes `fix`, the rest `feat`.
 `checks` also gate `compose stack --submit`: each layer is checked on its own tree, bottom up, and a failing layer refuses the submit.
+Every layer is checked even after one fails, so the refusal names each layer that fails on its own tree, and one fix covers them all.
+When the failing command is green on the top layer, the refusal says `it passes on the top layer: this layer needs a commit from above it`.
+A full `verify` runs the same gate once its stages pass (a smoke run, `--review-only`, and a verify with no open layers do not): it stands the review layers as a submit would, with the tasks a submit would hold left out, runs the layers' checks, and prints `layers FAIL  N of M layer(s) fail on their own tree` with each refusal, so a layer that only fails on its own tree is found by the verify and not by a separate submit for each one.
+It pushes and registers nothing, moves the `layer-NN` branches the way `compose stack` does, and a command green on a layer's tree is not run again by the submit that follows.
+`"layer_checks": false` in verify.json turns it off.
+If the layers cannot stand (a conflict, a base ahead of its remote), verify prints `layers not checked` and the verdict stays the stages'.
 The top layer runs every check and the `test` of the tasks it is the lowest layer for.
 A task is tested on the lowest layer that holds its code and every test commit written for it.
 That is the layer with its code, unless a test appended to a shared file had to follow an earlier test into a higher layer: then the task is tested there, where its test exists.

@@ -114,6 +114,7 @@ fc_depth
 fc_review
 fc_detach
 fc_fixround
+fc_layergate
 fc_verify
 fc_taskreview
 fc_ship
