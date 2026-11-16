@@ -595,12 +595,12 @@ class FixScope(unittest.TestCase):
         proj = Path(tempfile.mkdtemp()) / "p"; (proj / "results").mkdir(parents=True)
         out = io.StringIO()
         with mock.patch.object(fc.fc_models, "fast_json", fj), mock.patch.object(fc.fc_core, "load_env", return_value={}), \
-                mock.patch.object(fc.fc_verify, "review_inputs", return_value=("return a - b", "plan", "", [])), redirect_stdout(out):
+                mock.patch.object(fc.fc_verify, "review_inputs", return_value=("return a - b", "plan", "", [])), mock.patch.object(fc.fc_verify.fc_fixround, "top_task", return_value=None), redirect_stdout(out):
             ok, report, findings = fc.fc_verify.run_stages(proj, proj, {"perspectives": ["correctness"], "jev_acceptance": False},
                                                            type("A", (), {"skip_e2e": True, "skip_review": False}))
         self.assertEqual((ok, len(confirms), [i["file"] for i in report["review"]["issues"]]), (False, 1, ["a.py"]))
         self.assertIn("1 confirmed of 1 raised, 5 malformed dropped", out.getvalue())
-        self.assertIn("confirmed [high/correctness] a.py:2: add subtracts\n", out.getvalue())
+        self.assertIn("confirmed [high/correctness] a.py:2: add subtracts\n             id " + fc.fc_verify.fc_review.finding_id(report["review"]["confirmed"][0]) + "\n", out.getvalue())
         self.assertIn("Evidence: return a - b\nMust read: return a + b", findings)
         self.assertNotIn("Avoid", out.getvalue() + findings)
         self.assertNotIn("Analysis", out.getvalue() + findings)
@@ -627,9 +627,9 @@ class FixScope(unittest.TestCase):
         self.assertEqual(sorted(res["rejected_fixes"][0]["files"]), ["package-lock.json", "yarn.lock"])
 
     def test_no_stack_diff_still_refuses_lockfiles(self):
-        self.assertEqual(fc.fc_verify.fix_strays(["src/x.go", "client/yarn.lock"], set()), ["client/yarn.lock"])
-        self.assertEqual(fc.fc_verify.fix_strays(["src/x.go", "client/yarn.lock"], set(), {"client/yarn.lock"}), [])  # a task names it in files:
-        self.assertEqual(fc.fc_verify.fix_strays(["a.go", "yarn.lock"], {"a.go"}, {"yarn.lock"}), [])
+        self.assertEqual(fc.fc_verify.fc_fixround.fix_strays(["src/x.go", "client/yarn.lock"], set()), ["client/yarn.lock"])
+        self.assertEqual(fc.fc_verify.fc_fixround.fix_strays(["src/x.go", "client/yarn.lock"], set(), {"client/yarn.lock"}), [])  # a task names it in files:
+        self.assertEqual(fc.fc_verify.fc_fixround.fix_strays(["a.go", "yarn.lock"], {"a.go"}, {"yarn.lock"}), [])
 
 
 def ws(name=None, target=None, stdin="", linear=False):

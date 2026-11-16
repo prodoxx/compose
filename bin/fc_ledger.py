@@ -181,7 +181,9 @@ def verify_record(proj, repo, report):
     if rv is None:
         review = [ev("review", "skipped", "review did not run")]
     else:
-        review = [ev("review", "pass" if rv["pass"] else "fail", f"{len(rv['confirmed'])} confirmed of {len(rv['issues'])} raised")]
+        review = [ev("review", "pass" if rv["pass"] else "fail", f"{len(rv['confirmed'])} confirmed of {len(rv['issues'])} raised"
+                                                              + (f", {len(rv['dismissed'])} dismissed by the team lead" if rv.get("dismissed") else ""))] \
+            + [ev("review", "dismissed", f"{d['id']} {d['file']}: {d['reason']}") for d in rv.get("dismissed", [])]
     acc = report.get("acceptance")
     rows = (acc or {}).get("criteria")
     oks = [record(feature, checks or [ev("checks", "skipped", "no checks ran")]),

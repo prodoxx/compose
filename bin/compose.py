@@ -245,6 +245,8 @@ def main():
         if name == "review":
             s.add_argument("--only", help="comma-separated task ids or ranges such as 338..350: each task's own change, against the layer it sits on")
             s.add_argument("--range", help="<base>..<tip>: a change that is not a task branch, such as a merged feature; --only then names the tasks whose brief and criteria it is judged against")
+            s.add_argument("--dismiss", help="comma-separated ids of confirmed findings (the `id` under each confirmed finding of the last verify or review) that are false: no review is run; each is kept with --reason, recorded on the ledger, and left out of every later review and verify")
+            s.add_argument("--reason", help="with --dismiss: why the finding is false, kept with the dismissal")
         if name in ("run", "resume", "verify"):
             s.add_argument("--force", action="store_true", help="start although the Mac's battery is nearly empty, or (run, resume) the OpenRouter key's credit looks too low for the tasks that start at once")
         if name == "resume":

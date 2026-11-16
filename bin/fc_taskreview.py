@@ -36,10 +36,41 @@ def review_event(proj, meta, sha, rv):
     result = "pass" if rv["pass"] else "fail" if any(i["severity"] == "high" for i in rv["confirmed"]) else "error"
     run, ids = (fc_ledger.run_id(proj, meta["id"]), fc_ledger.criterion_ids(meta)) if meta else ("", [])
     return fc_ledger.event(run, sha, [meta["id"]] if meta else [], ids, "review", "review", result, None,
-                           f"{len(rv['confirmed'])} confirmed of {len(rv['issues'])} raised")
+                           f"{len(rv['confirmed'])} confirmed of {len(rv['issues'])} raised" + (f", {len(rv['dismissed'])} dismissed by the team lead" if rv.get("dismissed") else ""))
+
+def cmd_dismiss(a, proj, repo):
+    """`review --dismiss <id>[,<id>] --reason "<why>"`: the team lead's word that a confirmed finding is false. It is kept in the
+    project's dismissed.json with its reason, written on the feature issue's evidence ledger, and left out of every later review and
+    verify (fc_review.llm_review), so it stops failing the stack and no fix round chases it."""
+    reason = " ".join((a.reason or "").split())
+    if not reason:
+        sys.exit("review --dismiss needs --reason <why the finding is false>: the reason is kept with the dismissal, on the ledger and in the project's dismissed.json")
+    known = fc_review.last_confirmed(proj)
+    ids = [x.strip() for x in a.dismiss.split(",") if x.strip()]
+    found = {i: [k for k in known if k == i or (len(i) >= 4 and k.startswith(i))] for i in ids}
+    bad = [i for i, ks in found.items() if len(ks) != 1]
+    if bad:
+        listing = "\n".join(f"  {k} [{f.get('severity')}] {f.get('file')}: {' '.join(str(f.get('note', '')).split())[:100]}" for k, f in known.items())
+        sys.exit(f"review: {', '.join(bad)} names no one confirmed finding of the last verify or review of {proj.name}" + (f"; the confirmed ones are\n{listing}" if listing else "; there are none"))
+    path = proj / "linear.json"
+    feature = json.loads(path.read_text()).get("feature") if path.exists() else None
+    sha = fc_core.sh(["git", "rev-parse", "HEAD"], repo, check=False).stdout.strip()
+    events = []
+    for i in ids:
+        finding = known[found[i][0]]
+        record = fc_review.keep_dismissal(proj, finding, reason)
+        fc_core.say(f"review dismissed {record['id']} {finding.get('file')}{':' + str(finding['line']) if finding.get('line') else ''} [{finding.get('severity')}]: {reason}")
+        events.append(fc_ledger.event("", sha, [], [], "review", "dismiss", "dismissed", None, f"{record['id']} {finding.get('file')}: {reason}"))
+    if feature and fc_ledger.record(feature, events) is False:
+        fc_core.say("review FAIL  the dismissal is kept in dismissed.json but not saved on Linear: " + ", ".join(e["event_id"] for e in events))
+        sys.exit(1)
+    print("the next verify and review leave a finding with that id out and tell the confirm step it was judged false; remove its entry from "
+          f"{fc_review.dismissed_file(proj)} to undo it")
 
 def cmd_review(a):
     proj = fc_core.project_dir(a); repo = Path(a.repo).resolve()
+    if getattr(a, "dismiss", None):
+        return cmd_dismiss(a, proj, repo)
     only = fc_core.task_ids(a.only)
     if not only and not a.range:
         sys.exit("review needs --only <ids> (each task's own change) or --range <base>..<tip>")
@@ -66,7 +97,7 @@ def cmd_review(a):
         diff, plan, docs, _ = fc_verify.review_inputs(repo, proj, cfg, group, diff)
         fc_core.say(f"review start {name}  {spec}")
         try:
-            rv = fc_review.llm_review(cfg, diff, plan, docs, False)
+            rv = fc_review.llm_review(cfg, diff, plan, docs, False, fc_review.read_dismissed(proj))
         except fc_models.PaymentRequired as e:
             sys.exit(f"review stopped on PAYMENT REQUIRED ({e}); nothing was recorded for {name}")
         rv["seconds"] = round(time.time() - t0, 1)
@@ -80,8 +111,12 @@ def cmd_review(a):
         if rv.get("error"):
             print(f"           {rv['error']}")
         for i in rv["confirmed"]:
-            print(f"           confirmed {fc_verify.issue_line(i)}\n             Evidence: {i.get('evidence', '')}"
+            print(f"           confirmed {fc_verify.issue_line(i)}\n             id {fc_review.finding_id(i)}\n             Evidence: {i.get('evidence', '')}"
                   + (f"\n             Must read: {i['fix'] or '(remove the line)'}" if "fix" in i else ""))
+        for d in rv.get("dismissed", []):
+            print(f"           dismissed {d['id']} {d['file']}: {d['reason']}")
+        if rv["confirmed"]:
+            print(f"           a false finding is dismissed with its id and a reason, and is left out of every later review: compose review --project {proj.name} --dismiss <id> --reason \"<why it is false>\"")
         # The review lands where Jev's sufficiency judgment reads it: each reviewed task's issue, else the feature's.
         for m in group:
             fc_ledger.record_task(repo, proj, m, [review_event(proj, m, sha, rv)])

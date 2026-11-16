@@ -67,6 +67,11 @@ A start stops while a target differs from the record or an env file sets one the
    A quote that is not in the code, or a line that must read as it already does, drops the finding, and only confirmed highs fail.
    The reply is read from the first object that holds the verdict, whatever prose or fence surrounds it, and asked once more when it has none.
    A claim whose reply is still unusable is shown as `unjudged` and dropped, and it does not fail the stage.
+   Each confirmed finding is printed with an `id` (a hash of its file and its words).
+   A finding that is false is dismissed with `compose review --project <name> --dismiss <id>[,<id>] --reason "<why it is false>"`, which runs no review.
+   The dismissal is kept in the project's `dismissed.json` and written on the feature issue's ledger as a `review` row with source `dismiss`, and every later `verify` and `review` leaves a finding with that id out (it shows as `dismissed`, with the reason, in the output and in `results/verify.json`, and the review row on the ledger counts it and gets a `dismissed` row of its own).
+   The confirmation call is also told what was dismissed and why, so the same claim in other words is rejected.
+   Remove the entry from `dismissed.json` to bring the finding back.
 3. **jev** asks one MET / NOT_MET / UNCLEAR question per acceptance criterion.
    Each task is judged on its own hunks of the project's whole diff, never the reviewers' pack, which is cut at 150,000 characters.
    A task that changed none of its files is judged on those files as they are; lockfiles and other generated files are left out.
@@ -85,6 +90,9 @@ A start stops while a target differs from the record or an env file sets one the
    Then the case's `assert` checks the real DOM or log.
 5. **fix** sends confirmed findings to the fix model.
    Protected files are reverted, and the stages rerun for up to `--fix` rounds before they escalate.
+   A confirmed finding in a file a lower layer's task lists and the top task does not is held for the team lead: it is printed as `held` and still fails the review, but no fix round starts for it, because a fix commits on the top layer and the round would be reverted for the lower layer's file.
+   Dismiss it when it is false, else cut a top task that lists the file.
+   Findings the fixer can land still go to it, and a round with nothing but held findings is skipped.
    A round is discarded when it answers no reproduced failure: it must change a failing check, or remove a line a confirmed finding cites.
    A round that answers a confirmed finding by adding code, with no failing check before it, is kept when it changes a file the finding names and its own new test fails without the rest of the fix and passes with it.
    A fix commit holds only the files the fixer changed: never the agent wiring (`.claude/settings.json`), which a session hook rewrites, nor files a check left behind.

@@ -242,7 +242,7 @@ def run_stages(repo, proj, cfg, a, tests=None):
         t1 = time.time()
         fc_fleet.stage(panes, "review", "working")
         diff, plan, docs, _ = review_inputs(repo, proj, cfg)
-        rv = fc_review.llm_review(cfg, diff, plan, docs, bool(checks_pass))
+        rv = fc_review.llm_review(cfg, diff, plan, docs, bool(checks_pass), fc_review.read_dismissed(proj))
         rv["seconds"] = round(time.time() - t1, 1)
         report["review"] = rv
         ok &= rv["pass"]  # review always gates; the jev acceptance stage below is advisory unless asked to gate
@@ -252,12 +252,24 @@ def run_stages(repo, proj, cfg, a, tests=None):
                     + (f", {rv['malformed']} malformed dropped" if rv.get("malformed") else ""))
         if rv.get("error"):
             print(f"           {rv['error']}")
+        held = fc_fixround.held_findings(cfg.get("main_repo") or repo, proj, rv["confirmed"])
+        rv["held"] = [i for i, _, _ in held]
         for i in rv["issues"]:
-            mark = "confirmed" if i["confirmed"] else "judge err" if i.get("judge_error") else "unjudged " if i.get("unjudged") else "dropped  "
+            mark = "confirmed" if i["confirmed"] else "dismissed" if i.get("dismissed") else "judge err" if i.get("judge_error") else "unjudged " if i.get("unjudged") else "dropped  "
             print(f"           {mark} {issue_line(i)}")
+            if i["confirmed"]:
+                print(f"             id {fc_review.finding_id(i)}")
+            elif i.get("dismissed"):
+                print(f"             dismissed by the team lead: {i['dismissed']}")
+        for i, owners, top in held:
+            print(f"           held      {fc_review.finding_id(i)} {i['file']} belongs to layer {', '.join(owners)}, not the top layer {top}: a fix round commits on the top layer and cannot land it. "
+                  f"If it is false, dismiss it; if it is true, {fc_fixround.cut_top_task({i['file']: owners}, top)}")
+        if rv["confirmed"]:
+            print(f"           a false finding is dismissed with its id and a reason, and is left out of every later review: compose review --project {proj.name} --dismiss <id> --reason \"<why it is false>\"")
         for i in rv["confirmed"]:
-            findings.append(f"[{i['severity']}] {i['file']}: {i['note']}\nEvidence: {i.get('evidence', '')}"
-                            + (f"\nMust read: {i['fix'] or '(remove the line)'}" if "fix" in i else ""))
+            if not any(i is h for h, _, _ in held):  # a held finding is for the team lead: a fixer would only be reverted
+                findings.append(f"[{i['severity']}] {i['file']}: {i['note']}\nEvidence: {i.get('evidence', '')}"
+                                + (f"\nMust read: {i['fix'] or '(remove the line)'}" if "fix" in i else ""))
     if not a.skip_review and cfg.get("jev_acceptance", True) and cfg.get("depth") != "FAST":
         t1 = time.time()
         fc_fleet.stage(panes, "jev", "working")
@@ -380,23 +392,6 @@ def cmd_verify(a):
         if wt is not None:
             fc_core.sh(["git", "checkout", "-q", "--detach", fc_core.current_branch(repo)], wt, check=False)  # free the top branch again
 
-def fix_strays(touched, allowed, named=()):
-    """Files a verify fix round may not touch. A fixer gets the same scope as the tasks: only files the stack already
-    changes. With no stack diff (verify on a plain checkout) it is free except for lockfiles, which a fixer only rewrites
-    when it is working around a broken environment, not fixing a finding. A lockfile a task names in `files:` is part of the work."""
-    return [f for f in touched if f not in allowed and f not in named] if allowed else [f for f in touched if Path(f).name in fc_worktree.LOCKFILES and f not in named]
-
-def wrong_layer(tasks, files, top):
-    """The files of a fix that belong to another layer: some task's `files:` lists them and the top task's does not.
-    A fix commits on the top layer, so it may change only what that layer owns (or what no task names)."""
-    code = fc_tasks.code_tasks(tasks)
-    owners = {f: sorted(t["id"] for t in code if f in t["files"]) for f in files}
-    return {f: o for f, o in owners.items() if o and top not in o} if top else {}
-
-def cut_top_task(foreign, top):
-    """What to do about a fix that belongs to a lower layer: only a task above the stack can change those files."""
-    return f"cut a new top task (id above {top}) whose files: lists {', '.join(sorted(foreign))}, run it, then verify again"
-
 def fix_answers(repo, fixed, report, install=None):
     """Whether a fix round answers something reproduced: it removes the line a confirmed review finding quotes, an e2e case
     failed (the next round reruns it), a check that failed passes when run again, or it changes the file a confirmed finding
@@ -464,7 +459,10 @@ def verify_rounds(repo, proj, cfg, a, rounds, t0, left_out=()):
         if ok or rnd == a.fix:
             break
         if not findings.strip():
-            fc_core.say("fix    skip  only tool errors failed (see TOOL ERROR above); nothing for a fixer to change in the app")
+            if (report.get("review") or {}).get("held"):
+                fc_core.say("fix    skip  every confirmed finding is in a lower layer's file (see held above): no fix round can land it; dismiss it or cut a top task")
+            else:
+                fc_core.say("fix    skip  only tool errors failed (see TOOL ERROR above); nothing for a fixer to change in the app")
             break
         # Fix loop: hand confirmed findings to the fast implementer in the repo itself, then re-run every stage.
         if dirty and rnd == 0:
@@ -527,10 +525,10 @@ def verify_rounds(repo, proj, cfg, a, rounds, t0, left_out=()):
             fc_core.say(f"fix    removed documents the fixer added: {', '.join(new_docs)}")
         fixed = [f for f in fixed if f not in new_docs]
         tasks = fc_tasks.load_tasks(proj)
-        stray = fix_strays(fixed, allowed, {f for t in fc_tasks.code_tasks(tasks) for f in t["files"]})
+        stray = fc_fixround.fix_strays(fixed, allowed, {f for t in fc_tasks.code_tasks(tasks) for f in t["files"]})
         order = fc_worktree.stack_order(main, proj)
         top = order[-1].removeprefix(fc_worktree.task_prefix(main, proj)) if order else None
-        foreign = {} if stray else wrong_layer(tasks, fixed, top)
+        foreign = {} if stray else fc_fixround.wrong_layer(tasks, fixed, top)
         # The whole round goes when it is out of scope (a stray edit means the fixer worked around something, an install or the
         # toolchain, instead of fixing a finding, and its other edits rest on that), on a layer that does not own what it changed
         # (a fix commits on the top layer), or when it answers nothing reproduced. The last stage run failed, so verify ends FAIL.
@@ -543,7 +541,7 @@ def verify_rounds(repo, proj, cfg, a, rounds, t0, left_out=()):
                 fc_core.sh(["git", "--literal-pathspecs", "checkout", "-q", "HEAD", "--", *restore], repo)
             for f in drop:
                 (repo / f).unlink()
-            rejected.append({"round": rnd + 1, "files": stray or sorted(foreign) or fixed, **({} if stray else {"why": why}), **({"next": cut_top_task(foreign, top)} if foreign else {})})
+            rejected.append({"round": rnd + 1, "files": stray or sorted(foreign) or fixed, **({} if stray else {"why": why}), **({"next": fc_fixround.cut_top_task(foreign, top)} if foreign else {})})
             fc_core.say(f"fix    REJECTED round {rnd + 1}: {why}; reverted the round")
             if foreign:
                 fc_core.say(f"fix    next  {rejected[-1]['next']}")
