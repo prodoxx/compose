@@ -45,6 +45,10 @@ class Docs(unittest.TestCase):
         text = (ROOT / "sections" / "0h.md").read_text()
         self.assertIn("end your message with those lines unchanged", text)
         self.assertIn("compose ack", text)
+        self.assertIn("A report you relay to the product owner is at most six lines, the point first; the footer does not count, and an answer to their own "
+                      "question, or a digest they asked for, is as long as it needs.\n", text)
+        self.assertIn('no "still working" or "waiting on you" repeats in your own words; the footer below is the one repeat.\n', text)
+        self.assertIn("The prompt hook and each wake of the parked watch hand you its footer", text)
         self.assertIn("If you ran `compose decide`, `compose ack`, `compose waiting no`, a push or `compose resume` in this turn, run `compose waiting --footer` "
                       "again and end with what it prints (nothing printed means no footer).", text)
         self.assertNotIn("per-task table, `verify` stage lines", (ROOT / "SKILL.md").read_text())

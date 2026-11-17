@@ -48,10 +48,13 @@ def _stamp():
     """The time as items record it."""
     return time.strftime("%Y-%m-%d %H:%M:%S")
 
+def _cut(text, most):
+    """The text cut to `most` characters (`most` - 3 and `...`)."""
+    return text if len(text) <= most else text[:most - 3] + "..."
+
 def _one_line(text):
     """The text with its whitespace collapsed and cut to LINE_MAX characters (117 and `...`)."""
-    text = " ".join(str(text).split())
-    return text if len(text) <= LINE_MAX else text[:LINE_MAX - 3] + "..."
+    return _cut(" ".join(str(text).split()), LINE_MAX)
 
 def _is_open(item):
     """True when the item has not been closed."""
@@ -373,7 +376,8 @@ def footer(items):
     if not stoppers:
         return []
     shown = stoppers if len(stoppers) <= 3 and len(items) == len(stoppers) else stoppers[:2]
-    lines = ["Waiting on you:"] + [f"- {i['id']} {i['project']}: {_recommended(i)}" for i in shown]
+    short = lambda i: {**i, "recommendation": "" if i["kind"] == "answer" else _cut(i.get("recommendation") or "", 60)}  # an ask is asked open (0b)
+    lines = ["Waiting on you:"] + [f"- {i['id']} {i['project']}: {_recommended(short(i))}" for i in shown]
     return lines + ([f"+{len(items) - len(shown)} more: compose waiting"] if len(items) > len(shown) else [])
 
 def _locate(a, wid, command):

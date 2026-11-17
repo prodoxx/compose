@@ -407,13 +407,22 @@ class Commands(unittest.TestCase):
         self.assertTrue(fc_waiting.listing(seen)[1].endswith("D1: a thing [seen]"))
         self.assertNotIn("recommendation", fc_waiting.listing(seen)[1])
 
+    def test_the_footer_keeps_a_go_or_attend_recommendation_short_and_leaves_an_asks_out(self):
+        self.open(self.hw, "answer", "k1", "which database?", "SQLite, since hosting hangs on it")
+        self.open(self.hw, "go", "k2", "the stack waits for your go", "compose stack --submit --project hw")
+        self.open(self.hw, "attend", "k3", "payment halt at openrouter", "top up at the provider's page, then run compose resume for the project")
+        self.assertEqual(fc_waiting.footer(fc_waiting.gather(".")), ["Waiting on you:", "- W1 hw: which database?",
+                                                                     "- W2 hw: the stack waits for your go (recommendation: compose stack --submit --project hw)",
+                                                                     "- W3 hw: payment halt at openrouter (recommendation: top up at the provider's page, then run compose resume fo...)"])
+        self.assertIn("(recommendation: SQLite, since hosting hangs on it)", fc_waiting.listing(fc_waiting.gather("."))[0])  # the manager's own view keeps it
+
     def test_the_footer_is_at_most_four_lines_and_only_unseen_stoppers(self):
         for n in range(5):
             self.open(self.hw, "answer", f"k{n}", f"question {n}", "yes")
         for n in range(2):
             self.open(self.shop, "confirm", f"d{n}", f"D{n}: a thing")
         foot = fc_waiting.footer(fc_waiting.gather("."))
-        self.assertEqual(foot, ["Waiting on you:", "- W1 hw: question 0 (recommendation: yes)", "- W2 hw: question 1 (recommendation: yes)", "+5 more: compose waiting"])
+        self.assertEqual(foot, ["Waiting on you:", "- W1 hw: question 0", "- W2 hw: question 1", "+5 more: compose waiting"])  # an ask is asked open
         self.assertEqual(self.run_cmd(fc.fc_waiting.cmd_waiting, footer=True), foot)
         alone = Path(tempfile.mkdtemp()) / "solo"
         self.projects = {"solo": (alone.parent, alone)}
