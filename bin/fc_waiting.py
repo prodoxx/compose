@@ -180,9 +180,10 @@ def conditions(proj):
     """What waits on the product owner right now, read from the crew reports, results/resume.json and results/verify.json:
     [{"key", "kind", "line", "recommendation", "ids"}]. Raises OSError or ValueError when a source that exists cannot be read or parsed."""
     out = _report_conditions(proj)
-    if (halt := _json_file(proj / "results" / "resume.json")) is not None:
+    if (halt := _json_file(proj / "results" / "resume.json")) is not None and not fc_tasks.pid_alive(halt.get("resuming")):  # a live resume answers it
         left = len(halt.get("remaining") or [])
-        out.append(_cond(f"halt:{halt.get('halted_at')}", "attend", f"payment halt at {halt.get('provider')}: {left} task(s) left", "top up, then compose resume"))
+        out.append(_cond(f"halt:{halt.get('halted_at')}", "attend", f"payment halt at {halt.get('provider')}" + (f": {left} task(s) left" if left else ""),
+                         "top up, then compose resume"))
     verify = proj / "results" / "verify.json"
     if (ver := _json_file(verify)) is not None and ver.get("passed") is True and fc_tasks.push_stance(proj) == "ask":
         layers = proj / "layers.json"

@@ -486,8 +486,10 @@ def cmd_resume(a):
         done = {t["id"] for t in fc_tasks.load_tasks(proj, required=True) if fc_tasks.task_finished(proj, t, redo, since_of(m["started_at"]))}
         state = {"command": "run", "remaining": [t for t in m["tasks"] if t not in done], "args": m["args"], "halted_at": m["started_at"], "provider": "interrupted run"}
         (proj / "results" / "run.json").unlink(missing_ok=True)
-    else:
-        state = json.loads(path.read_text())
+    else:  # the halt names this resume while it runs, so it waits on no one; a resume that dies leaves a dead pid and the halt waits again
+        state, st = {**json.loads(path.read_text()), "resuming": os.getpid()}, path.stat()
+        fc_core.atomic_write(path, json.dumps(state, indent=2))
+        os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))  # still the halt's own time: the night reads a newer file as a new halt
     fc_core.say(f"resume {state['command']}  halted {state['halted_at']} at {state['provider']}")
     ns = argparse.Namespace(repo=str(repo), project=proj.name, force=getattr(a, "force", False), **state["args"])
     if state["command"] == "run":

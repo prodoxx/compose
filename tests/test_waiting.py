@@ -164,6 +164,21 @@ class Conditions(unittest.TestCase):
         self.assertEqual(fc_waiting.sync(self.proj), [])
         self.assertEqual(self.stored()[0]["closed_by"], "settled")
 
+    def test_a_halt_waits_on_no_one_while_its_resume_runs_and_again_once_the_resume_died(self):
+        resume = self.proj / "results" / "resume.json"
+        halt = {"halted_at": "2026-11-17 10:00:00", "provider": "openrouter", "remaining": ["003"]}
+        resume.write_text(json.dumps({**halt, "resuming": os.getpid()}))
+        self.assertEqual(fc_waiting.sync(self.proj), [])
+        resume.write_text(json.dumps({**halt, "resuming": 999999}))  # the resume died: the file stays, with a dead pid
+        with mock.patch("fc_tasks.pid_alive", return_value=False):
+            [item] = fc_waiting.sync(self.proj)
+        self.assertEqual(item["key"], "halt:2026-11-17 10:00:00")
+
+    def test_a_halt_with_no_task_left_names_no_count(self):
+        (self.proj / "results" / "resume.json").write_text(json.dumps({"halted_at": "t", "provider": "openrouter", "remaining": []}))
+        [item] = fc_waiting.sync(self.proj)
+        self.assertEqual(item["line"], "payment halt at openrouter")
+
     def test_a_passed_verify_that_waits_for_the_push_is_a_go_item(self):
         self.verify(passed=True, head="abc")
         [item] = fc_waiting.sync(self.proj)
