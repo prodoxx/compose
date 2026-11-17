@@ -137,12 +137,13 @@ def _last_line(path):
     return data
 
 def _reaches_manager(crew, name, lead):
-    """True when the team lead wrote this status file, or its crew record says it reports to the manager (a record that is missing or unreadable names nobody)."""
+    """True when the team lead wrote this status file, or its crew record says it reports to the manager (a record that is not there names
+    nobody). Raises OSError or ValueError when the record exists and cannot be read or parsed."""
     if name == lead:
         return True
     try:
         record = json.loads((crew / f"{name}.json").read_text())
-    except (OSError, ValueError):
+    except FileNotFoundError:
         return False
     return isinstance(record, dict) and record.get("reports_to") == "manager"
 

@@ -223,6 +223,14 @@ class Conditions(unittest.TestCase):
         self.assertEqual(len(fc_waiting.sync(self.proj)), 1)
         self.assertEqual(len(self.stored()), 1)
 
+    def test_a_crew_record_that_cannot_be_read_closes_nothing(self):
+        self.record("hw-planner", "manager")
+        self.report("hw-planner", "blocked", "no Linear key")
+        self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj)], ["W1"])
+        (self.crew / "hw-planner.json").write_text("{")
+        self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj)], ["W1"])
+        self.assertIsNone(self.stored()[0]["closed"])
+
     def test_a_source_that_cannot_be_read_closes_nothing(self):
         self.report(self.lead, "needs-user", "which database?")
         self.assertEqual(len(fc_waiting.sync(self.proj)), 1)
