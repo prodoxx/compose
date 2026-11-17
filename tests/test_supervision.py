@@ -1270,11 +1270,20 @@ class OwnerDigest(unittest.TestCase):
     def test_the_digest_is_one_honest_line(self):
         rows = [{"id": "001", "state": "merged"}, {"id": "002", "state": "failed"}, {"id": "003", "state": "pending"}]
         (self.proj / "results" / "verify.json").write_text(json.dumps({"passed": False, "rounds": [{"checks": [{"exit": 1}], "e2e": []}]}))
+        (self.proj / "results" / "crew" / "hw-planner.json").write_text(json.dumps({"name": "hw-planner", "reports_to": "manager"}))
         (self.proj / "results" / "crew" / "hw-planner.status").write_text(json.dumps({"state": "needs-user", "message": "which database?"}) + "\n")
         with mock.patch.object(fc.fc_status, "board", return_value={"rows": rows}):
             line = fc.fc_status.digest(self.proj, self.proj)
         self.assertNotIn("\n", line)
-        self.assertRegex(line, r"^hw: 1/3 tasks done, failed 002; no run; verify FAIL at \d\d:\d\d \(checks 1/1 failed\); hw-planner asks: which database\?$")
+        self.assertRegex(line, r"^hw: 1/3 tasks done, failed 002; no run; verify FAIL at \d\d:\d\d \(checks 1/1 failed\); waits on you: W1 which database\?$")
+
+    def test_a_teammates_ask_to_its_lead_is_not_in_the_digest(self):
+        (self.proj / "results" / "crew" / "hw-planner.json").write_text(json.dumps({"name": "hw-planner", "reports_to": "hw-orchestrator"}))
+        (self.proj / "results" / "crew" / "hw-planner.status").write_text(json.dumps({"state": "needs-user", "message": "which database?"}) + "\n")
+        with mock.patch.object(fc.fc_status, "board", return_value={"rows": []}):
+            line = fc.fc_status.digest(self.proj, self.proj)
+        self.assertNotIn("database", line)
+        self.assertNotIn("waits on you", line)
 
     def test_status_digest_prints_one_line_per_project_and_nothing_else(self):
         out = []

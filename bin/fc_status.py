@@ -1,6 +1,6 @@
 import json, os, sys, time
 from pathlib import Path
-import fc_cost, fc_core, fc_load, fc_tasks, fc_worktree, fc_layers, fc_blockers, fc_budget, fc_change, fc_linear, fc_ledger, fc_tierpin, fc_tierspend, fc_update, fc_routecost, fc_shed, fc_history, fc_herdr, fc_fleet, fc_manager, fc_crew
+import fc_cost, fc_core, fc_load, fc_tasks, fc_worktree, fc_layers, fc_blockers, fc_budget, fc_change, fc_linear, fc_ledger, fc_tierpin, fc_tierspend, fc_update, fc_routecost, fc_shed, fc_history, fc_herdr, fc_fleet, fc_manager, fc_crew, fc_waiting
 
 
 def project_head(repo, proj):
@@ -166,13 +166,10 @@ def digest(repo, proj):
             pass
     if (proj / "results" / "resume.json").exists():
         out.append("HALTED on payment")
-    for f in sorted((proj / "results" / "crew").glob("*.status")) if (proj / "results" / "crew").exists() else []:
-        try:
-            last = json.loads(f.read_text().strip().splitlines()[-1])
-        except (OSError, IndexError, json.JSONDecodeError):
-            continue
-        if last.get("state") == "needs-user":
-            out.append(f"{f.stem} asks: {last.get('message', '')[:100]}")
+    items = fc_waiting.sync(proj)
+    out += [f"waits on you: {i['id']} {i['line'][:100]}" for i in items if i["stops"]]
+    if more := sum(1 for i in items if not i["stops"]):
+        out.append(f"{more} more waiting")
     return "; ".join(out)
 
 def load_lines():

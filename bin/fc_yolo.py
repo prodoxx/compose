@@ -1,6 +1,6 @@
 import json, os, sys, time
 from pathlib import Path
-import fc_cost, fc_core, fc_tasks, fc_worktree, fc_decide, fc_watch
+import fc_cost, fc_core, fc_tasks, fc_worktree, fc_decide, fc_watch, fc_waiting
 
 
 # ---------- `away` and `yolo`: the product owner is away; the engineering manager answers with the recommendation and logs it ----------
@@ -15,14 +15,11 @@ def digest_sections(repo, proj, y):
     snap = fc_watch.watch_snapshot(repo, proj)
     changed = lambda tid: (f := proj / "results" / f"{tid}.json").exists() and f.stat().st_mtime >= since
     tasks = {tid: t for tid, t in snap["tasks"].items() if changed(tid)}
-    waiting = [f"{n}: {r[-1]['state']}  {r[-1]['message']}" for n, r in snap["crew"].items()
-               if r and r[-1]["state"] in ("needs-user", "blocked") and fc_core.report_time(r[-1]["at"]) >= since]
-    if snap["halt"]:
-        waiting.append(f"payment halt at {snap['halt'][1]} ({snap['halt'][2]} task(s) left): top up, then `compose resume`")
+    waiting = [f"{i['id']} {i['kind']}: {i['line']}" for i in fc_waiting.sync(proj)]
     verify = snap["verify"] if snap["verify"] and snap["verify"][0] >= since else None
-    if verify and not verify[1]:
-        waiting.append("verify FAIL: read results/verify.json")
     failed = [f"{tid} {t['title']}  {t['state']}" for tid, t in tasks.items() if t["state"] == "failed" or t["state"].startswith(("rejected_", "exhausted"))]
+    if verify and not verify[1]:
+        failed.insert(0, "verify FAIL: read results/verify.json")
     done = [f"{tid} {t['title']}  {t['state']}" for tid, t in tasks.items() if t["state"] in ("passed", "already_green", "merged")]
     if verify and verify[1]:
         done.append("verify PASS")

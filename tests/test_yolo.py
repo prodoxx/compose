@@ -111,12 +111,18 @@ class Yolo(unittest.TestCase):
         self.yolo("decided", "provider?: Stripe")
         for tid in ("001", "002", "003"):
             (self.proj / "results" / f"{tid}.json").write_text("{}")
-        crew = {ORCH: [{"at": "2025-12-31 10:00:00", "state": "needs-user", "message": "before yolo"},
-                       {"at": stamp(), "state": "needs-user", "message": "delete prod data?"}],
-                "hw-q": [{"at": stamp(), "state": "blocked", "message": "answered later"},
-                         {"at": stamp(), "state": "working", "message": "going again"}]}
-        s = snap(tasks={"001": "passed", "002": "failed", "003": "rejected_size"}, crew=crew,
-                 verify=[int(time.time()), False], halt=["2026-01-01 10:00:00", "openrouter", 2])
+        crew = self.proj / "results" / "crew"
+        crew.mkdir()
+        (crew / "hw-q.json").write_text(json.dumps({"name": "hw-q", "reports_to": "manager"}))
+        reports = {ORCH: [{"at": "2025-12-31 10:00:00", "state": "needs-user", "message": "before yolo"},
+                          {"at": stamp(), "state": "needs-user", "message": "delete prod data?"}],
+                   "hw-q": [{"at": stamp(), "state": "blocked", "message": "answered later"},
+                            {"at": stamp(), "state": "working", "message": "going again"}]}
+        for name, rows in reports.items():
+            (crew / f"{name}.status").write_text("".join(json.dumps(r) + "\n" for r in rows))
+        (self.proj / "results" / "resume.json").write_text(json.dumps({"halted_at": "2026-01-01 10:00:00", "provider": "openrouter", "remaining": ["002", "003"]}))
+        (self.proj / "results" / "verify.json").write_text(json.dumps({"passed": False}))
+        s = snap(tasks={"001": "passed", "002": "failed", "003": "rejected_size"}, verify=[int(time.time()), False])
         out = self.yolo("off", snapshot=s)
         heads = ["Your instructions", "Decided for you", "To confirm", "Waiting on you", "Tried and failed", "Done", "Cost"]
         pos = [out.index(h) for h in heads]
@@ -131,8 +137,8 @@ class Yolo(unittest.TestCase):
         self.assertNotIn("before yolo", waiting)
         self.assertNotIn("answered later", waiting)
         self.assertIn("openrouter", waiting)
-        self.assertIn("verify FAIL", waiting)
         failed = sec("Tried and failed")
+        self.assertIn("verify FAIL", failed)
         self.assertIn("002", failed)
         self.assertIn("003", failed)
         self.assertNotIn("001", failed)
