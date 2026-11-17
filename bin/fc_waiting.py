@@ -3,6 +3,7 @@
 results/waiting.lock. Imports only lower modules."""
 
 import fcntl, json, re, sys, time
+from pathlib import Path
 from contextlib import contextmanager
 
 import fc_core, fc_tasks, fc_herdr, fc_fleet, fc_ask
@@ -222,3 +223,105 @@ def sync(proj, events=()):
             return open_items(proj)
         except Exception:  # noqa: BLE001
             return []
+
+
+# ---------- reading across projects, and the two commands ----------
+
+def _scope(repo, project=None):
+    """[(slug, project dir)] the commands read: the one project named, else every project of the repo except those whose manager record
+    names a session other than this one (outside a terminal host, with no session id, all of them). An unknown project exits naming the known ones."""
+    projects = fc_core.all_projects(Path(repo))
+    if project:
+        if project not in projects:
+            sys.exit(f"no project {project!r}; known: {sorted(projects)}")
+        return [(project, projects[project][1])]
+    mine = fc_core.session_id()
+    return [(slug, p) for slug, (_, p) in sorted(projects.items()) if not (mine and (theirs := fc_fleet.manager_record(p).get("session")) and theirs != mine)]
+
+def gather(repo, project=None):
+    """The open items of every project in scope (see _scope), each synced first and given "project": <slug>, in open_items order."""
+    items = [{**i, "project": slug} for slug, p in _scope(repo, project) for i in sync(p)]
+    return sorted(items, key=_order)
+
+def _age(item):
+    """How long the item has waited, as `5m`, `2h 10m` or `3d` ("?" when its opened stamp cannot be read)."""
+    try:
+        minutes = max(0, int((time.time() - fc_core.report_time(item["opened"])) // 60))
+    except (KeyError, TypeError, ValueError):
+        return "?"
+    if minutes < 60:
+        return f"{minutes}m"
+    return f"{minutes // 60}h {minutes % 60}m" if minutes < 24 * 60 else f"{minutes // (24 * 60)}d"
+
+def _recommended(item, gap=" "):
+    """The item's line followed, after `gap`, by its recommendation in brackets when it has one."""
+    return item["line"] + (f"{gap}(recommendation: {item['recommendation']})" if item.get("recommendation") else "")
+
+def listing(items, cap=7):
+    """One line per item (`W3  hw  answer  12m  <line>  (recommendation: <rec>)`, ` [seen]` when seen); more than `cap` lines: the first cap - 1
+    and a count line (`cap=None` prints all); no item: one line saying so."""
+    if not items:
+        return ["nothing waits on you"]
+    lines = [f"{i['id']}  {i['project']}  {i['kind']}  {_age(i)}  {_recommended(i, '  ')}" + (" [seen]" if i.get("seen") else "") for i in items]
+    if cap is not None and len(lines) > cap:
+        return lines[:cap - 1] + [f"+{len(lines) - cap + 1} more: compose waiting --all"]
+    return lines
+
+def footer(items):
+    """What a session's footer says: [] unless an item is both unseen and stopping work; else `Waiting on you:`, the unseen stoppers
+    (all of them when there are at most three and nothing else is open, else the first two) and a count line for the rest."""
+    stoppers = [i for i in items if i.get("stops") and not i.get("seen")]
+    if not stoppers:
+        return []
+    shown = stoppers if len(stoppers) <= 3 and len(items) == len(stoppers) else stoppers[:2]
+    lines = ["Waiting on you:"] + [f"- {i['id']} {i['project']}: {_recommended(i)}" for i in shown]
+    return lines + ([f"+{len(items) - len(shown)} more: compose waiting"] if len(items) > len(shown) else [])
+
+def _locate(a, wid, command):
+    """(project dir, open item) for the id, in the project --project names, else the one project in scope where it is open. Exits when it is open
+    nowhere, or in several (naming a `<command> --project <slug> <id>` for each)."""
+    wid = wid.upper()
+    found = [i for i in gather(a.repo, a.project) if i["id"] == wid]
+    if not found:
+        sys.exit(f"no open item {wid}; compose waiting lists them")
+    if len(found) > 1:
+        sys.exit(f"{wid} is open in {len(found)} projects; say which: " + "; ".join(f"{command} --project {i['project']} {wid}" for i in found))
+    return dict(_scope(a.repo, found[0]["project"]))[found[0]["project"]], found[0]
+
+def _reporter_pane(proj, key):
+    """The pane of the teammate a `report:<name>:<at>` item came from, from results/crew/<name>.json; None when the key is another kind, or the
+    record or its pane is missing or unreadable."""
+    if not str(key).startswith("report:"):
+        return None
+    try:
+        record = json.loads((proj / "results" / "crew" / f"{key.split(':', 2)[1]}.json").read_text())
+    except (OSError, ValueError):
+        return None
+    return record.get("pane") if isinstance(record, dict) else None
+
+def cmd_ack(a):
+    """Mark an item seen: it stays on the list until it is closed; a report's pane stops showing `blocked`."""
+    proj, item = _locate(a, a.id, "compose ack")
+    mark_seen(proj, item["id"])
+    if pane := _reporter_pane(proj, item["key"]):
+        fc_fleet.pane_label(pane, state_labels={"blocked": "seen"})
+    print(f"seen {item['id']} ({item['project']}): {item['line']}; it stays on the list until it is closed")
+
+def cmd_waiting(a):
+    """Print what waits on the product owner (at most seven lines; --all prints every item, --footer the session footer), or close a go item
+    with `no W<n> --quote "<their words>"`."""
+    if a.words:
+        if len(a.words) != 2 or a.words[0] != "no":
+            sys.exit('usage: compose waiting [--all | --footer] | compose waiting no W<n> --quote "<what the product owner said>"')
+        if not (a.quote or "").strip():
+            sys.exit('no needs the product owner\'s words: compose waiting no W<n> --quote "<what they said>"')
+        proj, item = _locate(a, a.words[1], "compose waiting no")
+        if item["kind"] != "go":
+            sys.exit(f"{item['id']} is a {item['kind']} item; only a go can be answered with no")
+        close_item(proj, item["key"], f"no: {a.quote.strip()}")
+        print(f'closed {item["id"]} ({item["project"]}): the product owner said no: "{a.quote.strip()}"')
+        return
+    items = gather(a.repo, a.project)
+    lines = footer(items) if a.footer else listing(items, None if a.all else 7)
+    if lines:
+        print("\n".join(lines))

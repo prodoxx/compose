@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import contextlib, importlib.machinery, importlib.util, io, json, os, sys, tempfile, time, unittest
+import argparse, contextlib, importlib.machinery, importlib.util, io, json, os, sys, tempfile, time, unittest
 from pathlib import Path
 from unittest import mock
 os.environ["HERDR_ENV"] = ""
@@ -244,6 +244,158 @@ class Conditions(unittest.TestCase):
         self.assertIsNone(self.stored()[0]["closed"])
         self.assertEqual(len(err.getvalue().splitlines()), 1)
         self.assertTrue(err.getvalue().startswith("waiting list not updated ("))
+
+
+class Commands(unittest.TestCase):
+    """`compose waiting` reads every project of the repo (or this session's), `compose ack` marks one seen, `compose waiting no` closes a go."""
+    def setUp(self):
+        root = Path(tempfile.mkdtemp())
+        self.hw, self.shop = root / "hw", root / "shop"
+        for p in (self.hw, self.shop):
+            (p / "results" / "crew").mkdir(parents=True)
+        self.projects = {"hw": (root, self.hw), "shop": (root, self.shop)}
+        self.records = {}
+        for target, new in (("fc_core.all_projects", mock.Mock(side_effect=lambda repo: dict(self.projects))),
+                            ("fc_fleet.manager_record", mock.Mock(side_effect=lambda proj: self.records.get(Path(proj).name, {}))),
+                            ("fc_fleet.pane_label", mock.Mock())):
+            patch = mock.patch.object(fc.__dict__[target.split(".")[0]], target.split(".")[1], new)
+            self.addCleanup(patch.stop)
+            setattr(self, target.split(".")[1], patch.start())
+        env = mock.patch.dict(os.environ, {"HERDR_PANE_ID": "", "HC_TERMINAL_ID": "", "REX_BLOCK": "", "COMPOSE_NO_HERDR": ""})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def args(self, **kw):
+        base = dict(repo=".", project=None, words=[], footer=False, all=False, quote=None, id=None)
+        return argparse.Namespace(**{**base, **kw})
+
+    def run_cmd(self, fn, **kw):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            fn(self.args(**kw))
+        return out.getvalue().splitlines()
+
+    def open(self, proj, kind, key, line="a line", rec=""):
+        return fc_waiting.open_item(proj, kind, key, line, rec)
+
+    def test_the_list_is_at_most_seven_lines(self):
+        for n in range(9):
+            self.open(self.hw, "confirm", f"decision:NEB-1:D{n}", f"D{n}: a thing")
+        items = fc_waiting.gather(".")
+        self.assertEqual(len(items), 9)
+        lines = fc_waiting.listing(items)
+        self.assertEqual(len(lines), 7)
+        self.assertEqual(lines[-1], "+3 more: compose waiting --all")
+        self.assertEqual(len(fc_waiting.listing(items, cap=None)), 9)
+        self.assertEqual(fc_waiting.listing([]), ["nothing waits on you"])
+        self.assertEqual(self.run_cmd(fc.fc_waiting.cmd_waiting)[-1], "+3 more: compose waiting --all")
+        self.assertEqual(len(self.run_cmd(fc.fc_waiting.cmd_waiting, all=True)), 9)
+
+    def test_a_line_names_the_item_its_age_and_its_recommendation(self):
+        item = self.open(self.hw, "answer", "k1", "which database?", "SQLite")
+        self.open(self.shop, "confirm", "k2", "D1: a thing")
+        fc_waiting.mark_seen(self.shop, "W1")
+        now = time.time()
+        for age, text in ((0, "0m"), (5 * 60, "5m"), (2 * 3600 + 10 * 60, "2h 10m"), (3 * 86400 + 3600, "3d")):
+            item["opened"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now - age))
+            with mock.patch("time.time", return_value=now):
+                self.assertEqual(fc_waiting.listing([{**item, "project": "hw"}])[0], f"W1  hw  answer  {text}  which database?  (recommendation: SQLite)")
+        seen = fc_waiting.gather(".")
+        self.assertEqual([i["project"] for i in seen], ["hw", "shop"])  # the stopper first
+        self.assertTrue(fc_waiting.listing(seen)[1].endswith("D1: a thing [seen]"))
+        self.assertNotIn("recommendation", fc_waiting.listing(seen)[1])
+
+    def test_the_footer_is_at_most_four_lines_and_only_unseen_stoppers(self):
+        for n in range(5):
+            self.open(self.hw, "answer", f"k{n}", f"question {n}", "yes")
+        for n in range(2):
+            self.open(self.shop, "confirm", f"d{n}", f"D{n}: a thing")
+        foot = fc_waiting.footer(fc_waiting.gather("."))
+        self.assertEqual(foot, ["Waiting on you:", "- W1 hw: question 0 (recommendation: yes)", "- W2 hw: question 1 (recommendation: yes)", "+5 more: compose waiting"])
+        self.assertEqual(self.run_cmd(fc.fc_waiting.cmd_waiting, footer=True), foot)
+        alone = Path(tempfile.mkdtemp()) / "solo"
+        self.projects = {"solo": (alone.parent, alone)}
+        for n in range(3):
+            self.open(alone, "go", f"g{n}", f"go {n}")
+        three = fc_waiting.footer(fc_waiting.gather("."))
+        self.assertEqual(three, ["Waiting on you:", "- W1 solo: go 0", "- W2 solo: go 1", "- W3 solo: go 2"])
+        for n in range(1, 4):
+            fc_waiting.mark_seen(alone, f"W{n}")
+        self.assertEqual(fc_waiting.footer(fc_waiting.gather(".")), [])
+        self.assertEqual(self.run_cmd(fc.fc_waiting.cmd_waiting, footer=True), [])
+
+    def test_only_this_sessions_projects_are_gathered(self):
+        self.open(self.hw, "confirm", "a", "in hw")
+        self.open(self.shop, "confirm", "b", "in shop")
+        self.records = {"hw": {"session": "w1:p1"}, "shop": {"session": "w9:p9"}}
+        with mock.patch.dict(os.environ, {"HERDR_PANE_ID": "w1:p1"}):
+            self.assertEqual([i["project"] for i in fc_waiting.gather(".")], ["hw"])
+            self.assertEqual([i["project"] for i in fc_waiting.gather(".", project="shop")], ["shop"])
+        self.assertEqual(sorted(i["project"] for i in fc_waiting.gather(".")), ["hw", "shop"])
+        self.records = {"hw": {"session": "w1:p1"}}  # shop has no record
+        with mock.patch.dict(os.environ, {"HERDR_PANE_ID": "w1:p1"}):
+            self.assertEqual(sorted(i["project"] for i in fc_waiting.gather(".")), ["hw", "shop"])
+        with self.assertRaises(SystemExit) as e:
+            fc_waiting.gather(".", project="nope")
+        self.assertIn("hw", str(e.exception))
+        self.assertIn("shop", str(e.exception))
+
+    def test_ack_marks_seen_and_relabels_the_reporters_pane(self):
+        crew = self.hw / "results" / "crew"
+        (crew / "hw-planner.status").write_text(json.dumps({"at": "2026-11-17 10:00:00", "state": "needs-user", "message": "which database?"}) + "\n")
+        (crew / "hw-planner.json").write_text(json.dumps({"name": "hw-planner", "reports_to": "manager", "pane": "p7"}))
+        self.open(self.shop, "confirm", "d1", "D1: a thing")  # shop's W1 is not the report
+        with mock.patch.object(fc_waiting.fc_tasks, "push_stance", return_value="ask"):
+            out = self.run_cmd(fc.fc_waiting.cmd_ack, id="W1", project="hw")
+            self.assertEqual(out, ["seen W1 (hw): which database?; it stays on the list until it is closed"])
+            self.pane_label.assert_called_once_with("p7", state_labels={"blocked": "seen"})
+            self.assertTrue(fc_waiting.open_items(self.hw)[0]["seen"])
+            (crew / "hw-planner.json").write_text(json.dumps({"name": "hw-planner", "reports_to": "manager"}))  # no pane: no relabel, no error
+            self.pane_label.reset_mock()
+            self.run_cmd(fc.fc_waiting.cmd_ack, id="W1", project="hw")
+            self.pane_label.assert_not_called()
+        with self.assertRaises(SystemExit) as e:
+            self.run_cmd(fc.fc_waiting.cmd_ack, id="W9")
+        self.assertEqual(str(e.exception), "no open item W9; compose waiting lists them")
+
+    def test_ack_refuses_an_id_two_projects_share(self):
+        self.open(self.hw, "confirm", "a", "in hw")
+        self.open(self.shop, "confirm", "b", "in shop")
+        with self.assertRaises(SystemExit) as e:
+            self.run_cmd(fc.fc_waiting.cmd_ack, id="W1")
+        self.assertIn("compose ack --project hw W1", str(e.exception))
+        self.assertIn("compose ack --project shop W1", str(e.exception))
+        self.assertIsNone(fc_waiting.open_items(self.hw)[0]["seen"])
+        self.run_cmd(fc.fc_waiting.cmd_ack, id="W1", project="shop")
+        self.assertTrue(fc_waiting.open_items(self.shop)[0]["seen"])
+
+    def test_no_closes_a_go_item_with_their_words_and_refuses_other_kinds(self):
+        for p in (self.hw, self.shop):  # a passed verify that waits for the push is a go item
+            (p / "results" / "verify.json").write_text(json.dumps({"passed": True, "head": 1}))
+        stance = mock.patch.object(fc_waiting.fc_tasks, "push_stance", return_value="ask")
+        stance.start()
+        self.addCleanup(stance.stop)
+        self.open(self.hw, "confirm", "d1", "D1: a thing")  # W1 in hw
+        fc_waiting.gather(".")  # the go items open: W1 in shop, W2 in hw
+        with self.assertRaises(SystemExit) as e:  # no words
+            self.run_cmd(fc.fc_waiting.cmd_waiting, words=["no", "W2"], project="hw")
+        self.assertIn("--quote", str(e.exception))
+        with self.assertRaises(SystemExit) as e:  # W1 of hw is a confirm, not a go
+            self.run_cmd(fc.fc_waiting.cmd_waiting, words=["no", "W1"], project="hw", quote="not that")
+        self.assertIn("W1 is a confirm item", str(e.exception))
+        with self.assertRaises(SystemExit) as e:  # unknown
+            self.run_cmd(fc.fc_waiting.cmd_waiting, words=["no", "W9"], project="hw", quote="not that")
+        self.assertEqual(str(e.exception), "no open item W9; compose waiting lists them")
+        with self.assertRaises(SystemExit) as e:  # W1 is open in both projects
+            self.run_cmd(fc.fc_waiting.cmd_waiting, words=["no", "W1"], quote="not yet")
+        self.assertIn("compose waiting no --project hw W1", str(e.exception))
+        self.assertIn("compose waiting no --project shop W1", str(e.exception))
+        self.assertEqual(len(fc_waiting.open_items(self.hw)), 2)
+        out = self.run_cmd(fc.fc_waiting.cmd_waiting, words=["no", "W2"], project="hw", quote="not yet")
+        self.assertEqual(out, ['closed W2 (hw): the product owner said no: "not yet"'])
+        closed = json.loads((self.hw / "results" / "waiting.json").read_text())["items"][1]
+        self.assertEqual((closed["closed_by"], bool(closed["closed"])), ("no: not yet", True))
+        self.assertEqual([i["id"] for i in fc_waiting.gather(".", project="hw")], ["W1"])  # the same verify does not ask again
 
 
 if __name__ == "__main__":
