@@ -397,7 +397,9 @@ def footer(items):
     if not stoppers:
         return []
     shown = stoppers if len(stoppers) <= 3 and len(items) == len(stoppers) else stoppers[:2]
-    short = lambda i: {**i, "recommendation": "" if i["kind"] == "answer" else _cut(i.get("recommendation") or "", 60)}  # an ask is asked open (0b)
+    short = lambda i: {**i, "recommendation": "" if i["kind"] == "answer"  # an ask is asked open (0b)
+                       else _cut(i.get("recommendation") or "", 60) if str(i["key"]).startswith("report:")  # a report's words are cut
+                       else i.get("recommendation") or ""}  # a command the CLI wrote (the go's, the halt's) never is
     lines = ["Waiting on you:"] + [f"- {i['id']} {i['project']}: {_recommended(short(i))}" for i in shown]
     return lines + ([f"+{len(items) - len(shown)} more: compose waiting"] if len(items) > len(shown) else [])
 

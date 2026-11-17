@@ -451,11 +451,21 @@ class Commands(unittest.TestCase):
     def test_the_footer_keeps_a_go_or_attend_recommendation_short_and_leaves_an_asks_out(self):
         self.open(self.hw, "answer", "k1", "which database?", "SQLite, since hosting hangs on it")
         self.open(self.hw, "go", "k2", "the stack waits for your go", "compose stack --submit --project hw")
-        self.open(self.hw, "attend", "k3", "payment halt at openrouter", "top up at the provider's page, then run compose resume for the project")
-        self.assertEqual(fc_waiting.footer(fc_waiting.gather(".")), ["Waiting on you:", "- W1 hw: which database?",
-                                                                     "- W2 hw: the stack waits for your go (recommendation: compose stack --submit --project hw)",
-                                                                     "- W3 hw: payment halt at openrouter (recommendation: top up at the provider's page, then run compose resume fo...)"])
+        self.open(self.hw, "attend", "report:hw-planner:t", "no Linear key", "top up at the provider's page, then run compose resume for the project")
+        items = [{**i, "project": "hw"} for i in fc_waiting.open_items(self.hw)]
+        self.assertEqual(fc_waiting.footer(items), ["Waiting on you:", "- W1 hw: which database?",
+                                                    "- W2 hw: the stack waits for your go (recommendation: compose stack --submit --project hw)",
+                                                    "- W3 hw: no Linear key (recommendation: top up at the provider's page, then run compose resume fo...)"])
         self.assertIn("(recommendation: SQLite, since hosting hangs on it)", fc_waiting.listing(fc_waiting.gather("."))[0])  # the manager's own view keeps it
+
+    def test_the_footer_never_cuts_a_command_the_cli_wrote(self):
+        slug = "a-project-slug-well-over-twenty-seven"
+        go = f"compose stack --submit --project {slug}"
+        self.open(self.hw, "go", "go:abc", "the stack waits for your go", go)
+        self.open(self.hw, "attend", "report:hw-orchestrator:t", "no Linear key", "add the key to the config, then report again from the team lead pane")
+        foot = fc_waiting.footer([{**i, "project": "hw"} for i in fc_waiting.open_items(self.hw)])  # as opened, before a sync reads the files
+        self.assertIn(f"- W1 hw: the stack waits for your go (recommendation: {go})", foot)
+        self.assertIn("- W2 hw: no Linear key (recommendation: add the key to the config, then report again from the tea...)", foot)
 
     def test_the_footer_is_at_most_four_lines_and_only_unseen_stoppers(self):
         for n in range(5):
