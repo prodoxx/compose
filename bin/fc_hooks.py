@@ -237,8 +237,8 @@ def return_note(ev, now=None):
             return None
         ago = f"{int(gap // 3600)}h {int(gap % 3600 // 60)}m" if gap >= 3600 else f"{int(gap // 60)}m"
         return (f"The product owner's previous prompt was {ago} ago" + (f", and your context compacted {compacted} time(s) since" if compacted else "")
-                + ". Open with what happened while they were away and what waits on them, in a few lines from your handoff, `compose status` and "
-                "`compose decisions`; then answer this prompt.")
+                + ". Open with what happened while they were away and what waits on them, in a few lines from your handoff, `compose status`, "
+                "`compose waiting` and `compose decisions`; then answer this prompt.")
     except Exception:
         return None
 

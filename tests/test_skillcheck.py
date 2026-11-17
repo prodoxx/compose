@@ -96,7 +96,8 @@ class SkillCheck(unittest.TestCase):
     def test_the_owners_prompt_after_a_while_away_opens_with_what_happened(self):
         note = self.context(self.back(self.transcript(self.owner("earlier", "2026-01-01T10:00:00.000Z"), self.owner("back", "2026-01-01T13:30:00.000Z"))))
         self.assertIn("The product owner's previous prompt was ", note)
-        self.assertIn("Open with what happened while they were away and what waits on them", note)
+        self.assertIn("Open with what happened while they were away and what waits on them, in a few lines from your handoff, `compose status`, "
+                      "`compose waiting` and `compose decisions`; then answer this prompt.", note)
         self.assertNotIn("compacted", note)  # the prompt being submitted, already in the transcript, is not the previous one
 
     def test_a_compaction_since_their_last_prompt_is_said_even_when_it_was_a_moment_ago(self):
@@ -168,7 +169,7 @@ class SkillCheck(unittest.TestCase):
         with mock.patch.object(fc.fc_waiting, "gather", return_value=self.unseen()):
             note = self.context(self.prompt("new", "/compose", role=None))
         self.assertIn("Waiting on you:", note)
-        self.assertFalse((self.state / "new.json").exists() is False)  # loading the skill still records the version it read
+        self.assertTrue((self.state / "new.json").exists())  # loading the skill still records the version it read
 
     def test_loading_the_skill_with_the_skill_tool_prints_nothing(self):
         with mock.patch.object(fc.fc_waiting, "gather", return_value=self.unseen()):
