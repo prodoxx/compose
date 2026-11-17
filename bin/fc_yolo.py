@@ -9,13 +9,22 @@ YOLO_NEVER = ("destructive, irreversible, and security-sensitive actions are nev
               "merging a toolsmith fix into compose itself, force-push, `clean --delete-unmerged`, `clean --delete-remote`, `clean --abandon`, `crew stop --force`, "
               "attended prompts (Frame0 Allow, sign-ins), and anything the product owner's CLAUDE.md forbids. These still stop and wait.")
 YOLO_TAG = fc_decide.UNCONFIRMED  # what the map's Decisions so far shows after a decision taken for the product owner
+
+def waiting_lines(items, decisions):
+    """The digest's "Waiting on you": every item that stops work, and the confirm items "Decided for you" does not already list (a line a
+    posture decision's text starts with, the cut `...` left off), each with its recommendation unless it is an answer (asked open)."""
+    texts = [" ".join(str(d.get("text", "")).split()) for d in decisions]
+    shown = lambda line: any(t.startswith(line[:-3] if line.endswith("...") and len(line) == fc_waiting.LINE_MAX else line) for t in texts)
+    keep = [i for i in items if i.get("stops") or (i["kind"] == "confirm" and not shown(i["line"]))]
+    return [f"{i['id']} {i['kind']}: {i['line']}" + (f" ({i['recommendation']})" if i.get("recommendation") and i["kind"] != "answer" else "") for i in keep]
+
 def digest_sections(repo, proj, y):
     """What the product owner reads on return, rendered only from disk: their words, the decisions, what waits, what failed, what is done, cost."""
     since = fc_core.report_time(y["since"])
     snap = fc_watch.watch_snapshot(repo, proj)
     changed = lambda tid: (f := proj / "results" / f"{tid}.json").exists() and f.stat().st_mtime >= since
     tasks = {tid: t for tid, t in snap["tasks"].items() if changed(tid)}
-    waiting = [f"{i['id']} {i['kind']}: {i['line']}" for i in fc_waiting.sync(proj)]
+    waiting = waiting_lines(fc_waiting.sync(proj), y.get("decisions") or [])
     verify = snap["verify"] if snap["verify"] and snap["verify"][0] >= since else None
     failed = [f"{tid} {t['title']}  {t['state']}" for tid, t in tasks.items() if t["state"] == "failed" or t["state"].startswith(("rejected_", "exhausted"))]
     if verify and not verify[1]:
