@@ -61,6 +61,17 @@ class Store(unittest.TestCase):
         self.assertIsNone(items["W2"]["closed"])
         self.assertEqual(fc_waiting.answered(self.proj, ["Q1", "Q2"]), [])
 
+    def test_an_ask_of_no_known_issue_loses_only_the_ids_a_decide_settled(self):
+        fc_waiting.open_item(self.proj, "answer", "report:a:t1", "which ones? 2 questions Q1, Q2", ids=["Q1", "Q2"], issue=None)
+        fc_waiting.open_item(self.proj, "answer", "report:b:t2", "NEB-1: 2 questions Q1, Q2", ids=["Q1", "Q2"], issue="NEB-1")
+        self.assertEqual(fc_waiting.answered(self.proj, ["Q1"], "NEB-9", still_open={"Q7"}), [])  # an unrelated map
+        items = {i["key"]: i for i in fc_waiting.load(self.proj)["items"]}
+        self.assertEqual((items["report:a:t1"]["ids"], items["report:a:t1"]["closed"]), (["Q2"], None))
+        self.assertEqual(items["report:b:t2"]["ids"], ["Q1", "Q2"])
+        self.assertEqual(fc_waiting.answered(self.proj, [], "NEB-1", still_open={"Q2"}), [])  # the sweep reaches only that map's own asks
+        items = {i["key"]: i for i in fc_waiting.load(self.proj)["items"]}
+        self.assertEqual((items["report:a:t1"]["ids"], items["report:b:t2"]["ids"]), (["Q2"], ["Q2"]))
+
     def test_an_unreadable_file_reads_as_empty_and_the_next_write_replaces_it(self):
         self.file.parent.mkdir(parents=True)
         self.file.write_text("{")

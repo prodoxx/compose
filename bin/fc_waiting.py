@@ -115,7 +115,8 @@ def open_items(proj):
 
 def answered(proj, ids, issue=None, still_open=None):
     """Take `ids` off every open answer item of `issue` (and every one whose issue is not known), and with `still_open` (the ids still under
-    Not yet specified on that issue's map) every id that is not among them; an item that had ids and has none left is closed as `decided`.
+    Not yet specified on that issue's map) every id of an ask of that issue that is not among them (an ask whose issue is not known loses only
+    `ids`); an item that had ids and has none left is closed as `decided`.
     Returns the ids of the items closed."""
     gone, closed, changed = {str(i) for i in ids}, [], False
     with _locked(proj):
@@ -124,7 +125,8 @@ def answered(proj, ids, issue=None, still_open=None):
             have = item.get("ids")
             if item.get("kind") != "answer" or not _is_open(item) or not have or item.get("issue") not in (issue, None):
                 continue
-            keep = [i for i in have if i not in gone and (still_open is None or i in still_open)]
+            sweep = still_open is not None and issue is not None and item.get("issue") == issue  # never an ask whose map is not known
+            keep = [i for i in have if i not in gone and (not sweep or i in still_open)]
             if keep == have:
                 continue
             item["ids"], changed = keep, True

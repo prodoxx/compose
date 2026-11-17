@@ -333,6 +333,10 @@ def cmd_decide(a):
     except Exception as e:  # noqa: BLE001  a waiting-list failure never stops a decision
         print(f"waiting list not updated ({e})")
     cleared = clear_elsewhere(proj, ident, [i for i in qs if i in answered or i in accepted])
+    try:  # an ask about another map that held these questions closes with them
+        closed_items += [w for other, ids in cleared for w in fc_waiting.answered(proj, ids, other)]
+    except Exception as e:  # noqa: BLE001  a waiting-list failure never stops a decision
+        print(f"waiting list not updated ({e})")
     if posture and not quote:
         posture["decisions"] += [{"ts": time.strftime("%Y-%m-%d %H:%M:%S"), "text": l} for l in lines]
         fc_core.atomic_write(proj / "results" / "yolo.json", json.dumps(posture, indent=2))

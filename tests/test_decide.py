@@ -166,6 +166,37 @@ class Decide(unittest.TestCase):
         self.assertEqual(maps["NEB-3"], other)
         self.assertIn("cleared Q1 from Not yet specified on NEB-1", out)
 
+    def maps_on_linear(self, maps):
+        """Linear with one map per issue: NEB-1 the feature, the others its stories."""
+        def gql(query, variables):
+            if "issueUpdate" in query:
+                maps[variables["id"]] = variables["in"]["description"]
+                return {"issueUpdate": {"success": True}}
+            if "children" in query:
+                kids = [{"identifier": i, "description": maps[i], "state": {"name": "Todo"}} for i in maps if i != "NEB-1"]
+                return {"issue": {"children": {"nodes": kids, "pageInfo": {"hasNextPage": False, "endCursor": None}}}}
+            i = variables["id"]
+            return {"issue": {"id": i, "identifier": i, "description": maps[i]}}
+        self.linear.gql = gql
+
+    def test_an_ask_on_a_story_closes_when_the_feature_decides_its_question(self):
+        maps = {"NEB-1": MAP, "NEB-12": MAP}
+        self.maps_on_linear(maps)
+        fc.fc_waiting.open_item(self.proj, "answer", "report:shop-orchestrator:t1", "NEB-12: 1 question Q1", ids=["Q1"], issue="NEB-12")
+        out = self.decide(new=["Clerk"], closes=["Q1"], quote="clerk")
+        self.assertIn("cleared Q1 from Not yet specified on NEB-12", out)
+        self.assertIn("closed W1 on the waiting list", out)
+        self.assertEqual(fc.fc_waiting.load(self.proj)["items"][0]["closed_by"], "decided")
+
+    def test_a_decide_on_the_asks_own_map_closes_only_the_ids_that_map_no_longer_holds_open(self):
+        maps = {"NEB-1": MAP, "NEB-12": MAP}
+        self.maps_on_linear(maps)
+        fc.fc_waiting.open_item(self.proj, "answer", "report:shop-orchestrator:t1", "NEB-12: 2 questions Q1, Q2", ids=["Q1", "Q2"], issue="NEB-12")
+        out = self.decide(new=["Clerk"], closes=["Q1"], quote="clerk", issue="NEB-12")
+        item = fc.fc_waiting.load(self.proj)["items"][0]
+        self.assertEqual((item["closed_by"], item["ids"]), (None, ["Q2"]))
+        self.assertNotIn("on the waiting list", out)
+
     def test_closing_a_question_that_is_not_open_refuses_naming_the_open_ones(self):
         self.refuses("Q7 is not an open question on NEB-1; the open ones are Q1, Q2", new=["x"], closes=["Q7"], quote="x")
 
