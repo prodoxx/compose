@@ -41,6 +41,12 @@ class Docs(unittest.TestCase):
         for f in ("sections/0f.md", "sections/0k.md", "commands/planner.md", "commands/designer.md"):
             self.assertNotRegex((ROOT / f).read_text(), r"start (that project's |a )?`compose watch", f)
 
+    def test_the_manager_ends_on_the_waiting_footer(self):
+        text = (ROOT / "sections" / "0h.md").read_text()
+        self.assertIn("end your message with those lines unchanged", text)
+        self.assertIn("compose ack", text)
+        self.assertNotIn("per-task table, `verify` stage lines", (ROOT / "SKILL.md").read_text())
+
 
 if __name__ == "__main__":
     unittest.main()
