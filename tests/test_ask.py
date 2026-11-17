@@ -250,6 +250,17 @@ class Ask(unittest.TestCase):
             self.report("NEB-1: 1 questions Q1; recommendation a")
         self.assertEqual(len(self.sent()), 1)
 
+    def test_a_long_ask_to_the_manager_is_refused_and_says_how_to_shorten_it(self):
+        long = "x" * 301
+        with self.assertRaises(SystemExit) as refused:
+            fc.fc_ask.ask_gate(self.proj, long, hop="manager")
+        self.assertEqual(refused.exception.code, "not reported: a needs-user line to the engineering manager is at most 300 characters (this one is 301, links not counted): "
+                         "say the question and your recommendation in one line, and put the detail on the issue or the page.")
+        self.assertEqual(fc.fc_ask.ask_gate(self.proj, long, hop="orchestrator"), long)
+        linked = f"{'x' * 290} {self.good}"
+        with mock.patch.object(fc.fc_ask, "url_problem", return_value=""):
+            self.assertIn(self.good, fc.fc_ask.ask_gate(self.proj, linked, hop="manager"))
+
 
 if __name__ == "__main__":
     unittest.main()

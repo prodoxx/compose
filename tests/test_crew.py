@@ -538,6 +538,9 @@ class Crew(unittest.TestCase):
                 fc.fc_crew.cmd_report(type("A", (), {"as_": who, "state": "working", "message": msg.split()}))
             self.assertEqual(any("parallel:" in str(c) for c in out.call_args_list[:-1]), warned, (who, msg))
 
+    def test_the_preamble_names_the_limit(self):
+        self.assertIn("<the question, with your recommendation, in 300 characters or less>", fc.fc_crew.crew_preamble(self.proj, "shop-architect", "architect"))
+
     def test_the_team_lead_is_told_where_its_handoff_lives_and_what_goes_in_it(self):
         lead = fc.fc_crew.crew_preamble(self.proj, "shop-orchestrator", "orchestrator")
         self.assertIn(str(self.proj / "scratch" / "shop-orchestrator" / "handoff.md"), lead)

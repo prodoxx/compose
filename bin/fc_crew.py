@@ -99,7 +99,7 @@ def crew_preamble(proj, name, title, reports_to=None, workdir=None):
     lead_checkout = f"The project worktree {fc_herdr.project_worktree(proj)} is the team lead's: never edit, switch branches in, or commit there; it is only the `--repo` of the `compose report` commands above. " if workdir else ""
     return (f"You are {name}, teammate on compose project {proj.name} ({title}), in your own herdr tab. You report to {up}.\n"
             f"Report every change that matters, one line each; never stop without one:\n"
-            f"- `{report} needs-user \"<the question, with your recommendation>\"` when you wait for the product owner\n"
+            f"- `{report} needs-user \"<the question, with your recommendation, in 300 characters or less>\"` when you wait for the product owner\n"
             f"- `{report} blocked \"<what stops you>\"`, `{report} working \"<milestone>\"`, and `{report} done \"<outcome, with Linear ids>\"` last\n"
             f"`done` means nothing left for you: your tab closes after that turn. Work awaiting review is `working`.\n"
             f"{parallel_rule}{handoff}"
