@@ -151,10 +151,11 @@ class SkillCheck(unittest.TestCase):
 
     def test_the_managers_prompt_carries_the_footer(self):
         self.prompt(text="/compose", role=None)  # the skill was seen
-        with mock.patch.object(fc.fc_waiting, "gather", return_value=self.unseen()):
+        with mock.patch.object(fc.fc_waiting, "gather", return_value=self.unseen()) as gather:
             note = self.context(self.prompt(role=None))
         self.assertIn("Waiting on you:", note)
         self.assertIn("- W1 hw:", note)
+        self.assertIs(gather.call_args.kwargs["probe"], False)  # a prompt never asks the terminal host
 
     def test_a_teammate_never_gets_the_footer(self):
         self.prompt(text="/compose", role="crew")

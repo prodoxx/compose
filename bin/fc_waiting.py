@@ -191,8 +191,8 @@ def conditions(proj):
             out.append(_cond(f"go:{head}", "go", "the verified stack waits for your go to push it as draft PRs", f"compose stack --submit --project {proj.name}"))
     return out
 
-def _sync(proj, events):
-    """Bring the list up to date and return the open items; lets a failure through."""
+def _sync(proj, events, probe=True):
+    """Bring the list up to date and return the open items; lets a failure through. Without `probe` the terminal host is never asked."""
     wanted = conditions(proj)  # first: a source that cannot be read changes nothing
     for c in wanted:
         if not any(i["key"] == c["key"] and (_is_open(i) or i.get("closed_by") != "settled") for i in load(proj)["items"]):
@@ -204,19 +204,20 @@ def _sync(proj, events):
     for item in [i for i in load(proj)["items"] if _is_open(i)]:
         if str(item["key"]).startswith(("report:", "halt:", "go:")) and item["key"] not in keys:
             close_item(proj, item["key"], "settled")
-    for item in [i for i in load(proj)["items"] if _is_open(i) and str(i["key"]).startswith("agent:")]:
+    for item in [i for i in load(proj)["items"] if probe and _is_open(i) and str(i["key"]).startswith("agent:")]:
         if fc_fleet.agent_status(item["key"][len("agent:"):]) != "blocked":
             close_item(proj, item["key"], "settled")
     return open_items(proj)
 
-def sync(proj, events=()):
+def sync(proj, events=(), probe=True):
     """Bring the list up to date from the files and the watch's events, and return the open items. Opens each condition not already open
     (one closed as `settled` may open again; one closed by a no or by `decided` stays closed), closes the `report:`, `halt:` and `go:` items that
-    are no longer a condition and the `agent:` items whose agent is no longer blocked. A decision or review item is never touched. A failure
+    are no longer a condition and the `agent:` items whose agent is no longer blocked (`probe=False` never asks the terminal host: an `agent:` item is
+    left as it is). A decision or review item is never touched. A failure
     changes nothing more and returns the open items it can read, else [] (a waiting-list failure never stops a watch); it says why on
     stderr in one line (stdout stays clean: a hook's stdout is parsed as JSON)."""
     try:
-        return _sync(proj, events)
+        return _sync(proj, events, probe)
     except Exception as e:  # noqa: BLE001
         print(f"waiting list not updated ({e})", file=sys.stderr)
         try:
@@ -238,9 +239,9 @@ def _scope(repo, project=None):
     mine = fc_core.session_id()
     return [(slug, p) for slug, (_, p) in sorted(projects.items()) if not (mine and (theirs := fc_fleet.manager_record(p).get("session")) and theirs != mine)]
 
-def gather(repo, project=None):
-    """The open items of every project in scope (see _scope), each synced first and given "project": <slug>, in open_items order."""
-    items = [{**i, "project": slug} for slug, p in _scope(repo, project) for i in sync(p)]
+def gather(repo, project=None, probe=True):
+    """The open items of every project in scope (see _scope), each synced first (`probe` as for sync) and given "project": <slug>, in open_items order."""
+    items = [{**i, "project": slug} for slug, p in _scope(repo, project) for i in sync(p, probe=probe)]
     return sorted(items, key=_order)
 
 def _age(item):

@@ -209,6 +209,14 @@ class Conditions(unittest.TestCase):
         with mock.patch("fc_fleet.agent_status", return_value="working"):
             self.assertEqual(fc_waiting.sync(self.proj), [])
 
+    def test_a_sync_that_does_not_probe_leaves_an_agent_item_alone(self):
+        with mock.patch("fc_fleet.agent_status", return_value="blocked"):
+            fc_waiting.sync(self.proj, ["event agent=hw-003 status=blocked waits-at='sign-in'"])
+        with mock.patch("fc_fleet.agent_status", side_effect=AssertionError("host asked")):
+            self.assertEqual([i["key"] for i in fc_waiting.sync(self.proj, probe=False)], ["agent:hw-003"])
+        with mock.patch("fc_fleet.agent_status", return_value="working"):
+            self.assertEqual(fc_waiting.sync(self.proj), [])
+
     def test_the_host_is_asked_only_when_an_agent_item_is_open(self):
         self.report(self.lead, "needs-user", "which?")
         with mock.patch("fc_fleet.agent_status", side_effect=AssertionError("asked the host")):

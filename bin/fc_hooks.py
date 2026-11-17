@@ -244,11 +244,11 @@ def return_note(ev, now=None):
 
 def waiting_note(ev):
     """For the engineering manager's session (one without COMPOSE_ROLE): the note that hands it the waiting footer to end its message to the
-    product owner with, unchanged; None for a teammate, when nothing unseen stops work, and on any failure."""
+    product owner with, unchanged (read without asking the terminal host: a prompt never waits on it); None for a teammate, when nothing unseen stops work, and on any failure."""
     try:
         if os.environ.get("COMPOSE_ROLE"):
             return None
-        lines = fc_waiting.footer(fc_waiting.gather(ev.get("cwd") or os.getcwd()))
+        lines = fc_waiting.footer(fc_waiting.gather(ev.get("cwd") or os.getcwd(), probe=False))
         return ("These wait on the product owner. End your message to them with these lines, unchanged, and do not put the asks in your own words again:\n"
                 + "\n".join(lines)) if lines else None
     except Exception:  # noqa: BLE001 - the waiting list never stops a hook
