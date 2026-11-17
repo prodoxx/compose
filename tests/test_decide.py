@@ -560,6 +560,27 @@ class Decide(unittest.TestCase):
         self.assertIn("waiting list not updated (disk)", out)
         self.assertIn("recorded on NEB-1: D5: Clerk", out)
 
+    def test_a_damaged_waiting_list_of_any_kind_does_not_stop_the_decision(self):
+        with mock.patch.object(fc.fc_waiting, "answered", side_effect=TypeError("ids")):
+            out = self.decide(new=["Clerk"], closes=["Q1"], quote="clerk")
+        self.assertIn("- D5: Clerk (closes Q1)", self.linear.body)
+        self.assertIn("waiting list not updated (ids)", out)
+        self.assertIn("recorded on NEB-1: D5: Clerk", out)
+
+    def test_an_accepted_question_that_replaces_a_line_closes_that_lines_item(self):
+        self.change_map()
+        self.fc_waiting.open_item(self.proj, "confirm", "decision:NEB-1:D4", "D4: one store")
+        self.decide(accept_all=True, quote="all as you say")
+        (item,) = self.fc_waiting.load(self.proj)["items"]
+        self.assertEqual((item["key"], item["closed_by"]), ("decision:NEB-1:D4", "replaced"))
+
+    def test_an_old_card_answer_that_strikes_a_line_closes_that_lines_item(self):
+        self.linear.body = OLD_CARDS.replace("## Out of scope", self.OLD_CHANGE_CARD)
+        self.fc_waiting.open_item(self.proj, "confirm", "decision:NEB-1:Q0", "Q0: Stripe")
+        self.decide("C1-2: B", quote="paddle", change="C1")
+        (item,) = self.fc_waiting.load(self.proj)["items"]
+        self.assertEqual(item["closed_by"], "replaced")
+
     def refuses(self, want, *a, **kw):
         before = self.linear.body
         with self.assertRaises(SystemExit) as e:

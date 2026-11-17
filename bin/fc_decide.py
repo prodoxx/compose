@@ -202,6 +202,10 @@ def replace_decision(body, old_id, note):
             dec[i] = f"- ~~{old}~~ ({note})"
     return fc_plan.replace_section(body, heading_line(body, DECIDED), "\n".join(dec))
 
+def live_ids(body):
+    """The ids of the Decisions so far lines that are not struck through."""
+    return {m.group(1).split(":")[0] for m in map(fc_change.LIST_ITEM.match, fc_change.map_section(body, DECIDED).splitlines()) if m and "~~" not in m.group(1)}
+
 def record_new(body, items, tag):
     """The map with one `- D<n>: <text> (closes <ids>) <tag>` line appended under Decisions so far per (text, closed ids), and the closed
     questions gone from Not yet specified; <n> runs on from the highest D id the section holds, struck lines included. Returns (body, the lines written)."""
@@ -321,9 +325,9 @@ def cmd_decide(a):
         for cid, ans in answers:
             if quote and ans is None:
                 fc_waiting.close_item(proj, f"decision:{ident}:{cid}", "confirmed")
-        if replaces:
-            fc_waiting.close_item(proj, f"decision:{ident}:{replaces}", "replaced")
-    except (OSError, ValueError) as e:
+        for rid in sorted(live_ids(body) - live_ids(new_body)):  # a line struck through, by --replaces, an accepted change of course or an old card
+            fc_waiting.close_item(proj, f"decision:{ident}:{rid}", "replaced")
+    except Exception as e:  # noqa: BLE001  a waiting-list failure never stops a decision
         print(f"waiting list not updated ({e})")
     cleared = clear_elsewhere(proj, ident, [i for i in qs if i in answered or i in accepted])
     if posture and not quote:
