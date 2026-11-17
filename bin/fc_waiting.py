@@ -2,7 +2,7 @@
 (one open item per key), may be seen, and is closed by what settled it; its id is never reused. Every write holds a lock on
 results/waiting.lock. Imports only lower modules."""
 
-import fcntl, json, re, sys, time
+import ast, fcntl, json, re, sys, time
 from pathlib import Path
 from contextlib import contextmanager
 
@@ -57,17 +57,24 @@ def _is_open(item):
     """True when the item has not been closed."""
     return not item.get("closed")
 
-def open_item(proj, kind, key, line, recommendation="", ids=()):
+def _new(data, kind, key, line, recommendation="", ids=(), issue=None):
+    """Append a new open item with the next id (W<n>) to the loaded store and return it; an answer item keeps the issue its questions are on."""
+    item = {"id": f"W{data['next']}", "key": key, "kind": kind, "line": _one_line(line), "recommendation": _one_line(recommendation),
+            "ids": [str(i) for i in ids], "stops": kind in STOPS, "opened": _stamp(), "seen": None, "closed": None, "closed_by": None}
+    if kind == "answer":
+        item["issue"] = issue
+    data["items"].append(item)
+    data["next"] += 1
+    return item
+
+def open_item(proj, kind, key, line, recommendation="", ids=(), issue=None):
     """The open item with that key when one exists, else a new open item with the next id (W<n>)."""
     with _locked(proj):
         data = load(proj)
         for item in data["items"]:
             if item["key"] == key and _is_open(item):
                 return item
-        item = {"id": f"W{data['next']}", "key": key, "kind": kind, "line": _one_line(line), "recommendation": _one_line(recommendation),
-                "ids": [str(i) for i in ids], "stops": kind in STOPS, "opened": _stamp(), "seen": None, "closed": None, "closed_by": None}
-        data["items"].append(item)
-        data["next"] += 1
+        item = _new(data, kind, key, line, recommendation, ids, issue)
         _save(proj, data)
         return item
 
@@ -102,17 +109,21 @@ def open_items(proj):
     """The open items, the ones that stop work first, then the oldest opened, then the lowest id."""
     return sorted((i for i in load(proj)["items"] if _is_open(i)), key=_order)
 
-def answered(proj, ids):
-    """Take `ids` off every open answer item; an item that had ids and has none left is closed as `decided`.
+def answered(proj, ids, issue=None, still_open=None):
+    """Take `ids` off every open answer item of `issue` (and every one whose issue is not known), and with `still_open` (the ids still under
+    Not yet specified on that issue's map) every id that is not among them; an item that had ids and has none left is closed as `decided`.
     Returns the ids of the items closed."""
     gone, closed, changed = {str(i) for i in ids}, [], False
     with _locked(proj):
         data = load(proj)
         for item in data["items"]:
             have = item.get("ids")
-            if item.get("kind") != "answer" or not _is_open(item) or not have or not gone.intersection(have):
+            if item.get("kind") != "answer" or not _is_open(item) or not have or item.get("issue") not in (issue, None):
                 continue
-            item["ids"], changed = [i for i in have if i not in gone], True
+            keep = [i for i in have if i not in gone and (still_open is None or i in still_open)]
+            if keep == have:
+                continue
+            item["ids"], changed = keep, True
             if not item["ids"]:
                 item["closed"], item["closed_by"] = _stamp(), "decided"
                 closed.append(item["id"])
@@ -121,11 +132,13 @@ def answered(proj, ids):
     return closed
 
 RECOMMENDATION = re.compile(r"\s*[;,.]?\s*\brecommendation:?\s+", re.I)
-BLOCKED_EVENT = re.compile(r"\bagent=(\S+)\s+status=blocked\b")
+PY_STR = r"""('(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")"""  # a Python string literal, as the watch writes a message with !r
+BLOCKED_EVENT = re.compile(rf"\bagent=(\S+)\s+status=blocked\b(?:\s+waits-at={PY_STR})?")
+ASK_EVENT = re.compile(rf"\bevent crew=(\S+) state=needs-user message={PY_STR}")
 
-def _cond(key, kind, line, recommendation="", ids=()):
+def _cond(key, kind, line, recommendation="", ids=(), issue=None):
     """One thing that waits, as `conditions` returns it."""
-    return {"key": key, "kind": kind, "line": line, "recommendation": recommendation, "ids": list(ids)}
+    return {"key": key, "kind": kind, "line": line, "recommendation": recommendation, "ids": list(ids), "issue": issue}
 
 def _last_line(path):
     """The last non-empty line of a file parsed as JSON (an object); None when the file has none. Raises OSError or ValueError when it cannot be read or parsed."""
@@ -137,33 +150,87 @@ def _last_line(path):
         raise ValueError(f"{path}: the last line is not an object")
     return data
 
-def _reaches_manager(crew, name, lead):
-    """True when the team lead wrote this status file, or its crew record says it reports to the manager (a record that is not there names
-    nobody). Raises OSError or ValueError when the record exists and cannot be read or parsed."""
-    if name == lead:
-        return True
+def _crew_record(proj, name):
+    """The teammate's crew record (results/crew/<name>.json); None when there is none (it reports to nobody). Raises ValueError when the
+    record exists and cannot be read, or is not an object."""
     try:
-        record = json.loads((crew / f"{name}.json").read_text())
+        record = json.loads((proj / "results" / "crew" / f"{name}.json").read_text())
     except FileNotFoundError:
-        return False
-    return isinstance(record, dict) and record.get("reports_to") == "manager"
+        return None
+    except (OSError, ValueError) as e:
+        raise ValueError(f"crew record {name}: {e}") from e
+    if not isinstance(record, dict):
+        raise ValueError(f"crew record {name}: not an object")
+    return record
+
+def _issue(proj, message):
+    """The issue an ask is about: the id at the head of its message, else the project's feature (linear.json), else None."""
+    if head := fc_ask.ASK_HEAD.match(message):
+        return head[2]
+    try:
+        meta = json.loads((proj / "linear.json").read_text())
+    except (OSError, ValueError):
+        return None
+    return (meta.get("feature") or None) if isinstance(meta, dict) else None
+
+def _report(proj, name, at, state, message):
+    """The condition one report makes: an answer for a needs-user, an attend for a blocked, when the team lead wrote it or its crew record says
+    it reports to the manager; None otherwise, and for a closed teammate's report that names no question id (no act would close it).
+    Raises ValueError when the crew record exists and cannot be read."""
+    if state not in ("needs-user", "blocked"):
+        return None
+    record = _crew_record(proj, name) or {}
+    if name != fc_herdr.agent_name(proj.name, "orchestrator") and record.get("reports_to") != "manager":
+        return None
+    message = str(message or "")
+    ids = fc_ask.question_ids(message) if state == "needs-user" else []
+    if record.get("closed") and not ids:
+        return None
+    parts = RECOMMENDATION.split(message, maxsplit=1)
+    line, recommendation = (parts[0], parts[1]) if len(parts) == 2 else (message, "")
+    if state == "blocked":
+        return _cond(f"report:{name}:{at or ''}", "attend", line, recommendation)
+    return _cond(f"report:{name}:{at or ''}", "answer", line, recommendation, ids, _issue(proj, message))
 
 def _report_conditions(proj):
     """The answer and attend conditions: the newest report of each teammate that reaches the product owner, when it is a needs-user or a blocked."""
-    crew, lead, out = proj / "results" / "crew", fc_herdr.agent_name(proj.name, "orchestrator"), []
-    for f in sorted(crew.glob("*.status")):
-        name = f.name[:-len(".status")]
-        if not _reaches_manager(crew, name, lead):
+    out = []
+    for f in sorted((proj / "results" / "crew").glob("*.status")):
+        last = _last_line(f) or {}
+        if c := _report(proj, f.name[:-len(".status")], last.get("at"), last.get("state"), last.get("message")):
+            out.append(c)
+    return out
+
+def _asked_at(proj, name, message):
+    """The `at` of the reporter's newest needs-user status line that holds this message; None when there is none (a line that does not
+    parse is passed over: the event is read whatever the file holds)."""
+    try:
+        lines = (proj / "results" / "crew" / f"{name}.status").read_text().splitlines()
+    except OSError:
+        return None
+    for ln in reversed(lines):
+        try:
+            row = json.loads(ln)
+        except ValueError:
             continue
-        last = _last_line(f)
-        state = (last or {}).get("state")
-        if state not in ("needs-user", "blocked"):
+        if isinstance(row, dict) and row.get("state") == "needs-user" and row.get("message") == message:
+            return row.get("at")
+    return None
+
+def _event_asks(proj, events):
+    """The answer conditions the watch's needs-user events make when their message names question ids, keyed as the status line that
+    holds the message (the time now when none does), so an ask whose reporter reported again since is still seen. An event whose crew
+    record cannot be read is passed over."""
+    out = []
+    for e in events:
+        if not (m := ASK_EVENT.search(e)):
             continue
-        message = str(last.get("message") or "")
-        parts = RECOMMENDATION.split(message, maxsplit=1)
-        line, recommendation = (parts[0], parts[1]) if len(parts) == 2 else (message, "")
-        ids = fc_ask.question_ids(message) if state == "needs-user" else ()
-        out.append(_cond(f"report:{name}:{last.get('at') or ''}", "answer" if state == "needs-user" else "attend", line, recommendation, ids))
+        try:
+            message = ast.literal_eval(m[2])
+            c = _report(proj, m[1], _asked_at(proj, m[1], message) or _stamp(), "needs-user", message) if fc_ask.question_ids(str(message)) else None
+        except (ValueError, SyntaxError):
+            continue
+        out += [c] if c else []
     return out
 
 def _json_file(path):
@@ -192,19 +259,25 @@ def conditions(proj):
             out.append(_cond(f"go:{head}", "go", "the verified stack waits for your go to push it as draft PRs", f"compose stack --submit --project {proj.name}"))
     return out
 
+def _open_wanted(proj, c):
+    """Open the condition unless an item with its key is open, or was closed by anything other than `settled` (a no, a decision, a push)."""
+    if not any(i["key"] == c["key"] and (_is_open(i) or i.get("closed_by") != "settled") for i in load(proj)["items"]):
+        open_item(proj, c["kind"], c["key"], c["line"], c["recommendation"], c["ids"], c["issue"])
+
 def _sync(proj, events, probe=True):
     """Bring the list up to date and return the open items; lets a failure through. Without `probe` the terminal host is never asked."""
-    wanted = conditions(proj)  # first: a source that cannot be read changes nothing
-    for c in wanted:
-        if not any(i["key"] == c["key"] and (_is_open(i) or i.get("closed_by") != "settled") for i in load(proj)["items"]):
-            open_item(proj, c["kind"], c["key"], c["line"], c["recommendation"], c["ids"])
+    for c in _event_asks(proj, events):  # before the files are read: an ask the watch saw is not lost to a file that cannot be read
+        _open_wanted(proj, c)
     for e in events:
         if m := BLOCKED_EVENT.search(e):
             open_item(proj, "attend", f"agent:{m.group(1)}", f"{m.group(1)} waits at a prompt only you can answer (a sign-in or an Allow)")
+    wanted = conditions(proj)  # a source that cannot be read changes nothing more
+    for c in wanted:
+        _open_wanted(proj, c)
     keys = {c["key"] for c in wanted}
     for item in [i for i in load(proj)["items"] if _is_open(i)]:
-        if str(item["key"]).startswith(("report:", "halt:", "go:")) and item["key"] not in keys:
-            close_item(proj, item["key"], "settled")
+        if str(item["key"]).startswith(("report:", "halt:", "go:")) and item["key"] not in keys and not (item["key"].startswith("report:") and item.get("ids")):
+            close_item(proj, item["key"], "settled")  # an ask that names questions closes only by `compose decide` (answered)
     for item in [i for i in load(proj)["items"] if probe and _is_open(i) and str(i["key"]).startswith("agent:")]:
         if fc_fleet.agent_status(item["key"][len("agent:"):]) != "blocked":
             close_item(proj, item["key"], "settled")
@@ -296,10 +369,9 @@ def _reporter_pane(proj, key):
     if not str(key).startswith("report:"):
         return None
     try:
-        record = json.loads((proj / "results" / "crew" / f"{key.split(':', 2)[1]}.json").read_text())
-    except (OSError, ValueError):
+        return (_crew_record(proj, key.split(":", 2)[1]) or {}).get("pane")
+    except ValueError:
         return None
-    return record.get("pane") if isinstance(record, dict) else None
 
 def cmd_ack(a):
     """Mark an item seen: it stays on the list until it is closed and leaves the footer; a report's pane stops showing `blocked`."""

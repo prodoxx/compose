@@ -141,6 +141,61 @@ class Conditions(unittest.TestCase):
         self.assertEqual(fc_waiting.sync(self.proj), [])
         self.assertEqual(self.stored()[0]["closed_by"], "settled")
 
+    def test_an_ask_that_names_questions_stays_until_they_are_decided(self):
+        self.report(self.lead, "needs-user", "NEB-1: 2 questions Q1, Q2")
+        fc_waiting.sync(self.proj)
+        self.report(self.lead, "working", "carrying on", at="2026-11-17 10:05:00")
+        [item] = fc_waiting.sync(self.proj)
+        self.assertEqual((item["id"], item["ids"]), ("W1", ["Q1", "Q2"]))
+        self.assertEqual(fc_waiting.answered(self.proj, ["Q1", "Q2"], "NEB-1"), ["W1"])
+        self.assertEqual(fc_waiting.sync(self.proj), [])
+
+    def test_an_item_closed_by_a_decision_stays_closed_while_its_report_is_still_the_last_line(self):
+        self.report(self.lead, "needs-user", "NEB-1: 1 question Q1")
+        fc_waiting.sync(self.proj)
+        fc_waiting.answered(self.proj, ["Q1"], "NEB-1")
+        self.assertEqual(fc_waiting.sync(self.proj), [])
+        self.assertEqual([(i["id"], i["closed_by"]) for i in self.stored()], [("W1", "decided")])
+
+    def test_an_ask_the_watch_saw_opens_though_the_reporter_reported_again_since(self):
+        self.report(self.lead, "needs-user", "NEB-1: 2 questions Q1, Q2; recommendation: SQLite")
+        self.report(self.lead, "done", "handed over", at="2026-11-17 10:00:05")
+        event = f"event crew={self.lead} state=needs-user message={'NEB-1: 2 questions Q1, Q2; recommendation: SQLite'!r}  yolo=on (answer it)"
+        [item] = fc_waiting.sync(self.proj, [event])
+        self.assertEqual((item["key"], item["ids"], item["line"], item["issue"]), (f"report:{self.lead}:2026-11-17 10:00:00", ["Q1", "Q2"], "NEB-1: 2 questions Q1, Q2", "NEB-1"))
+        self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj, [event])], ["W1"])  # the same ask read again is the same item
+
+    def test_an_ask_the_watch_saw_with_no_status_line_opens_under_the_time_now(self):
+        with mock.patch.object(fc_waiting, "_stamp", return_value="2026-11-17 11:00:00"):
+            [item] = fc_waiting.sync(self.proj, [f"event crew={self.lead} state=needs-user message={'NEB-1: 1 question Q4'!r}"])
+        self.assertEqual(item["key"], f"report:{self.lead}:2026-11-17 11:00:00")
+
+    def test_an_event_ask_that_names_no_question_or_reaches_no_one_opens_nothing(self):
+        self.record("hw-tests-001", "orchestrator")
+        for e in (f"event crew={self.lead} state=needs-user message={'which port?'!r}",
+                  f"event crew=hw-tests-001 state=needs-user message={'NEB-1: 1 question Q1'!r}"):
+            self.assertEqual(fc_waiting.sync(self.proj, [e]), [], e)
+
+    def test_a_closed_teammates_last_ask_waits_only_when_it_names_questions(self):
+        (self.crew / "hw-planner.json").write_text(json.dumps({"name": "hw-planner", "reports_to": "manager", "closed": {"at": "t", "why": "done"}}))
+        self.report("hw-planner", "needs-user", "which database?")
+        self.assertEqual(fc_waiting.sync(self.proj), [])
+        self.report("hw-planner", "needs-user", "NEB-1: 1 question Q1", at="2026-11-17 10:05:00")
+        self.assertEqual([i["ids"] for i in fc_waiting.sync(self.proj)], [["Q1"]])
+
+    def test_a_crew_record_that_is_not_an_object_is_a_read_error(self):
+        self.record("hw-planner", "manager")
+        self.report("hw-planner", "blocked", "no Linear key")
+        fc_waiting.sync(self.proj)
+        (self.crew / "hw-planner.json").write_text("[]")
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj)], ["W1"])
+        self.assertTrue(err.getvalue().startswith("waiting list not updated ("))
+        self.assertIsNone(fc_waiting._reporter_pane(self.proj, "report:hw-planner:t"))
+        with self.assertRaises(ValueError):
+            fc_waiting._crew_record(self.proj, "hw-planner")
+        self.assertIsNone(fc_waiting._crew_record(self.proj, "hw-nobody"))
+
     def test_a_second_ask_is_a_new_unseen_item(self):
         self.report(self.lead, "needs-user", "first?")
         fc_waiting.sync(self.proj)
