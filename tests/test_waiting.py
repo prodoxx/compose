@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import importlib.machinery, importlib.util, json, os, sys, tempfile, time, unittest
+import contextlib, importlib.machinery, importlib.util, io, json, os, sys, tempfile, time, unittest
 from pathlib import Path
 from unittest import mock
 os.environ["HERDR_ENV"] = ""
@@ -116,7 +116,9 @@ class Conditions(unittest.TestCase):
 
     def test_a_needs_user_that_reaches_the_manager_is_an_answer_item(self):
         self.report(self.lead, "needs-user", "NEB-1: 2 questions Q1, Q2; recommendation: SQLite and Clerk")
-        [item] = fc_waiting.sync(self.proj)
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            [item] = fc_waiting.sync(self.proj)
+        self.assertEqual(err.getvalue(), "")
         self.assertEqual((item["kind"], item["line"], item["recommendation"], item["ids"], item["stops"]),
                          ("answer", "NEB-1: 2 questions Q1, Q2", "SQLite and Clerk", ["Q1", "Q2"], True))
         self.assertEqual(item["key"], f"report:{self.lead}:2026-11-17 10:00:00")
@@ -228,7 +230,8 @@ class Conditions(unittest.TestCase):
         self.report("hw-planner", "blocked", "no Linear key")
         self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj)], ["W1"])
         (self.crew / "hw-planner.json").write_text("{")
-        self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj)], ["W1"])
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj)], ["W1"])
         self.assertIsNone(self.stored()[0]["closed"])
 
     def test_a_source_that_cannot_be_read_closes_nothing(self):
@@ -236,8 +239,11 @@ class Conditions(unittest.TestCase):
         self.assertEqual(len(fc_waiting.sync(self.proj)), 1)
         status = self.crew / f"{self.lead}.status"
         status.write_text(status.read_text()[:-30])  # the last line is cut in half
-        self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj)], ["W1"])
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj)], ["W1"])
         self.assertIsNone(self.stored()[0]["closed"])
+        self.assertEqual(len(err.getvalue().splitlines()), 1)
+        self.assertTrue(err.getvalue().startswith("waiting list not updated ("))
 
 
 if __name__ == "__main__":

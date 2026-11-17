@@ -2,7 +2,7 @@
 (one open item per key), may be seen, and is closed by what settled it; its id is never reused. Every write holds a lock on
 results/waiting.lock. Imports only lower modules."""
 
-import fcntl, json, re, time
+import fcntl, json, re, sys, time
 from contextlib import contextmanager
 
 import fc_core, fc_tasks, fc_herdr, fc_fleet, fc_ask
@@ -212,10 +212,12 @@ def sync(proj, events=()):
     """Bring the list up to date from the files and the watch's events, and return the open items. Opens each condition not already open
     (one closed as `settled` may open again; one closed by a no or by `decided` stays closed), closes the `report:`, `halt:` and `go:` items that
     are no longer a condition and the `agent:` items whose agent is no longer blocked. A decision or review item is never touched. A failure
-    changes nothing more and returns the open items it can read, else [] (a waiting-list failure never stops a watch)."""
+    changes nothing more and returns the open items it can read, else [] (a waiting-list failure never stops a watch); it says why on
+    stderr in one line (stdout stays clean: a hook's stdout is parsed as JSON)."""
     try:
         return _sync(proj, events)
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
+        print(f"waiting list not updated ({e})", file=sys.stderr)
         try:
             return open_items(proj)
         except Exception:  # noqa: BLE001
