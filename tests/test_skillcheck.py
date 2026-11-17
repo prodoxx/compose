@@ -156,7 +156,7 @@ class SkillCheck(unittest.TestCase):
             note = self.context(self.prompt(role=None))
         self.assertIn("Waiting on you:", note)
         self.assertIn("- W1 hw:", note)
-        self.assertIn("If you ran `compose decide`, `compose ack`, `compose waiting no`, a push or `compose resume` in this turn, run `compose waiting --footer` "
+        self.assertIn("If you ran `compose decide`, `compose ack`, `compose waiting no`, a push or `compose resume`, or cleared an agent's prompt in this turn, run `compose waiting --footer` "
                       "again and end with what it prints (nothing printed means no footer).", note)  # the lines go stale once the turn closes the item
         self.assertIs(gather.call_args.kwargs["probe"], False)  # a prompt never asks the terminal host
 

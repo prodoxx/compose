@@ -242,7 +242,7 @@ def return_note(ev, now=None):
     except Exception:
         return None
 
-FOOTER_RERUN = ("If you ran `compose decide`, `compose ack`, `compose waiting no`, a push or `compose resume` in this turn, run `compose waiting --footer` "
+FOOTER_RERUN = ("If you ran `compose decide`, `compose ack`, `compose waiting no`, a push or `compose resume`, or cleared an agent's prompt in this turn, run `compose waiting --footer` "
                 "again and end with what it prints (nothing printed means no footer).")  # the lines handed at the turn's start are stale once it closes an item
 
 def waiting_note(ev):
