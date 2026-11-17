@@ -11,6 +11,7 @@ import fc_core, fc_tasks, fc_herdr, fc_fleet, fc_ask
 KINDS = ("answer", "go", "attend", "confirm", "review")
 STOPS = ("answer", "go", "attend")  # the kinds that hold work until the owner acts
 LINE_MAX = 120
+ITEM_KEYS = ("id", "key", "kind", "line", "stops")  # what every reader of an item relies on
 
 def _path(proj):
     """The waiting list file of a project."""
@@ -22,13 +23,13 @@ def _empty():
 
 def load(proj):
     """results/waiting.json as {"next": int, "items": [item]}; the empty store when the file is missing, unreadable or not a store
-    (a dict with an int `next` and a list `items` of dicts that each have `id` and `key`). A read never writes."""
+    (a dict with an int `next` and a list `items` of dicts that each have `id`, `key`, `kind`, `line` and `stops`). A read never writes."""
     try:
         data = json.loads(_path(proj).read_text())
     except (OSError, ValueError):
         return _empty()
     ok = isinstance(data, dict) and type(data.get("next")) is int and isinstance(data.get("items"), list)
-    if not ok or not all(isinstance(i, dict) and "id" in i and "key" in i for i in data["items"]):
+    if not ok or not all(isinstance(i, dict) and all(k in i for k in ITEM_KEYS) for i in data["items"]):
         return _empty()
     return data
 

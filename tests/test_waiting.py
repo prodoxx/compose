@@ -71,7 +71,10 @@ class Store(unittest.TestCase):
 
     def test_a_file_that_is_not_a_store_reads_as_empty(self):
         self.file.parent.mkdir(parents=True)
-        for bad in ('[]', '{"next": "3", "items": []}', '{"next": 3, "items": {}}', '{"next": 3, "items": [1]}', '{"next": 3, "items": [{"id": "W1"}]}'):
+        for bad in ('[]', '{"next": "3", "items": []}', '{"next": 3, "items": {}}', '{"next": 3, "items": [1]}', '{"next": 3, "items": [{"id": "W1"}]}',
+                    '{"next": 3, "items": [{"id": "W1", "key": "k", "line": "l", "stops": true}]}',  # no kind: every reader would crash on it
+                    '{"next": 3, "items": [{"id": "W1", "key": "k", "kind": "go", "stops": true}]}',
+                    '{"next": 3, "items": [{"id": "W1", "key": "k", "kind": "go", "line": "l"}]}'):
             self.file.write_text(bad)
             self.assertEqual(fc_waiting.load(self.proj), {"next": 1, "items": []}, bad)
 
