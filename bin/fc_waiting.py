@@ -287,7 +287,11 @@ def _sync(proj, events, probe=True):
         _open_wanted(proj, c)
     for e in events:
         if m := BLOCKED_EVENT.search(e):
-            open_item(proj, "attend", f"agent:{m.group(1)}", f"{m.group(1)} waits at a prompt only you can answer (a sign-in or an Allow)")
+            try:
+                at = str(ast.literal_eval(m[2])) if m[2] else ""
+            except (ValueError, SyntaxError):
+                at = ""
+            open_item(proj, "attend", f"agent:{m[1]}", f"{m[1]} waits at a prompt" + (f": {at}" if at else ""))
     wanted = conditions(proj)  # a source that cannot be read changes nothing more
     for c in wanted:
         _open_wanted(proj, c)
@@ -295,9 +299,12 @@ def _sync(proj, events, probe=True):
     for item in [i for i in load(proj)["items"] if _is_open(i)]:
         if str(item["key"]).startswith(("report:", "halt:", "go:")) and item["key"] not in keys and not (item["key"].startswith("report:") and item.get("ids")):
             close_item(proj, item["key"], "settled")  # an ask that names questions closes only by `compose decide` (answered)
-    for item in [i for i in load(proj)["items"] if probe and _is_open(i) and str(i["key"]).startswith("agent:")]:
-        if fc_fleet.agent_status(item["key"][len("agent:"):]) != "blocked":
-            close_item(proj, item["key"], "settled")
+    waiting_agents = [i for i in load(proj)["items"] if probe and _is_open(i) and str(i["key"]).startswith("agent:")]
+    if waiting_agents and (listed := fc_fleet.agents()) is not None:  # a host that does not answer closes nothing
+        status = {a.get("name"): a.get("agent_status") for a in listed if isinstance(a, dict)}
+        for item in waiting_agents:
+            if status.get(item["key"][len("agent:"):]) != "blocked":
+                close_item(proj, item["key"], "settled")
     return open_items(proj)
 
 def sync(proj, events=(), probe=True):

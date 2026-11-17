@@ -272,24 +272,48 @@ class Conditions(unittest.TestCase):
         self.verify(passed=True, head="abc")
         self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj)], ["W2"])
 
+    def host(self, **status):
+        """fc_fleet.agents patched to list these agents with these statuses (None: the host did not answer)."""
+        listed = None if status.get("none") else [{"name": n.replace("_", "-"), "agent_status": s} for n, s in status.items()]
+        return mock.patch("fc_fleet.agents", return_value=listed)
+
     def test_an_agent_at_a_prompt_opens_by_its_event_and_closes_when_it_moves(self):
-        with mock.patch("fc_fleet.agent_status", return_value="blocked"):
-            [item] = fc_waiting.sync(self.proj, ["event agent=hw-003 status=blocked waits-at='sign-in'"])
-        self.assertEqual((item["kind"], item["key"], item["line"]), ("attend", "agent:hw-003", "hw-003 waits at a prompt only you can answer (a sign-in or an Allow)"))
-        with mock.patch("fc_fleet.agent_status", return_value="working"):
+        with self.host(hw_003="blocked"):
+            [item] = fc_waiting.sync(self.proj, ["event agent=hw-003 status=blocked waits-at='Allow Frame0 to open?'  (read: compose crew read ...)"])
+        self.assertEqual((item["kind"], item["key"], item["line"]), ("attend", "agent:hw-003", "hw-003 waits at a prompt: Allow Frame0 to open?"))
+        with self.host(hw_003="working"):
             self.assertEqual(fc_waiting.sync(self.proj), [])
 
+    def test_an_agent_event_without_its_dialog_says_only_that_it_waits(self):
+        with self.host(hw_003="blocked"):
+            [item] = fc_waiting.sync(self.proj, ["event agent=hw-003 status=blocked  (read: compose crew read ...)"])
+        self.assertEqual(item["line"], "hw-003 waits at a prompt")
+
+    def test_an_agent_the_host_no_longer_lists_closes_and_a_host_that_does_not_answer_closes_nothing(self):
+        with self.host(hw_003="blocked"):
+            fc_waiting.sync(self.proj, ["event agent=hw-003 status=blocked"])
+        with self.host(none=True):
+            self.assertEqual([i["key"] for i in fc_waiting.sync(self.proj)], ["agent:hw-003"])
+        with self.host(hw_004="blocked"):
+            self.assertEqual(fc_waiting.sync(self.proj), [])
+
+    def test_an_agent_event_opens_its_item_though_a_source_cannot_be_read(self):
+        (self.crew / f"{self.lead}.status").write_text("{")
+        with self.host(hw_003="blocked"), contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual([i["key"] for i in fc_waiting.sync(self.proj, ["event agent=hw-003 status=blocked"])], ["agent:hw-003"])
+        self.assertTrue(err.getvalue().startswith("waiting list not updated ("))
+
     def test_a_sync_that_does_not_probe_leaves_an_agent_item_alone(self):
-        with mock.patch("fc_fleet.agent_status", return_value="blocked"):
+        with self.host(hw_003="blocked"):
             fc_waiting.sync(self.proj, ["event agent=hw-003 status=blocked waits-at='sign-in'"])
-        with mock.patch("fc_fleet.agent_status", side_effect=AssertionError("host asked")):
+        with mock.patch("fc_fleet.agents", side_effect=AssertionError("host asked")), mock.patch("fc_fleet.agent_status", side_effect=AssertionError("host asked")):
             self.assertEqual([i["key"] for i in fc_waiting.sync(self.proj, probe=False)], ["agent:hw-003"])
-        with mock.patch("fc_fleet.agent_status", return_value="working"):
+        with self.host(hw_003="working"):
             self.assertEqual(fc_waiting.sync(self.proj), [])
 
     def test_the_host_is_asked_only_when_an_agent_item_is_open(self):
         self.report(self.lead, "needs-user", "which?")
-        with mock.patch("fc_fleet.agent_status", side_effect=AssertionError("asked the host")):
+        with mock.patch("fc_fleet.agents", side_effect=AssertionError("asked the host")):
             self.assertEqual(len(fc_waiting.sync(self.proj, ["event agent=hw-003 status=working"])), 1)
 
     def test_decisions_and_reviews_are_left_alone(self):
