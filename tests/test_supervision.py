@@ -1277,6 +1277,17 @@ class OwnerDigest(unittest.TestCase):
         self.assertNotIn("\n", line)
         self.assertRegex(line, r"^hw: 1/3 tasks done, failed 002; no run; verify FAIL at \d\d:\d\d \(checks 1/1 failed\); waits on you: W1 which database\?$")
 
+    def test_the_digest_names_a_payment_halt_once(self):
+        halt = {"halted_at": "2026-11-17 10:00:00", "provider": "openrouter", "remaining": ["002", "003"]}
+        (self.proj / "results" / "resume.json").write_text(json.dumps(halt))
+        with mock.patch.object(fc.fc_status, "board", return_value={"rows": []}):
+            line = fc.fc_status.digest(self.proj, self.proj)
+            self.assertTrue(line.endswith("; no run; waits on you: W1 payment halt at openrouter: 2 task(s) left"), line)
+            with mock.patch.object(fc.fc_waiting, "sync", return_value=[]):  # a list that could not be read still shows the halt
+                self.assertTrue(fc.fc_status.digest(self.proj, self.proj).endswith("; no run; HALTED on payment"))
+            (self.proj / "results" / "resume.json").write_text(json.dumps({**halt, "resuming": os.getpid()}))  # its resume runs
+            self.assertEqual(fc.fc_status.digest(self.proj, self.proj), "hw: 0/0 tasks done; no run")
+
     def test_a_teammates_ask_to_its_lead_is_not_in_the_digest(self):
         (self.proj / "results" / "crew" / "hw-planner.json").write_text(json.dumps({"name": "hw-planner", "reports_to": "hw-orchestrator"}))
         (self.proj / "results" / "crew" / "hw-planner.status").write_text(json.dumps({"state": "needs-user", "message": "which database?"}) + "\n")

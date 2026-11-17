@@ -164,9 +164,9 @@ def digest(repo, proj):
             out.append(f"verify PASS at {at}" if vd.get("passed") else f"verify FAIL at {at}" + (f" ({why})" if why else ""))
         except (OSError, json.JSONDecodeError):
             pass
-    if (proj / "results" / "resume.json").exists():
-        out.append("HALTED on payment")
     items = fc_waiting.sync(proj)
+    if (proj / "results" / "resume.json").exists() and not any(str(i["key"]).startswith("halt:") for i in items) and not fc_waiting.resuming(proj):
+        out.append("HALTED on payment")  # once: the halt's item says it when the list could be read
     out += [f"waits on you: {i['id']} {i['line'][:100]}" for i in items if i["stops"]]
     if more := sum(1 for i in items if not i["stops"]):
         out.append(f"{more} more waiting")

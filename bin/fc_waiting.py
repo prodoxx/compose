@@ -276,6 +276,14 @@ def conditions(proj):
         out.append(_cond(go[0], "go", "the verified stack waits for your go to push it as draft PRs", f"compose stack --submit --project {proj.name}"))
     return out
 
+def resuming(proj):
+    """True while a `compose resume` of the project's payment halt runs: the pid it wrote into results/resume.json is alive."""
+    try:
+        halt = json.loads((proj / "results" / "resume.json").read_text())
+    except (OSError, ValueError):
+        return False
+    return isinstance(halt, dict) and fc_tasks.pid_alive(halt.get("resuming"))
+
 def _go(proj):
     """(the go key of the last passed verify, whether its stack was submitted since: layers.json newer than verify.json); None when the last
     verify did not pass. Raises OSError or ValueError when verify.json exists and cannot be read or parsed."""
