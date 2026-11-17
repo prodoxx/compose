@@ -47,6 +47,28 @@ class Show(unittest.TestCase):
         self.assertEqual(fc_show.summary(self.proj, "run", self.proj.parent), f"run 4/4 passed, {fc.fc_core.fmt(600.0)}, $0.05")
         self.assertEqual(self.show("run", line=True), f"run 4/4 passed, {fc.fc_core.fmt(600.0)}, $0.05\n")
 
+    def run_start(self, **fields):
+        fc.fc_history.record(self.proj, self.proj.parent, "run-start", **fields)
+
+    def test_a_run_that_started_after_the_last_run_end_is_running_or_did_not_finish(self):
+        self.run_end(tasks=7, passed=7, seconds=252.0, cost=0.31, outcome="passed")
+        self.run_start(tasks=2)
+        (self.results / "run.json").write_text(json.dumps({"pid": os.getpid(), "started_at": "x"}))
+        self.assertEqual(fc_show.summary(self.proj, "run", self.proj.parent), "run: still running")
+        (self.results / "run.json").write_text(json.dumps({"pid": 999999, "started_at": "x"}))
+        with mock.patch.object(fc.fc_tasks, "pid_alive", return_value=False):
+            self.assertEqual(fc_show.summary(self.proj, "run", self.proj.parent), "run: did not finish")
+        (self.results / "run.json").unlink()
+        self.assertEqual(fc_show.summary(self.proj, "run", self.proj.parent), "run: did not finish")
+        self.run_end(tasks=2, passed=1, seconds=60.0, cost=0.02, outcome="failed")
+        self.assertEqual(fc_show.summary(self.proj, "run", self.proj.parent), f"run 1/2 passed, {fc.fc_core.fmt(60.0)}, $0.02")
+
+    def test_with_no_history_a_log_whose_last_run_has_no_end_did_not_finish(self):
+        (self.results / "run.log").write_text(LAST_RUN + FIRST_RUN.replace("[10:05:00] run done   1/2 passed  wall 5m00.0s  sum of task time 6m00.0s\n", ""))
+        self.assertEqual(fc_show.summary(self.proj, "run"), "run: did not finish")
+        out = self.show("run")
+        self.assertTrue(out.startswith("[10:00:00] run start project=recommender") and out.endswith("run: did not finish\n"), out)
+
     def test_a_run_end_that_misses_a_number_says_it_is_not_recorded(self):
         self.run_end(tasks=7, seconds=12.0, outcome="interrupted")
         self.assertEqual(fc_show.summary(self.proj, "run", self.proj.parent), f"run count not recorded, {fc.fc_core.fmt(12.0)}, cost not recorded")
@@ -98,8 +120,10 @@ class Show(unittest.TestCase):
     def test_nothing_on_record(self):
         self.assertEqual(fc_show.summary(self.proj, "run"), "run: none finished on record")
         self.assertEqual(fc_show.summary(self.proj, "verify"), "verify: none on record")
-        (self.results / "run.log").write_text("[10:00:00] run start project=recommender tasks=1 parallel=20 attempts=3\n")
+        (self.results / "run.log").write_text("[10:00:00] task 001 passed\n")
         self.assertEqual(fc_show.summary(self.proj, "run"), "run: none finished on record")
+        (self.results / "run.log").write_text("[10:00:00] run start project=recommender tasks=1 parallel=20 attempts=3\n")
+        self.assertEqual(fc_show.summary(self.proj, "run"), "run: did not finish")  # a run started and wrote no end
 
     def test_show_run_prints_from_the_last_run_start(self):
         (self.results / "run.log").write_text(FIRST_RUN + LAST_RUN)
