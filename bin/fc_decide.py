@@ -2,7 +2,7 @@
 with the product owner's words attached, as an unconfirmed recommendation while away or yolo is on, or as compose's own ruling
 on an easily reversible decision (`--ruling`), posture or not."""
 import json, re, sys, time
-import fc_core, fc_tasks, fc_linear, fc_linear_cmd, fc_plan, fc_herdr, fc_fleet, fc_change, fc_ask
+import fc_core, fc_tasks, fc_linear, fc_linear_cmd, fc_plan, fc_herdr, fc_fleet, fc_change, fc_ask, fc_waiting
 
 
 # ---------- the map's two decision sections ----------
@@ -313,6 +313,18 @@ def cmd_decide(a):
             by = next(l.split(":")[0] for l in added if f"(closes {cid})" in l)
             new_body = replace_decision(new_body, rid, change or (cid.split("-")[0] if re.fullmatch(r"C\d+-\d+", cid) else f"replaced by {by}"))
     write_map(lid, body, new_body)
+    try:  # the waiting list follows the map; it never stops a decision
+        fc_waiting.answered(proj, sorted(answered | set(accepted)))
+        if not quote:
+            for l in lines:
+                fc_waiting.open_item(proj, "confirm", f"decision:{ident}:{l.split(':')[0]}", TAG.sub("", l))
+        for cid, ans in answers:
+            if quote and ans is None:
+                fc_waiting.close_item(proj, f"decision:{ident}:{cid}", "confirmed")
+        if replaces:
+            fc_waiting.close_item(proj, f"decision:{ident}:{replaces}", "replaced")
+    except (OSError, ValueError) as e:
+        print(f"waiting list not updated ({e})")
     cleared = clear_elsewhere(proj, ident, [i for i in qs if i in answered or i in accepted])
     if posture and not quote:
         posture["decisions"] += [{"ts": time.strftime("%Y-%m-%d %H:%M:%S"), "text": l} for l in lines]

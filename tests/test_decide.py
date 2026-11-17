@@ -514,6 +514,52 @@ class Decide(unittest.TestCase):
     def yolo(self):
         (self.proj / "results" / "yolo.json").write_text(json.dumps({"mode": "yolo", "since": "2026-10-24 08:00:00", "decisions": [], "words": "", "push": False}))
 
+    def waiting(self, kind=None):
+        """The open waiting items of the project, optionally of one kind."""
+        return [i for i in self.fc_waiting.open_items(self.proj) if kind in (None, i["kind"])]
+
+    @property
+    def fc_waiting(self):
+        return fc.fc_waiting
+
+    def test_a_ruling_opens_a_confirm_item(self):
+        self.decide(new=["use SQLite"], closes=["Q2"], ruling=True)
+        (item,) = self.waiting()
+        self.assertEqual((item["kind"], item["stops"], item["key"]), ("confirm", False, "decision:NEB-1:D5"))
+        self.assertTrue(item["line"].startswith("D5: use SQLite"))
+        self.assertNotIn("compose ruling", item["line"])
+
+    def test_a_recommendation_under_away_opens_a_confirm_item_per_line(self):
+        (self.proj / "results" / "yolo.json").write_text(json.dumps({"mode": "away", "decisions": []}))
+        self.decide(accept_all=True)
+        self.assertEqual(sorted(i["key"] for i in self.waiting("confirm")), ["decision:NEB-1:D5", "decision:NEB-1:D6"])
+
+    def test_their_words_on_the_line_close_the_confirm_item(self):
+        self.decide(new=["use SQLite"], closes=["Q2"], ruling=True)
+        self.decide("D5", quote="yes")
+        self.assertEqual(self.waiting("confirm"), [])
+        self.assertEqual([i["closed_by"] for i in self.fc_waiting.load(self.proj)["items"]], ["confirmed"])
+
+    def test_replacing_a_ruling_closes_its_item(self):
+        self.decide(new=["use SQLite"], closes=["Q2"], ruling=True)
+        self.decide(new=["use Postgres"], replaces="D5", ruling=True)
+        items = self.fc_waiting.load(self.proj)["items"]
+        self.assertEqual([(i["key"], i["closed_by"]) for i in items], [("decision:NEB-1:D5", "replaced"), ("decision:NEB-1:D6", None)])
+
+    def test_an_answer_closes_the_ask_that_named_the_question(self):
+        self.fc_waiting.open_item(self.proj, "answer", "report:shop-orchestrator:t1", "NEB-1: 1 question Q1", ids=["Q1"])
+        self.decide(new=["Clerk"], closes=["Q1"], quote="clerk")
+        (item,) = self.fc_waiting.load(self.proj)["items"]
+        self.assertEqual((item["closed_by"], item["ids"]), ("decided", []))
+        self.assertEqual(self.waiting(), [])
+
+    def test_a_waiting_list_that_cannot_be_written_does_not_stop_the_decision(self):
+        with mock.patch.object(fc.fc_waiting, "answered", side_effect=OSError("disk")):
+            out = self.decide(new=["Clerk"], closes=["Q1"], quote="clerk")
+        self.assertIn("- D5: Clerk (closes Q1)", self.linear.body)
+        self.assertIn("waiting list not updated (disk)", out)
+        self.assertIn("recorded on NEB-1: D5: Clerk", out)
+
     def refuses(self, want, *a, **kw):
         before = self.linear.body
         with self.assertRaises(SystemExit) as e:
