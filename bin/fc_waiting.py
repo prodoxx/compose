@@ -301,12 +301,12 @@ def _reporter_pane(proj, key):
     return record.get("pane") if isinstance(record, dict) else None
 
 def cmd_ack(a):
-    """Mark an item seen: it stays on the list until it is closed; a report's pane stops showing `blocked`."""
+    """Mark an item seen: it stays on the list until it is closed and leaves the footer; a report's pane stops showing `blocked`."""
     proj, item = _locate(a, a.id, "compose ack")
     mark_seen(proj, item["id"])
     if pane := _reporter_pane(proj, item["key"]):
         fc_fleet.pane_label(pane, state_labels={"blocked": "seen"})
-    print(f"seen {item['id']} ({item['project']}): {item['line']}; it stays on the list until it is closed")
+    print(f"seen {item['id']} ({item['project']}): {item['line']}; it stays on the list until it is closed, and leaves the footer")
 
 def cmd_waiting(a):
     """Print what waits on the product owner (at most seven lines; --all prints every item, --footer the session footer), or close a go item

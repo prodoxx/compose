@@ -45,6 +45,8 @@ class Docs(unittest.TestCase):
         text = (ROOT / "sections" / "0h.md").read_text()
         self.assertIn("end your message with those lines unchanged", text)
         self.assertIn("compose ack", text)
+        self.assertIn("If you ran `compose decide`, `compose ack`, `compose waiting no`, a push or `compose resume` in this turn, run `compose waiting --footer` "
+                      "again and end with what it prints (nothing printed means no footer).", text)
         self.assertNotIn("per-task table, `verify` stage lines", (ROOT / "SKILL.md").read_text())
 
 

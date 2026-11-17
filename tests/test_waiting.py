@@ -355,7 +355,7 @@ class Commands(unittest.TestCase):
         self.open(self.shop, "confirm", "d1", "D1: a thing")  # shop's W1 is not the report
         with mock.patch.object(fc_waiting.fc_tasks, "push_stance", return_value="ask"):
             out = self.run_cmd(fc.fc_waiting.cmd_ack, id="W1", project="hw")
-            self.assertEqual(out, ["seen W1 (hw): which database?; it stays on the list until it is closed"])
+            self.assertEqual(out, ["seen W1 (hw): which database?; it stays on the list until it is closed, and leaves the footer"])
             self.pane_label.assert_called_once_with("p7", state_labels={"blocked": "seen"})
             self.assertTrue(fc_waiting.open_items(self.hw)[0]["seen"])
             (crew / "hw-planner.json").write_text(json.dumps({"name": "hw-planner", "reports_to": "manager"}))  # no pane: no relabel, no error

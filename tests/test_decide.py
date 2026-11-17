@@ -548,10 +548,11 @@ class Decide(unittest.TestCase):
 
     def test_an_answer_closes_the_ask_that_named_the_question(self):
         self.fc_waiting.open_item(self.proj, "answer", "report:shop-orchestrator:t1", "NEB-1: 1 question Q1", ids=["Q1"])
-        self.decide(new=["Clerk"], closes=["Q1"], quote="clerk")
-        (item,) = self.fc_waiting.load(self.proj)["items"]
+        out = self.decide(new=["Clerk"], closes=["Q1"], quote="clerk")
+        (item,) = [i for i in self.fc_waiting.load(self.proj)["items"] if i["kind"] == "answer"]
         self.assertEqual((item["closed_by"], item["ids"]), ("decided", []))
-        self.assertEqual(self.waiting(), [])
+        self.assertIn("closed W1 on the waiting list\n", out)
+        self.assertEqual(self.waiting("answer"), [])
 
     def test_a_waiting_list_that_cannot_be_written_does_not_stop_the_decision(self):
         with mock.patch.object(fc.fc_waiting, "answered", side_effect=OSError("disk")):

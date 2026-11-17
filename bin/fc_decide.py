@@ -317,8 +317,9 @@ def cmd_decide(a):
             by = next(l.split(":")[0] for l in added if f"(closes {cid})" in l)
             new_body = replace_decision(new_body, rid, change or (cid.split("-")[0] if re.fullmatch(r"C\d+-\d+", cid) else f"replaced by {by}"))
     write_map(lid, body, new_body)
+    closed_items = []
     try:  # the waiting list follows the map; it never stops a decision
-        fc_waiting.answered(proj, sorted(answered | set(accepted)))
+        closed_items += fc_waiting.answered(proj, sorted(answered | set(accepted)))
         if not quote:
             for l in lines:
                 fc_waiting.open_item(proj, "confirm", f"decision:{ident}:{l.split(':')[0]}", TAG.sub("", l))
@@ -339,6 +340,8 @@ def cmd_decide(a):
         ids = ", ".join(l.split(":")[0] for l in lines)
         print(f"ruled, not the product owner's: name it `ruled: {ids} <decision>` in the next report; they confirm or overturn it with their words, "
               f"`compose decide --project {proj.name} --quote \"<their words>\" {ids.split(', ')[0]}`, or `--new ... --replaces` (a change of course once tasks are dispatched)")
+    for wid in closed_items:
+        print(f"closed {wid} on the waiting list")
     for other, ids in cleared:
         print(f"cleared {', '.join(ids)} from Not yet specified on {other}")
     if any(ans is not None for _, ans in answers):
