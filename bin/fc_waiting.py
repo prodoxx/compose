@@ -296,8 +296,13 @@ def _go(proj):
     return f"go:{ver.get('head') or int(verify.stat().st_mtime)}", layers.exists() and layers.stat().st_mtime >= verify.stat().st_mtime
 
 def _open_wanted(proj, c):
-    """Open the condition unless an item with its key is open, or was closed by anything other than `settled` (a no, a decision, a push)."""
-    if not any(i["key"] == c["key"] and (_is_open(i) or i.get("closed_by") != "settled") for i in load(proj)["items"]):
+    """Open the condition unless an item with its key is open, or was closed by anything other than `settled` (a no, a decision, a push),
+    or it is an ask whose question ids an open ask of the same issue already holds every one of (a reminder is the same ask)."""
+    items = load(proj)["items"]
+    if c["kind"] == "answer" and c["ids"] and any(i.get("kind") == "answer" and _is_open(i) and i.get("issue") == c["issue"]
+                                                  and set(c["ids"]) <= set(i.get("ids") or []) for i in items):
+        return
+    if not any(i["key"] == c["key"] and (_is_open(i) or i.get("closed_by") != "settled") for i in items):
         open_item(proj, c["kind"], c["key"], c["line"], c["recommendation"], c["ids"], c["issue"])
 
 def _sync(proj, events, probe=True):

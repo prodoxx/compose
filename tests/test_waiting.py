@@ -164,6 +164,14 @@ class Conditions(unittest.TestCase):
         self.assertEqual(fc_waiting.answered(self.proj, ["Q1", "Q2"], "NEB-1"), ["W1"])
         self.assertEqual(fc_waiting.sync(self.proj), [])
 
+    def test_a_reminder_of_an_open_ask_is_the_same_item(self):
+        self.report(self.lead, "needs-user", "NEB-1: 2 questions Q1, Q2")
+        fc_waiting.sync(self.proj)
+        self.report(self.lead, "needs-user", "reminder: NEB-1: 2 questions Q1, Q2", at="2026-11-17 11:00:00")
+        self.assertEqual([(i["id"], i["ids"]) for i in fc_waiting.sync(self.proj)], [("W1", ["Q1", "Q2"])])
+        self.report(self.lead, "needs-user", "NEB-1: 2 questions Q2, Q3", at="2026-11-17 11:05:00")  # a new question: a new ask
+        self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj)], ["W1", "W2"])
+
     def test_an_item_closed_by_a_decision_stays_closed_while_its_report_is_still_the_last_line(self):
         self.report(self.lead, "needs-user", "NEB-1: 1 question Q1")
         fc_waiting.sync(self.proj)
