@@ -23,7 +23,8 @@ class SkillCheck(unittest.TestCase):
         (self.skill / "sections" / "lead.md").write_text("lead v1\n")
         (self.skill / "commands" / "planner.md").write_text("planner v1\n")
         (self.skill / "README.md").write_text("not the skill\n")
-        self.patches = [mock.patch.object(fc.fc_hooks, "SKILL_DIR", self.skill), mock.patch.object(fc.fc_hooks, "SKILL_SEEN", self.state)]
+        self.patches = [mock.patch.object(fc.fc_hooks, "SKILL_DIR", self.skill), mock.patch.object(fc.fc_hooks, "SKILL_SEEN", self.state),
+                        mock.patch.object(fc.fc_waiting, "gather", return_value=[])]  # nothing waits unless a test says so: the real list asks git
         for p in self.patches:
             p.start()
 
@@ -143,6 +144,47 @@ class SkillCheck(unittest.TestCase):
         self.assertEqual(self.prompt("m", "/compose:planner NEB-1", role=None), "")
         (self.skill / "commands" / "planner.md").write_text("planner v2\n")
         self.assertIn("planner.md", self.context(self.prompt("m", role=None)))
+
+    def unseen(self, project="hw"):
+        """One unseen answer item that stops work, as fc_waiting.gather returns it."""
+        return [{"id": "W1", "project": project, "kind": "answer", "line": "NEB-1: which db?", "stops": True, "seen": False}]
+
+    def test_the_managers_prompt_carries_the_footer(self):
+        self.prompt(text="/compose", role=None)  # the skill was seen
+        with mock.patch.object(fc.fc_waiting, "gather", return_value=self.unseen()):
+            note = self.context(self.prompt(role=None))
+        self.assertIn("Waiting on you:", note)
+        self.assertIn("- W1 hw:", note)
+
+    def test_a_teammate_never_gets_the_footer(self):
+        self.prompt(text="/compose", role="crew")
+        with mock.patch.object(fc.fc_waiting, "gather", return_value=self.unseen()):
+            self.assertEqual(self.prompt(role="crew"), "")
+
+    def test_a_new_session_that_loads_the_skill_opens_with_the_footer(self):
+        with mock.patch.object(fc.fc_waiting, "gather", return_value=self.unseen()):
+            note = self.context(self.prompt("new", "/compose", role=None))
+        self.assertIn("Waiting on you:", note)
+        self.assertFalse((self.state / "new.json").exists() is False)  # loading the skill still records the version it read
+
+    def test_loading_the_skill_with_the_skill_tool_prints_nothing(self):
+        with mock.patch.object(fc.fc_waiting, "gather", return_value=self.unseen()):
+            out = self.hook({"hook_event_name": "PostToolUse", "session_id": "m", "tool_name": "Skill", "tool_input": {"skill": "compose"}}, None)
+        self.assertEqual(out, "")
+
+    def test_nothing_waiting_adds_nothing(self):
+        self.prompt(text="/compose", role=None)
+        with mock.patch.object(fc.fc_waiting, "gather", return_value=[]):
+            self.assertEqual(self.prompt(role=None), "")
+            self.assertEqual(self.prompt("new", "/compose", role=None), "")
+
+    def test_a_failing_waiting_list_adds_nothing(self):
+        self.prompt(text="/compose", role=None)
+        with mock.patch.object(fc.fc_waiting, "gather", side_effect=RuntimeError("boom")):
+            self.assertEqual(self.prompt(role=None), "")
+            self.assertEqual(self.prompt("new", "/compose", role=None), "")
+            (self.skill / "SKILL.md").write_text("v2\n")
+            self.assertIn("compose's skill changed since you read it:", self.context(self.prompt(role=None)))  # the other notes still come
 
     def test_errors_print_nothing(self):
         self.assertEqual(self.hook("not json"), "")

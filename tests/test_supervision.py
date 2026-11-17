@@ -427,6 +427,29 @@ class Rewake(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn(f"compose's skill changed since you read it: {skill / 'SKILL.md'}", err)
 
+    def test_a_wake_carries_the_footer_and_brings_the_list_up_to_date(self):
+        item = {"id": "W1", "project": "hw", "kind": "answer", "line": "NEB-1: which db?", "stops": True, "seen": False}
+        env = {k: v for k, v in self.env.items() if k != "COMPOSE_ROLE"}  # the engineering manager's wake
+        a = SimpleNamespace(repo="/r", project="hw", now=False, from_=None, timeout=0, stall=None, interval=0.01, settle=0, session="s1")
+        err = io.StringIO()
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), \
+                mock.patch.object(fc.fc_watch, "watch_snapshot", side_effect=[wsnap("running"), wsnap("passed")]), mock.patch.object(fc.fc_manager, "claim"), \
+                mock.patch.object(fc.fc_waiting, "gather", return_value=[item]), mock.patch.object(fc.fc_waiting, "sync") as sync, contextlib.redirect_stderr(err):
+            with self.assertRaises(SystemExit) as raised:
+                fc.fc_watch.cmd_watch(a, rewake=True)
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("Waiting on you:\n- W1 hw: NEB-1: which db?", err.getvalue())
+        self.assertEqual(sync.call_args.args[0], self.proj)
+        self.assertTrue(any("event task=001 state=passed" in line for line in sync.call_args.args[1]), sync.call_args)
+
+    def test_a_team_leads_wake_leaves_the_waiting_list_alone(self):
+        item = {"id": "W1", "project": "hw", "kind": "answer", "line": "q", "stops": True, "seen": False}
+        with mock.patch.object(fc.fc_waiting, "sync") as sync, mock.patch.object(fc.fc_waiting, "gather", return_value=[item]):
+            code, err, _ = self.rewake([wsnap("running"), wsnap("passed")])
+        self.assertEqual(code, 2)
+        self.assertNotIn("Waiting on you", err)
+        sync.assert_not_called()
+
     def test_a_lead_turn_is_judged_before_its_watch_is_parked(self):
         with mock.patch.object(fc.fc_compact, "consider", return_value={"decision": "qualifies"}) as c:
             code, err, start = self.rewake([wsnap("running"), wsnap("passed")], hook={"transcript_path": self.transcript(90000), "cwd": "/r"})

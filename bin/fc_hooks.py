@@ -1,7 +1,7 @@
 import hashlib, json, os, re, shlex, sys, time
 from datetime import datetime
 from pathlib import Path
-import fc_core, fc_config, fc_harness, fc_transcript, fc_compactlog, fc_worktree
+import fc_core, fc_config, fc_harness, fc_transcript, fc_compactlog, fc_worktree, fc_waiting
 
 # ---------- Claude Code hooks: `guard` keeps the planner out of code, `skillcheck` names changed skill files ----------
 
@@ -242,10 +242,33 @@ def return_note(ev, now=None):
     except Exception:
         return None
 
+def waiting_note(ev):
+    """For the engineering manager's session (one without COMPOSE_ROLE): the note that hands it the waiting footer to end its message to the
+    product owner with, unchanged; None for a teammate, when nothing unseen stops work, and on any failure."""
+    try:
+        if os.environ.get("COMPOSE_ROLE"):
+            return None
+        lines = fc_waiting.footer(fc_waiting.gather(ev.get("cwd") or os.getcwd()))
+        return ("These wait on the product owner. End your message to them with these lines, unchanged, and do not put the asks in your own words again:\n"
+                + "\n".join(lines)) if lines else None
+    except Exception:  # noqa: BLE001 - the waiting list never stops a hook
+        return None
+
+def wake_notes(session, repo):
+    """What a parked watch's wake tells the session (a wake is a prompt the UserPromptSubmit hook never sees): the skill notice and the
+    waiting note, the empty ones left out; never raises, and a note that fails leaves the other."""
+    notes = []
+    for note in (lambda: skill_notice(session), lambda: waiting_note({"cwd": str(repo)})):
+        try:
+            notes.append(note())
+        except Exception:  # noqa: BLE001
+            pass
+    return [n for n in notes if n]
+
 def cmd_skillcheck(a):
     """Claude Code UserPromptSubmit and PostToolUse(Skill) hook: a session with a role, or one that loaded the compose skill
     (the Skill tool, or a typed /compose command), hears once when the skill's files changed, and a session the product owner prompts
-    hears when that prompt comes after a while away (return_note). Any error prints nothing."""
+    hears when that prompt comes after a while away (return_note) and what waits on them (waiting_note). Any error prints nothing."""
     try:
         ev = json.load(sys.stdin)
         session = re.sub(r"[^\w-]", "", ev.get("session_id") or "")
@@ -253,10 +276,13 @@ def cmd_skillcheck(a):
             return
         loads = "/" + (ev.get("tool_input") or {}).get("skill", "") if ev.get("hook_event_name") == "PostToolUse" else ev.get("prompt", "")
         sigils = "|".join(re.escape(h["sigil"]) for h in fc_harness.HARNESSES.values() if h.get("sigil"))
+        prompted, notes = ev.get("hook_event_name") == "UserPromptSubmit", []
         if re.match(rf"/compose(:|\s|$)|(?:{sigils or '(?!)'})compose(-|\s|$)", loads):
             skill_notice(session)  # the version it loads now is the one it read
+            notes = [waiting_note(ev)] if prompted else []  # what waits on the product owner opens a new session's first message
         elif os.environ.get("COMPOSE_ROLE") or (SKILL_SEEN / f"{session}.json").exists():
-            if ev.get("hook_event_name") == "UserPromptSubmit" and (notes := [n for n in (skill_notice(session), return_note(ev)) if n]):
-                print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "\n".join(notes)}}))
+            notes = [skill_notice(session), return_note(ev), waiting_note(ev)] if prompted else []
+        if notes := [n for n in notes if n]:
+            print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "\n".join(notes)}}))
     except Exception:
         pass
