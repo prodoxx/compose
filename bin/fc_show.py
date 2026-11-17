@@ -2,9 +2,10 @@
 
 import json, re
 
-import fc_core
+import fc_core, fc_history
 
 RUN_DONE = re.compile(r"run done\s+(\d+/\d+ passed)\s+wall (\S+)")
+RUN_START = "] run start project="  # compose's own line, as fc_core.say stamps it: a teammate's line that quotes the phrase is no start
 
 
 def _read_json(path):
@@ -16,23 +17,49 @@ def _read_json(path):
     return data if isinstance(data, dict) else {}
 
 
+def _number(x):
+    """True for an int or a float that is not a bool."""
+    return isinstance(x, (int, float)) and not isinstance(x, bool)
+
+
 def _cost(total):
     """`$<total to two places>`, or `cost not recorded` when `total` is not a number: a cost is never invented."""
-    return f"${total:.2f}" if isinstance(total, (int, float)) and not isinstance(total, bool) else "cost not recorded"
+    return f"${total:.2f}" if _number(total) else "cost not recorded"
+
+
+def _took(seconds):
+    """The time a run or verify took, or `time not recorded`."""
+    return fc_core.fmt(seconds) if _number(seconds) else "time not recorded"
 
 
 def _run_log(proj):
-    """The lines of results/run.log (empty when there is none)."""
+    """The lines of the newer of results/run.log and results/resume.log (a resume writes its own log); empty when there is neither."""
+    logs = []
+    for name in ("run.log", "resume.log"):
+        try:
+            logs.append(((proj / "results" / name).stat().st_mtime, proj / "results" / name))
+        except OSError:
+            pass
     try:
-        return (proj / "results" / "run.log").read_text().splitlines()
+        return max(logs)[1].read_text(errors="replace").splitlines() if logs else []
     except OSError:
         return []
 
 
-def summary(proj, what):
-    """One line for the last `run` or `verify` on record: counts, time and cost, or that none is on record."""
+def _run_end(proj, repo):
+    """The newest run-end line of the project in the run history (a resume writes its own when it ends); None when there is none."""
+    ends = [e for e in fc_history.read(repo, proj.name, 0) if e.get("kind") == "run-end"] if repo is not None else []
+    return ends[-1] if ends else None
+
+
+def summary(proj, what, repo=None):
+    """One line for the last `run` or `verify` on record: counts, time and cost, or that none is on record. A run is read from the newest
+    run-end of the run history of `repo`, so the count, the time and the cost are of one run; the log is read only when the history has none."""
     results = proj / "results"
     if what == "run":
+        if end := _run_end(proj, repo):
+            count = f"{end['passed']}/{end['tasks']} passed" if _number(end.get("passed")) and _number(end.get("tasks")) else "count not recorded"
+            return f"run {count}, {_took(end.get('seconds'))}, {_cost(end.get('cost'))}"
         done = [m for m in map(RUN_DONE.search, _run_log(proj)) if m]
         if not done:
             return "run: none finished on record"
@@ -40,25 +67,25 @@ def summary(proj, what):
     data = _read_json(results / "verify.json")
     if not data:
         return "verify: none on record"
-    seconds = data.get("seconds")
-    took = fc_core.fmt(seconds) if isinstance(seconds, (int, float)) and not isinstance(seconds, bool) else "time not recorded"
-    cost = data.get("cost")
-    return f"verify {'passed' if data.get('passed') else 'failed'}, {took}, {_cost(cost.get('total') if isinstance(cost, dict) else None)}"
+    cost, passed = data.get("cost"), data.get("passed")
+    outcome = ("verify passed" if passed else "verify failed") if isinstance(passed, bool) else "verify: outcome not recorded"
+    return f"{outcome}, {_took(data.get('seconds'))}, {_cost(cost.get('total') if isinstance(cost, dict) else None)}"
 
 
 def cmd_show(a):
-    """Print the last run (from its `run start` line) or the whole last verify output, then the summary line; with --line only the summary."""
+    """Print the last run (from compose's last `run start` line, of the newer of the run and the resume log) or the whole last verify
+    output, then the summary line; with --line only the summary."""
     proj = fc_core.project_dir(a)
     if not a.line:
         if a.what == "run":
             lines = _run_log(proj)
-            starts = [i for i, l in enumerate(lines) if "run start" in l]
+            starts = [i for i, l in enumerate(lines) if RUN_START in l]
             text = "\n".join(lines[starts[-1]:] if starts else lines)
         else:
             try:
-                text = (proj / "results" / "verify.log").read_text().rstrip("\n")
+                text = (proj / "results" / "verify.log").read_text(errors="replace").rstrip("\n")
             except OSError:
                 text = ""
         if text:
             print(text)
-    print(summary(proj, a.what))
+    print(summary(proj, a.what, getattr(a, "repo", None)))

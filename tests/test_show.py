@@ -31,8 +31,50 @@ class Show(unittest.TestCase):
     def show(self, what, line=False):
         out = io.StringIO()
         with mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), contextlib.redirect_stdout(out):
-            fc_show.cmd_show(type("A", (), {"what": what, "line": line}))
+            fc_show.cmd_show(type("A", (), {"what": what, "line": line, "repo": str(self.proj.parent)}))
         return out.getvalue()
+
+    def run_end(self, project="recommender", **fields):
+        """A run-end line in the run history, as a run (or a resume) writes it when it ends."""
+        fc.fc_history.record(self.proj.parent / project, self.proj.parent, "run-end", **fields)
+
+    def test_the_run_line_reads_the_newest_run_end_of_the_history(self):
+        (self.results / "run.log").write_text(FIRST_RUN + LAST_RUN)  # the halted run's log, and a resume's cost beside it
+        (self.results / "run-cost.json").write_text(json.dumps({"total": 0.05}))
+        self.run_end(tasks=7, passed=3, seconds=300.0, cost=0.31, outcome="halted")
+        self.run_end(tasks=4, passed=4, seconds=600.0, cost=0.05, outcome="passed")
+        self.run_end(project="other", tasks=9, passed=1, seconds=1.0, cost=9.0, outcome="failed")
+        self.assertEqual(fc_show.summary(self.proj, "run", self.proj.parent), f"run 4/4 passed, {fc.fc_core.fmt(600.0)}, $0.05")
+        self.assertEqual(self.show("run", line=True), f"run 4/4 passed, {fc.fc_core.fmt(600.0)}, $0.05\n")
+
+    def test_a_run_end_that_misses_a_number_says_it_is_not_recorded(self):
+        self.run_end(tasks=7, seconds=12.0, outcome="interrupted")
+        self.assertEqual(fc_show.summary(self.proj, "run", self.proj.parent), f"run count not recorded, {fc.fc_core.fmt(12.0)}, cost not recorded")
+        self.run_end(tasks=7, passed=7, cost=0.5, outcome="passed")
+        self.assertEqual(fc_show.summary(self.proj, "run", self.proj.parent), "run 7/7 passed, time not recorded, $0.50")
+
+    def test_show_run_prints_the_newer_of_the_run_and_the_resume_log(self):
+        (self.results / "run.log").write_text(FIRST_RUN)
+        resume = "[12:00:00] resume run  halted x at openrouter\n" + LAST_RUN
+        (self.results / "resume.log").write_text(resume)
+        os.utime(self.results / "run.log", (1700000000, 1700000000))
+        out = self.show("run")
+        self.assertTrue(out.startswith(LAST_RUN), out)
+        self.assertNotIn("1/2 passed", out)
+
+    def test_a_run_starts_at_composes_own_line_and_a_log_with_bad_bytes_still_reads(self):
+        teammate = "[11:37:50] task 001 note: the run start project=x line is ours\n"
+        (self.results / "run.log").write_bytes((FIRST_RUN + LAST_RUN + teammate).encode() + b"\xff\xfe broken\n")
+        out = self.show("run")
+        self.assertTrue(out.startswith(LAST_RUN), out)
+        self.assertIn("broken", out)
+        self.assertTrue(out.endswith("run 7/7 passed, 4m12.0s, cost not recorded\n"), out)
+
+    def test_a_verify_without_an_outcome_says_so(self):
+        self.verify(seconds=42.0, cost={"total": 0.5})
+        self.assertEqual(fc_show.summary(self.proj, "verify"), "verify: outcome not recorded, 42.0s, $0.50")
+        self.verify(passed="yes", seconds=42.0)
+        self.assertEqual(fc_show.summary(self.proj, "verify"), "verify: outcome not recorded, 42.0s, cost not recorded")
 
     def test_the_run_line(self):
         (self.results / "run.log").write_text(FIRST_RUN + LAST_RUN)
