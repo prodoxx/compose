@@ -325,10 +325,10 @@ def _sync(proj, events, probe=True):
 
 def sync(proj, events=(), probe=True):
     """Bring the list up to date from the files and the watch's events, and return the open items. Opens each condition not already open
-    (one closed as `settled` may open again; one closed by a no or by `decided` stays closed), closes the `report:`, `halt:` and `go:` items that
-    are no longer a condition and the `agent:` items whose agent is no longer blocked (`probe=False` never asks the terminal host: an `agent:` item is
-    left as it is). A decision or review item is never touched. A failure
-    changes nothing more and returns the open items it can read, else [] (a waiting-list failure never stops a watch); it says why on
+    (one closed as `settled` may open again; one closed by a no, by `decided` or as `pushed` stays closed), first the asks and prompts the events
+    name, then what the files say. Closes the `report:`, `halt:` and `go:` items that are no longer a condition (`pushed` for a go whose stack was
+    submitted; an ask that names question ids closes only by `compose decide`), and the `agent:` items the host no longer lists as blocked (a host
+    that does not answer closes none; `probe=False` never asks it). A decision or review item is never touched. A failure changes nothing more and returns the open items it can read, else [] (a waiting-list failure never stops a watch); it says why on
     stderr in one line (stdout stays clean: a hook's stdout is parsed as JSON)."""
     try:
         return _sync(proj, events, probe)
