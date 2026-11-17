@@ -235,7 +235,7 @@ def _asked_at(proj, name, message):
         except ValueError:
             continue
         if isinstance(row, dict) and row.get("state") == "needs-user" and row.get("message") == message:
-            return row.get("at")
+            return row.get("at") or ""  # a line without a time keys on the name alone, as the status file reads it (R4)
     return None
 
 def _event_asks(proj, events):
@@ -248,7 +248,8 @@ def _event_asks(proj, events):
             continue
         try:
             message = ast.literal_eval(m[2])
-            c = _report(proj, m[1], _asked_at(proj, m[1], message) or _stamp(), "needs-user", message) if fc_ask.question_ids(str(message)) else None
+            at = _asked_at(proj, m[1], message)
+            c = _report(proj, m[1], _stamp() if at is None else at, "needs-user", message) if fc_ask.question_ids(str(message)) else None
         except (ValueError, SyntaxError):
             continue
         out += [c] if c else []

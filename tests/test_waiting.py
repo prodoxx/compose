@@ -212,6 +212,11 @@ class Conditions(unittest.TestCase):
         [item] = fc_waiting.sync(self.proj)
         self.assertEqual(item["key"], f"report:{self.lead}:")
 
+    def test_an_ask_the_watch_saw_on_a_line_without_a_time_is_the_same_item(self):
+        (self.crew / f"{self.lead}.status").write_text(json.dumps({"state": "needs-user", "message": "NEB-1: 1 question Q1"}) + "\n")
+        [item] = fc_waiting.sync(self.proj, [f"event crew={self.lead} state=needs-user message={'NEB-1: 1 question Q1'!r}"])
+        self.assertEqual(item["key"], f"report:{self.lead}:")
+
     def test_a_payment_halt_waits_until_resume(self):
         resume = self.proj / "results" / "resume.json"
         resume.write_text(json.dumps({"halted_at": "2026-11-17 10:00:00", "provider": "openrouter", "remaining": ["003", "004"]}))
