@@ -261,6 +261,17 @@ class Ask(unittest.TestCase):
         with mock.patch.object(fc.fc_ask, "url_problem", return_value=""):
             self.assertIn(self.good, fc.fc_ask.ask_gate(self.proj, linked, hop="manager"))
 
+    def test_a_long_ask_is_not_recorded_as_a_refused_report(self):
+        (self.proj / "results" / "crew" / "shop-architect.json").write_text(json.dumps({"name": "shop-architect", "reports_to": "manager"}))
+        with self.assertRaises(SystemExit) as refused:  # the reporter reads why and shortens the line: nothing wakes the manager as urgent
+            self.report("x " * 160)
+        self.assertIn(fc.fc_ask.TOO_LONG, str(refused.exception.code))
+        self.assertIn("is at most 300 characters (this one is 319", str(refused.exception.code))
+        self.assertFalse((self.proj / "results" / "crew" / "shop-architect.refused").exists())
+        self.assertEqual(self.sent(), [])
+        fc.fc_reports.write_refusal(self.proj, "shop-architect", "needs-user", "m", "state is one of working, done")  # any other refusal is recorded
+        self.assertTrue((self.proj / "results" / "crew" / "shop-architect.refused").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

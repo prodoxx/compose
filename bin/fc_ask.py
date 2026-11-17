@@ -5,7 +5,8 @@ import fc_core, fc_config, fc_linear, fc_change
 # ---------- one ask per question set: the link must answer, and a question is asked once ----------
 SESSION_URL = re.compile(r"https?://[^\s'\"<>()]*?/session/[0-9A-Za-z]+")  # the form `lavish-axi <file>` prints as `url:`
 NEEDS_USER_MAX = 300  # a needs-user line to the engineering manager, links not counted
-ASK_FALLBACK ="You can also answer the visual questions in text, in this same message."
+TOO_LONG = "not reported: a needs-user line to the engineering manager is at most"  # how the length refusal starts: the reporter fixes it, nothing is recorded
+ASK_FALLBACK = "You can also answer the visual questions in text, in this same message."
 ASK_HEAD = re.compile(r"^(?:reminder:\s*)?(?:change (C\d+):\s*)?([A-Z][A-Z0-9]*-\d+):")
 
 LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
@@ -182,7 +183,7 @@ def ask_gate(proj, message, hop=""):
     is asked once per `hop` (whom the reporter reports to): a teammate's ask to its team lead does not use up the team lead's ask to the engineering manager.
     A line to the engineering manager (`hop == "manager"`) is at most NEEDS_USER_MAX characters, a page link not counted."""
     if hop == "manager" and (n := len(SESSION_URL.sub("", message))) > NEEDS_USER_MAX:
-        sys.exit(f"not reported: a needs-user line to the engineering manager is at most {NEEDS_USER_MAX} characters (this one is {n}, links not counted): "
+        sys.exit(f"{TOO_LONG} {NEEDS_USER_MAX} characters (this one is {n}, links not counted): "
                  "say the question and your recommendation in one line, and put the detail on the issue or the page.")
     urls = list(dict.fromkeys(SESSION_URL.findall(message)))
     if re.search(r"open in Lavish", message, re.I) and not urls:
