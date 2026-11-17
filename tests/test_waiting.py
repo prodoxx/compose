@@ -243,6 +243,20 @@ class Conditions(unittest.TestCase):
         os.utime(self.proj / "layers.json", (time.time() + 60, time.time() + 60))
         self.assertEqual(fc_waiting.sync(self.proj), [])
 
+    def test_a_pushed_head_is_not_asked_again_by_a_second_verify(self):
+        self.verify(passed=True, head="abc")
+        fc_waiting.sync(self.proj)
+        (self.proj / "layers.json").write_text("{}")
+        os.utime(self.proj / "layers.json", (time.time() + 60, time.time() + 60))
+        self.assertEqual(fc_waiting.sync(self.proj), [])
+        self.assertEqual(self.stored()[0]["closed_by"], "pushed")
+        self.verify(passed=True, head="abc")  # verified again, newer than the push
+        os.utime(self.proj / "results" / "verify.json", (time.time() + 120, time.time() + 120))
+        self.assertEqual(fc_waiting.sync(self.proj), [])
+        self.verify(passed=True, head="def")
+        os.utime(self.proj / "results" / "verify.json", (time.time() + 120, time.time() + 120))
+        self.assertEqual([i["key"] for i in fc_waiting.sync(self.proj)], ["go:def"])
+
     def test_a_verify_without_a_head_keys_on_its_time(self):
         self.verify(passed=True)
         os.utime(self.proj / "results" / "verify.json", (1700000000.9, 1700000000.9))

@@ -271,13 +271,17 @@ def conditions(proj):
         left = len(halt.get("remaining") or [])
         out.append(_cond(f"halt:{halt.get('halted_at')}", "attend", f"payment halt at {halt.get('provider')}" + (f": {left} task(s) left" if left else ""),
                          "top up, then compose resume"))
-    verify = proj / "results" / "verify.json"
-    if (ver := _json_file(verify)) is not None and ver.get("passed") is True and fc_tasks.push_stance(proj) == "ask":
-        layers = proj / "layers.json"
-        if not layers.exists() or layers.stat().st_mtime < verify.stat().st_mtime:
-            head = ver.get("head") or int(verify.stat().st_mtime)
-            out.append(_cond(f"go:{head}", "go", "the verified stack waits for your go to push it as draft PRs", f"compose stack --submit --project {proj.name}"))
+    if (go := _go(proj)) and not go[1] and fc_tasks.push_stance(proj) == "ask":
+        out.append(_cond(go[0], "go", "the verified stack waits for your go to push it as draft PRs", f"compose stack --submit --project {proj.name}"))
     return out
+
+def _go(proj):
+    """(the go key of the last passed verify, whether its stack was submitted since: layers.json newer than verify.json); None when the last
+    verify did not pass. Raises OSError or ValueError when verify.json exists and cannot be read or parsed."""
+    verify, layers = proj / "results" / "verify.json", proj / "layers.json"
+    if (ver := _json_file(verify)) is None or ver.get("passed") is not True:
+        return None
+    return f"go:{ver.get('head') or int(verify.stat().st_mtime)}", layers.exists() and layers.stat().st_mtime >= verify.stat().st_mtime
 
 def _open_wanted(proj, c):
     """Open the condition unless an item with its key is open, or was closed by anything other than `settled` (a no, a decision, a push)."""
@@ -298,10 +302,10 @@ def _sync(proj, events, probe=True):
     wanted = conditions(proj)  # a source that cannot be read changes nothing more
     for c in wanted:
         _open_wanted(proj, c)
-    keys = {c["key"] for c in wanted}
+    keys, pushed = {c["key"] for c in wanted}, (go[0] if (go := _go(proj)) and go[1] else None)
     for item in [i for i in load(proj)["items"] if _is_open(i)]:
         if str(item["key"]).startswith(("report:", "halt:", "go:")) and item["key"] not in keys and not (item["key"].startswith("report:") and item.get("ids")):
-            close_item(proj, item["key"], "settled")  # an ask that names questions closes only by `compose decide` (answered)
+            close_item(proj, item["key"], "pushed" if item["key"] == pushed else "settled")  # an ask that names questions closes only by `compose decide`
     waiting_agents = [i for i in load(proj)["items"] if probe and _is_open(i) and str(i["key"]).startswith("agent:")]
     if waiting_agents and (listed := fc_fleet.agents()) is not None:  # a host that does not answer closes nothing
         status = {a.get("name"): a.get("agent_status") for a in listed if isinstance(a, dict)}
