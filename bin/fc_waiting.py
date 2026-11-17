@@ -131,6 +131,23 @@ def answered(proj, ids, issue=None, still_open=None):
             _save(proj, data)
     return closed
 
+def reconcile_decisions(proj, ident, unconfirmed, live):
+    """Bring the confirm items of one map in line with its Decisions so far: open a `confirm` item (key `decision:<ident>:<id>`) for each
+    unconfirmed line ({id: the line without its tag}) that has none open, and close every other open item of that map, `confirmed` when
+    its id is still a live line (`live`), else `replaced`. Returns the ids of the items closed."""
+    prefix, closed = f"decision:{ident}:", []
+    with _locked(proj):
+        data = load(proj)
+        have = {str(i["key"])[len(prefix):]: i for i in data["items"] if _is_open(i) and str(i["key"]).startswith(prefix)}
+        for cid, item in have.items():
+            if cid not in unconfirmed:
+                item["closed"], item["closed_by"] = _stamp(), "confirmed" if cid in live else "replaced"
+                closed.append(item["id"])
+        new = [_new(data, "confirm", prefix + cid, line) for cid, line in unconfirmed.items() if cid not in have]
+        if closed or new:
+            _save(proj, data)
+    return closed
+
 RECOMMENDATION = re.compile(r"\s*[;,.]?\s*\brecommendation:?\s+", re.I)
 PY_STR = r"""('(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")"""  # a Python string literal, as the watch writes a message with !r
 BLOCKED_EVENT = re.compile(rf"\bagent=(\S+)\s+status=blocked\b(?:\s+waits-at={PY_STR})?")

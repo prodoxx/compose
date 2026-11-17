@@ -522,29 +522,49 @@ class Decide(unittest.TestCase):
     def fc_waiting(self):
         return fc.fc_waiting
 
+    def keys(self):
+        """key -> what closed it (None while open), for every waiting item of the project."""
+        return {i["key"]: i["closed_by"] for i in self.fc_waiting.load(self.proj)["items"]}
+
     def test_a_ruling_opens_a_confirm_item(self):
         self.decide(new=["use SQLite"], closes=["Q2"], ruling=True)
-        (item,) = self.waiting()
-        self.assertEqual((item["kind"], item["stops"], item["key"]), ("confirm", False, "decision:NEB-1:D5"))
+        (item,) = [i for i in self.waiting() if i["key"] == "decision:NEB-1:D5"]
+        self.assertEqual((item["kind"], item["stops"]), ("confirm", False))
         self.assertTrue(item["line"].startswith("D5: use SQLite"))
         self.assertNotIn("compose ruling", item["line"])
+        self.assertEqual(self.keys(), {"decision:NEB-1:Q3": None, "decision:NEB-1:D5": None})  # the map's earlier unconfirmed line too
 
-    def test_a_recommendation_under_away_opens_a_confirm_item_per_line(self):
+    def test_a_recommendation_under_away_opens_a_confirm_item_per_line_and_closes_the_asks_it_answers(self):
         (self.proj / "results" / "yolo.json").write_text(json.dumps({"mode": "away", "decisions": []}))
-        self.decide(accept_all=True)
-        self.assertEqual(sorted(i["key"] for i in self.waiting("confirm")), ["decision:NEB-1:D5", "decision:NEB-1:D6"])
+        self.fc_waiting.open_item(self.proj, "answer", "report:shop-orchestrator:t1", "NEB-1: 2 questions Q1, Q2", ids=["Q1", "Q2"], issue="NEB-1")
+        out = self.decide(accept_all=True)
+        self.assertEqual(sorted(i["key"] for i in self.waiting("confirm")), ["decision:NEB-1:D5", "decision:NEB-1:D6", "decision:NEB-1:Q3"])
+        self.assertEqual(self.keys()["report:shop-orchestrator:t1"], "decided")
+        self.assertIn("closed W1 on the waiting list", out)
 
     def test_their_words_on_the_line_close_the_confirm_item(self):
         self.decide(new=["use SQLite"], closes=["Q2"], ruling=True)
-        self.decide("D5", quote="yes")
-        self.assertEqual(self.waiting("confirm"), [])
-        self.assertEqual([i["closed_by"] for i in self.fc_waiting.load(self.proj)["items"]], ["confirmed"])
+        out = self.decide("D5", quote="yes")
+        self.assertEqual(self.keys(), {"decision:NEB-1:Q3": None, "decision:NEB-1:D5": "confirmed"})
+        self.assertIn("closed W2 on the waiting list", out)
+
+    def test_the_older_form_with_new_words_confirms_the_line_and_closes_its_item(self):
+        self.decide(new=["use SQLite"], closes=["Q2"], ruling=True)
+        self.decide("Q3: light theme", quote="light, please")
+        self.assertIn(f'- Q3: light theme (product owner, {TODAY}; said: "light, please")', self.linear.body)
+        self.assertEqual(self.keys(), {"decision:NEB-1:Q3": "confirmed", "decision:NEB-1:D5": None})
+
+    def test_a_hand_decorated_id_is_read_as_its_id(self):
+        self.linear.body = MAP.replace("- Q3: dark theme", "- **Q3**: dark theme")
+        self.decide(new=["Clerk"], closes=["Q1"], quote="clerk")
+        self.assertEqual(self.keys(), {"decision:NEB-1:Q3": None})
+        self.decide("Q3", quote="yes, dark")
+        self.assertEqual(self.keys(), {"decision:NEB-1:Q3": "confirmed"})
 
     def test_replacing_a_ruling_closes_its_item(self):
         self.decide(new=["use SQLite"], closes=["Q2"], ruling=True)
         self.decide(new=["use Postgres"], replaces="D5", ruling=True)
-        items = self.fc_waiting.load(self.proj)["items"]
-        self.assertEqual([(i["key"], i["closed_by"]) for i in items], [("decision:NEB-1:D5", "replaced"), ("decision:NEB-1:D6", None)])
+        self.assertEqual(self.keys(), {"decision:NEB-1:Q3": None, "decision:NEB-1:D5": "replaced", "decision:NEB-1:D6": None})
 
     def test_an_answer_closes_the_ask_that_named_the_question(self):
         self.fc_waiting.open_item(self.proj, "answer", "report:shop-orchestrator:t1", "NEB-1: 1 question Q1", ids=["Q1"])
@@ -553,6 +573,20 @@ class Decide(unittest.TestCase):
         self.assertEqual((item["closed_by"], item["ids"]), ("decided", []))
         self.assertIn("closed W1 on the waiting list\n", out)
         self.assertEqual(self.waiting("answer"), [])
+
+    def test_an_answer_closes_only_the_asks_about_its_own_issue(self):
+        self.fc_waiting.open_item(self.proj, "answer", "report:a:t1", "NEB-1: 1 question Q1", ids=["Q1"], issue="NEB-1")
+        self.fc_waiting.open_item(self.proj, "answer", "report:b:t2", "NEB-9: 1 question Q1", ids=["Q1"], issue="NEB-9")
+        self.decide(new=["Clerk"], closes=["Q1"], quote="clerk")
+        self.assertEqual((self.keys()["report:a:t1"], self.keys()["report:b:t2"]), ("decided", None))
+
+    def test_an_ask_keeps_only_the_questions_still_open_on_the_map(self):
+        self.fc_waiting.open_item(self.proj, "answer", "report:a:t1", "NEB-1: 2 questions Q1, Q7", ids=["Q1", "Q7"], issue="NEB-1")  # Q7 left the map
+        self.fc_waiting.open_item(self.proj, "answer", "report:b:t2", "NEB-1: 2 questions Q2, Q8", ids=["Q2", "Q8"], issue="NEB-1")
+        self.decide(new=["Clerk"], closes=["Q1"], quote="clerk")
+        items = {i["key"]: i for i in self.fc_waiting.load(self.proj)["items"]}
+        self.assertEqual(items["report:a:t1"]["closed_by"], "decided")
+        self.assertEqual((items["report:b:t2"]["closed_by"], items["report:b:t2"]["ids"]), (None, ["Q2"]))
 
     def test_a_waiting_list_that_cannot_be_written_does_not_stop_the_decision(self):
         with mock.patch.object(fc.fc_waiting, "answered", side_effect=OSError("disk")):
@@ -572,8 +606,7 @@ class Decide(unittest.TestCase):
         self.change_map()
         self.fc_waiting.open_item(self.proj, "confirm", "decision:NEB-1:D4", "D4: one store")
         self.decide(accept_all=True, quote="all as you say")
-        (item,) = self.fc_waiting.load(self.proj)["items"]
-        self.assertEqual((item["key"], item["closed_by"]), ("decision:NEB-1:D4", "replaced"))
+        self.assertEqual(self.keys()["decision:NEB-1:D4"], "replaced")
 
     def test_an_old_card_answer_that_strikes_a_line_closes_that_lines_item(self):
         self.linear.body = OLD_CARDS.replace("## Out of scope", self.OLD_CHANGE_CARD)

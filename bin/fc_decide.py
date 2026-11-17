@@ -202,9 +202,18 @@ def replace_decision(body, old_id, note):
             dec[i] = f"- ~~{old}~~ ({note})"
     return fc_plan.replace_section(body, heading_line(body, DECIDED), "\n".join(dec))
 
-def live_ids(body):
-    """The ids of the Decisions so far lines that are not struck through."""
-    return {m.group(1).split(":")[0] for m in map(fc_change.LIST_ITEM.match, fc_change.map_section(body, DECIDED).splitlines()) if m and "~~" not in m.group(1)}
+LINE_ID = re.compile(rf"[\s*_`(\[]*({fc_ask.CARD_ID})(?!\w)")  # the id a decision line starts with, decorated as decided_line tolerates
+
+def decision_state(body):
+    """What the waiting list follows on the map: ({id: line without its final tag} for every live Decisions so far line whose tag says it
+    is unconfirmed, a recommendation or a ruling), {the id of every live line})."""
+    unconfirmed, live = {}, set()
+    for l in fc_change.decision_lines(body):
+        if m := LINE_ID.match(l):
+            live.add(m.group(1))
+            if (tag := TAG.search(l)) and "unconfirmed" in tag.group(0):
+                unconfirmed[m.group(1)] = TAG.sub("", l)
+    return unconfirmed, live
 
 def record_new(body, items, tag):
     """The map with one `- D<n>: <text> (closes <ids>) <tag>` line appended under Decisions so far per (text, closed ids), and the closed
@@ -319,15 +328,8 @@ def cmd_decide(a):
     write_map(lid, body, new_body)
     closed_items = []
     try:  # the waiting list follows the map; it never stops a decision
-        closed_items += fc_waiting.answered(proj, sorted(answered | set(accepted)))
-        if not quote:
-            for l in lines:
-                fc_waiting.open_item(proj, "confirm", f"decision:{ident}:{l.split(':')[0]}", TAG.sub("", l))
-        for cid, ans in answers:
-            if quote and ans is None:
-                fc_waiting.close_item(proj, f"decision:{ident}:{cid}", "confirmed")
-        for rid in sorted(live_ids(body) - live_ids(new_body)):  # a line struck through, by --replaces, an accepted change of course or an old card
-            fc_waiting.close_item(proj, f"decision:{ident}:{rid}", "replaced")
+        closed_items += fc_waiting.answered(proj, sorted(answered | set(accepted)), ident, set(open_questions(new_body)))
+        closed_items += fc_waiting.reconcile_decisions(proj, ident, *decision_state(new_body))
     except Exception as e:  # noqa: BLE001  a waiting-list failure never stops a decision
         print(f"waiting list not updated ({e})")
     cleared = clear_elsewhere(proj, ident, [i for i in qs if i in answered or i in accepted])
