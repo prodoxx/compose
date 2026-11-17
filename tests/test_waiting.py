@@ -187,6 +187,18 @@ class Conditions(unittest.TestCase):
         self.assertEqual((item["key"], item["ids"], item["line"], item["issue"]), (f"report:{self.lead}:2026-11-17 10:00:00", ["Q1", "Q2"], "NEB-1: 2 questions Q1, Q2", "NEB-1"))
         self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj, [event])], ["W1"])  # the same ask read again is the same item
 
+    def test_an_ask_without_an_issue_at_its_head_is_about_the_feature_else_no_known_issue(self):
+        self.report(self.lead, "needs-user", "2 questions Q1, Q2")
+        (self.proj / "linear.json").write_text(json.dumps({"feature": "NEB-7"}))
+        [item] = fc_waiting.sync(self.proj)
+        self.assertEqual(item["issue"], "NEB-7")
+        self.assertEqual(fc_waiting._issue(self.proj, "reminder: change C2: NEB-9: 1 question C2-1"), "NEB-9")
+        for broken in ("{", "[]", json.dumps({"feature": ""})):
+            (self.proj / "linear.json").write_text(broken)
+            self.assertIsNone(fc_waiting._issue(self.proj, "2 questions Q1, Q2"), broken)
+        (self.proj / "linear.json").unlink()
+        self.assertIsNone(fc_waiting._issue(self.proj, "2 questions Q1, Q2"))
+
     def test_an_ask_the_watch_saw_with_no_status_line_opens_under_the_time_now(self):
         with mock.patch.object(fc_waiting, "_stamp", return_value="2026-11-17 11:00:00"):
             [item] = fc_waiting.sync(self.proj, [f"event crew={self.lead} state=needs-user message={'NEB-1: 1 question Q4'!r}"])
