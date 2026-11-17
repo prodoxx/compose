@@ -2,10 +2,10 @@
 (one open item per key), may be seen, and is closed by what settled it; its id is never reused. Every write holds a lock on
 results/waiting.lock. Imports only lower modules."""
 
-import fcntl, json, time
+import fcntl, json, re, time
 from contextlib import contextmanager
 
-import fc_core
+import fc_core, fc_tasks, fc_herdr, fc_fleet, fc_ask
 
 KINDS = ("answer", "go", "attend", "confirm", "review")
 STOPS = ("answer", "go", "attend")  # the kinds that hold work until the owner acts
@@ -118,3 +118,104 @@ def answered(proj, ids):
         if changed:
             _save(proj, data)
     return closed
+
+RECOMMENDATION = re.compile(r"\s*[;,.]?\s*\brecommendation:?\s+", re.I)
+BLOCKED_EVENT = re.compile(r"\bagent=(\S+)\s+status=blocked\b")
+
+def _cond(key, kind, line, recommendation="", ids=()):
+    """One thing that waits, as `conditions` returns it."""
+    return {"key": key, "kind": kind, "line": line, "recommendation": recommendation, "ids": list(ids)}
+
+def _last_line(path):
+    """The last non-empty line of a file parsed as JSON (an object); None when the file has none. Raises OSError or ValueError when it cannot be read or parsed."""
+    lines = [ln for ln in path.read_text().splitlines() if ln.strip()]
+    if not lines:
+        return None
+    data = json.loads(lines[-1])
+    if not isinstance(data, dict):
+        raise ValueError(f"{path}: the last line is not an object")
+    return data
+
+def _reaches_manager(crew, name, lead):
+    """True when the team lead wrote this status file, or its crew record says it reports to the manager (a record that is missing or unreadable names nobody)."""
+    if name == lead:
+        return True
+    try:
+        record = json.loads((crew / f"{name}.json").read_text())
+    except (OSError, ValueError):
+        return False
+    return isinstance(record, dict) and record.get("reports_to") == "manager"
+
+def _report_conditions(proj):
+    """The answer and attend conditions: the newest report of each teammate that reaches the product owner, when it is a needs-user or a blocked."""
+    crew, lead, out = proj / "results" / "crew", fc_herdr.agent_name(proj.name, "orchestrator"), []
+    for f in sorted(crew.glob("*.status")):
+        name = f.name[:-len(".status")]
+        if not _reaches_manager(crew, name, lead):
+            continue
+        last = _last_line(f)
+        state = (last or {}).get("state")
+        if state not in ("needs-user", "blocked"):
+            continue
+        message = str(last.get("message") or "")
+        parts = RECOMMENDATION.split(message, maxsplit=1)
+        line, recommendation = (parts[0], parts[1]) if len(parts) == 2 else (message, "")
+        ids = fc_ask.question_ids(message) if state == "needs-user" else ()
+        out.append(_cond(f"report:{name}:{last.get('at') or ''}", "answer" if state == "needs-user" else "attend", line, recommendation, ids))
+    return out
+
+def _json_file(path):
+    """The JSON object in a file; None when the file is not there. Raises OSError or ValueError when it exists and cannot be read or parsed."""
+    try:
+        data = json.loads(path.read_text())
+    except FileNotFoundError:
+        return None
+    if not isinstance(data, dict):
+        raise ValueError(f"{path}: not an object")
+    return data
+
+def conditions(proj):
+    """What waits on the product owner right now, read from the crew reports, results/resume.json and results/verify.json:
+    [{"key", "kind", "line", "recommendation", "ids"}]. Raises OSError or ValueError when a source that exists cannot be read or parsed."""
+    out = _report_conditions(proj)
+    if (halt := _json_file(proj / "results" / "resume.json")) is not None:
+        left = len(halt.get("remaining") or [])
+        out.append(_cond(f"halt:{halt.get('halted_at')}", "attend", f"payment halt at {halt.get('provider')}: {left} task(s) left", "top up, then compose resume"))
+    verify = proj / "results" / "verify.json"
+    if (ver := _json_file(verify)) is not None and ver.get("passed") is True and fc_tasks.push_stance(proj) == "ask":
+        layers = proj / "layers.json"
+        if not layers.exists() or layers.stat().st_mtime < verify.stat().st_mtime:
+            head = ver.get("head") or int(verify.stat().st_mtime)
+            out.append(_cond(f"go:{head}", "go", "the verified stack waits for your go to push it as draft PRs", f"compose stack --submit --project {proj.name}"))
+    return out
+
+def _sync(proj, events):
+    """Bring the list up to date and return the open items; lets a failure through."""
+    wanted = conditions(proj)  # first: a source that cannot be read changes nothing
+    for c in wanted:
+        if not any(i["key"] == c["key"] and (_is_open(i) or i.get("closed_by") != "settled") for i in load(proj)["items"]):
+            open_item(proj, c["kind"], c["key"], c["line"], c["recommendation"], c["ids"])
+    for e in events:
+        if m := BLOCKED_EVENT.search(e):
+            open_item(proj, "attend", f"agent:{m.group(1)}", f"{m.group(1)} waits at a prompt only you can answer (a sign-in or an Allow)")
+    keys = {c["key"] for c in wanted}
+    for item in [i for i in load(proj)["items"] if _is_open(i)]:
+        if str(item["key"]).startswith(("report:", "halt:", "go:")) and item["key"] not in keys:
+            close_item(proj, item["key"], "settled")
+    for item in [i for i in load(proj)["items"] if _is_open(i) and str(i["key"]).startswith("agent:")]:
+        if fc_fleet.agent_status(item["key"][len("agent:"):]) != "blocked":
+            close_item(proj, item["key"], "settled")
+    return open_items(proj)
+
+def sync(proj, events=()):
+    """Bring the list up to date from the files and the watch's events, and return the open items. Opens each condition not already open
+    (one closed as `settled` may open again; one closed by a no or by `decided` stays closed), closes the `report:`, `halt:` and `go:` items that
+    are no longer a condition and the `agent:` items whose agent is no longer blocked. A decision or review item is never touched. A failure
+    changes nothing more and returns the open items it can read, else [] (a waiting-list failure never stops a watch)."""
+    try:
+        return _sync(proj, events)
+    except Exception:  # noqa: BLE001
+        try:
+            return open_items(proj)
+        except Exception:  # noqa: BLE001
+            return []

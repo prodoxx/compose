@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import importlib.machinery, importlib.util, json, os, sys, tempfile, unittest
+import importlib.machinery, importlib.util, json, os, sys, tempfile, time, unittest
 from pathlib import Path
 from unittest import mock
 os.environ["HERDR_ENV"] = ""
@@ -88,6 +88,148 @@ class Store(unittest.TestCase):
         for n in range(6, 11):  # ids sort as numbers: W10 after W9 within one second
             open_at("2026-01-01 08:00:00", "go", f"n{n}", "go")
         self.assertEqual([i["id"] for i in fc_waiting.open_items(self.proj)][:6], ["W6", "W7", "W8", "W9", "W10", "W3"])
+
+
+class Conditions(unittest.TestCase):
+    """What waits is read from files compose already writes: the team lead's and the manager's teammates' reports, the payment halt, the last verify."""
+    def setUp(self):
+        self.proj = Path(tempfile.mkdtemp()) / "hw"
+        self.crew = self.proj / "results" / "crew"
+        self.crew.mkdir(parents=True)
+        self.lead = "hw-orchestrator"
+        self.stance = mock.patch("fc_tasks.push_stance", return_value="ask")
+        self.stance.start()
+        self.addCleanup(self.stance.stop)
+
+    def report(self, name, state, message, at="2026-11-17 10:00:00"):
+        with open(self.crew / f"{name}.status", "a") as f:
+            f.write(json.dumps({"at": at, "state": state, "message": message}) + "\n")
+
+    def record(self, name, reports_to):
+        (self.crew / f"{name}.json").write_text(json.dumps({"name": name, "reports_to": reports_to, "pane": "p1"}))
+
+    def verify(self, **data):
+        (self.proj / "results" / "verify.json").write_text(json.dumps(data))
+
+    def stored(self):
+        return json.loads((self.proj / "results" / "waiting.json").read_text())["items"]
+
+    def test_a_needs_user_that_reaches_the_manager_is_an_answer_item(self):
+        self.report(self.lead, "needs-user", "NEB-1: 2 questions Q1, Q2; recommendation: SQLite and Clerk")
+        [item] = fc_waiting.sync(self.proj)
+        self.assertEqual((item["kind"], item["line"], item["recommendation"], item["ids"], item["stops"]),
+                         ("answer", "NEB-1: 2 questions Q1, Q2", "SQLite and Clerk", ["Q1", "Q2"], True))
+        self.assertEqual(item["key"], f"report:{self.lead}:2026-11-17 10:00:00")
+
+    def test_a_teammates_ask_to_its_team_lead_is_no_item(self):
+        self.record("hw-tests-001", "orchestrator")
+        self.report("hw-tests-001", "needs-user", "which port?")
+        self.assertEqual(fc_waiting.sync(self.proj), [])
+
+    def test_a_planner_the_manager_started_counts(self):
+        self.record("hw-planner", "manager")
+        self.report("hw-planner", "blocked", "no Linear key")
+        [item] = fc_waiting.sync(self.proj)
+        self.assertEqual((item["kind"], item["line"], item["recommendation"]), ("attend", "no Linear key", ""))
+
+    def test_the_reporters_next_report_closes_it(self):
+        self.report(self.lead, "needs-user", "which database?")
+        self.assertEqual(len(fc_waiting.sync(self.proj)), 1)
+        self.report(self.lead, "working", "carrying on", at="2026-11-17 10:05:00")
+        self.assertEqual(fc_waiting.sync(self.proj), [])
+        self.assertEqual(self.stored()[0]["closed_by"], "settled")
+
+    def test_a_second_ask_is_a_new_unseen_item(self):
+        self.report(self.lead, "needs-user", "first?")
+        fc_waiting.sync(self.proj)
+        fc_waiting.mark_seen(self.proj, "W1")
+        self.report(self.lead, "needs-user", "second?", at="2026-11-17 10:05:00")
+        [item] = fc_waiting.sync(self.proj)
+        self.assertEqual((item["id"], item["line"], item["seen"]), ("W2", "second?", None))
+
+    def test_a_status_line_without_a_time_keys_on_the_name_alone(self):
+        (self.crew / f"{self.lead}.status").write_text(json.dumps({"state": "needs-user", "message": "which?"}) + "\n")
+        [item] = fc_waiting.sync(self.proj)
+        self.assertEqual(item["key"], f"report:{self.lead}:")
+
+    def test_a_payment_halt_waits_until_resume(self):
+        resume = self.proj / "results" / "resume.json"
+        resume.write_text(json.dumps({"halted_at": "2026-11-17 10:00:00", "provider": "openrouter", "remaining": ["003", "004"]}))
+        [item] = fc_waiting.sync(self.proj)
+        self.assertEqual((item["kind"], item["key"], item["line"], item["recommendation"]),
+                         ("attend", "halt:2026-11-17 10:00:00", "payment halt at openrouter: 2 task(s) left", "top up, then compose resume"))
+        resume.unlink()
+        self.assertEqual(fc_waiting.sync(self.proj), [])
+        self.assertEqual(self.stored()[0]["closed_by"], "settled")
+
+    def test_a_passed_verify_that_waits_for_the_push_is_a_go_item(self):
+        self.verify(passed=True, head="abc")
+        [item] = fc_waiting.sync(self.proj)
+        self.assertEqual((item["kind"], item["key"], item["line"], item["recommendation"], item["stops"]),
+                         ("go", "go:abc", "the verified stack waits for your go to push it as draft PRs", "compose stack --submit --project hw", True))
+        (self.proj / "layers.json").write_text("{}")
+        os.utime(self.proj / "layers.json", (time.time() + 60, time.time() + 60))
+        self.assertEqual(fc_waiting.sync(self.proj), [])
+
+    def test_a_verify_without_a_head_keys_on_its_time(self):
+        self.verify(passed=True)
+        os.utime(self.proj / "results" / "verify.json", (1700000000.9, 1700000000.9))
+        [item] = fc_waiting.sync(self.proj)
+        self.assertEqual(item["key"], "go:1700000000")
+
+    def test_no_go_item_when_someone_else_pushes(self):
+        self.verify(passed=True, head="abc")
+        for who in ("auto", "posture"):
+            with mock.patch("fc_tasks.push_stance", return_value=who):
+                self.assertEqual(fc_waiting.sync(self.proj), [], who)
+
+    def test_a_no_stays_closed_and_a_new_head_asks_again(self):
+        self.verify(passed=True, head="abc")
+        fc_waiting.sync(self.proj)
+        fc_waiting.close_item(self.proj, "go:abc", "no: later")
+        self.assertEqual(fc_waiting.sync(self.proj), [])
+        self.verify(passed=True, head="def")
+        self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj)], ["W2"])
+
+    def test_a_condition_that_comes_back_after_settling_is_a_new_item(self):
+        self.verify(passed=True, head="abc")
+        self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj)], ["W1"])
+        self.verify(passed=False, head="abc")
+        self.assertEqual(fc_waiting.sync(self.proj), [])
+        self.assertEqual(self.stored()[0]["closed_by"], "settled")
+        self.verify(passed=True, head="abc")
+        self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj)], ["W2"])
+
+    def test_an_agent_at_a_prompt_opens_by_its_event_and_closes_when_it_moves(self):
+        with mock.patch("fc_fleet.agent_status", return_value="blocked"):
+            [item] = fc_waiting.sync(self.proj, ["event agent=hw-003 status=blocked waits-at='sign-in'"])
+        self.assertEqual((item["kind"], item["key"], item["line"]), ("attend", "agent:hw-003", "hw-003 waits at a prompt only you can answer (a sign-in or an Allow)"))
+        with mock.patch("fc_fleet.agent_status", return_value="working"):
+            self.assertEqual(fc_waiting.sync(self.proj), [])
+
+    def test_the_host_is_asked_only_when_an_agent_item_is_open(self):
+        self.report(self.lead, "needs-user", "which?")
+        with mock.patch("fc_fleet.agent_status", side_effect=AssertionError("asked the host")):
+            self.assertEqual(len(fc_waiting.sync(self.proj, ["event agent=hw-003 status=working"])), 1)
+
+    def test_decisions_and_reviews_are_left_alone(self):
+        fc_waiting.open_item(self.proj, "confirm", "decision:NEB-1:D7", "D7: dark theme")
+        fc_waiting.open_item(self.proj, "review", "review:NEB-1", "review the plan")
+        self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj)], ["W1", "W2"])
+
+    def test_sync_on_a_broken_file_still_returns_what_waits(self):
+        (self.proj / "results" / "waiting.json").write_text("{")
+        self.report(self.lead, "needs-user", "which?")
+        self.assertEqual(len(fc_waiting.sync(self.proj)), 1)
+        self.assertEqual(len(self.stored()), 1)
+
+    def test_a_source_that_cannot_be_read_closes_nothing(self):
+        self.report(self.lead, "needs-user", "which database?")
+        self.assertEqual(len(fc_waiting.sync(self.proj)), 1)
+        status = self.crew / f"{self.lead}.status"
+        status.write_text(status.read_text()[:-30])  # the last line is cut in half
+        self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj)], ["W1"])
+        self.assertIsNone(self.stored()[0]["closed"])
 
 
 if __name__ == "__main__":
