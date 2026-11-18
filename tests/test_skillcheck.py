@@ -190,6 +190,12 @@ class SkillCheck(unittest.TestCase):
             (self.skill / "SKILL.md").write_text("v2\n")
             self.assertIn("compose's skill changed since you read it:", self.context(self.prompt(role=None)))  # the other notes still come
 
+    def test_a_skill_that_cannot_be_read_still_hands_the_footer(self):
+        self.prompt(text="/compose", role=None)  # the skill was seen
+        with mock.patch.object(fc.fc_waiting, "gather", return_value=self.unseen()), mock.patch.object(fc.fc_hooks, "SKILL_DIR", self.skill / "missing"):
+            self.assertIn("Waiting on you:", self.context(self.prompt(role=None)))  # a checkout mid-update costs the skill notice, never what waits on the product owner
+            self.assertIn("Waiting on you:", self.context(self.prompt("new", "/compose", role=None)))
+
     def test_errors_print_nothing(self):
         self.assertEqual(self.hook("not json"), "")
         with mock.patch.object(fc.fc_hooks, "SKILL_DIR", self.skill / "missing"):
