@@ -2,7 +2,7 @@
 with the product owner's words attached, as an unconfirmed recommendation while away or yolo is on, or as compose's own ruling
 on an easily reversible decision (`--ruling`), posture or not."""
 import json, re, sys, time
-import fc_core, fc_tasks, fc_linear, fc_linear_cmd, fc_plan, fc_herdr, fc_fleet, fc_change, fc_stale, fc_ask
+import fc_core, fc_tasks, fc_linear, fc_linear_cmd, fc_plan, fc_herdr, fc_fleet, fc_change, fc_stale, fc_ask, fc_waiting
 
 
 # ---------- the map's two decision sections ----------
@@ -202,6 +202,30 @@ def replace_decision(body, old_id, note):
             dec[i] = f"- ~~{old}~~ ({note})"
     return fc_plan.replace_section(body, heading_line(body, DECIDED), "\n".join(dec))
 
+LINE_ID = re.compile(rf"[\s*_`(\[]*({fc_ask.CARD_ID})(?!\w)")  # the id a decision line starts with, decorated as decided_line tolerates
+
+def decision_state(body):
+    """What the waiting list follows on the map: ({id: line without its final tag} for every live Decisions so far line whose tag says it
+    is unconfirmed, a recommendation or a ruling), {the id of every live line})."""
+    unconfirmed, live = {}, set()
+    for l in fc_change.decision_lines(body):
+        if m := LINE_ID.match(l):
+            live.add(m.group(1))
+            if (tag := TAG.search(l)) and "unconfirmed" in tag.group(0):
+                unconfirmed[m.group(1)] = TAG.sub("", l)
+    return unconfirmed, live
+
+def open_reader(ident, body):
+    """issue -> the ids open on its map now, None when the map cannot be read. `ident`'s map is the body just written; another map is
+    read from Linear once, and only when the waiting list asks for it."""
+    known = {ident: set(open_questions(body))}
+    def open_on(issue):
+        if issue not in known:
+            other = fc_ask.map_bodies([issue]).get(issue)
+            known[issue] = None if other is None else set(open_questions(other))
+        return known[issue]
+    return open_on
+
 def record_new(body, items, tag):
     """The map with one `- D<n>: <text> (closes <ids>) <tag>` line appended under Decisions so far per (text, closed ids), and the closed
     questions gone from Not yet specified; <n> runs on from the highest D id the section holds, struck lines included. Returns (body, the lines written)."""
@@ -314,7 +338,17 @@ def cmd_decide(a):
             new_body = replace_decision(new_body, rid, change or (cid.split("-")[0] if re.fullmatch(r"C\d+-\d+", cid) else f"replaced by {by}"))
     unplaced = any(APPROVAL.search(t) for t in news) and fc_stale.shaped_text(new_body) != new_body  # an approval ends the shaping: the placeholder goes with it
     write_map(lid, body, fc_stale.shaped_text(new_body) if unplaced else new_body)
+    closed_items, settled = [], sorted(answered | set(accepted))
+    try:  # the waiting list follows the map; it never stops a decision
+        closed_items += fc_waiting.answered(proj, settled, ident)
+        closed_items += fc_waiting.reconcile_decisions(proj, ident, *decision_state(new_body))
+    except Exception as e:  # noqa: BLE001  a waiting-list failure never stops a decision
+        print(f"waiting list not updated ({e})")
     cleared = clear_elsewhere(proj, ident, [i for i in qs if i in answered or i in accepted])
+    try:  # every ask this decide can have changed keeps only what is still open where `report` read it: its own map or the feature's
+        closed_items += fc_waiting.settle_asks(proj, ident, settled, open_reader(ident, new_body), [other for other, _ in cleared])
+    except Exception as e:  # noqa: BLE001  a waiting-list failure never stops a decision
+        print(f"waiting list not updated ({e})")
     if posture and not quote:
         posture["decisions"] += [{"ts": time.strftime("%Y-%m-%d %H:%M:%S"), "text": l} for l in lines]
         fc_core.atomic_write(proj / "results" / "yolo.json", json.dumps(posture, indent=2))
@@ -324,6 +358,8 @@ def cmd_decide(a):
         ids = ", ".join(l.split(":")[0] for l in lines)
         print(f"ruled, not the product owner's: name it `ruled: {ids} <decision>` in the next report; they confirm or overturn it with their words, "
               f"`compose decide --project {proj.name} --quote \"<their words>\" {ids.split(', ')[0]}`, or `--new ... --replaces` (a change of course once tasks are dispatched)")
+    for wid in closed_items:
+        print(f"closed {wid} on the waiting list")
     for other, ids in cleared:
         print(f"cleared {', '.join(ids)} from Not yet specified on {other}")
     if unplaced:

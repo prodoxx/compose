@@ -188,6 +188,13 @@ When the plan turns out to be wrong, the fleet notices and changes it in the ope
 To reverse a change, run `compose change undo C2`.
 It puts back every issue and layer that change touched, and records the undo as a new change of its own.
 
+## What waits on you
+
+One list holds everything that waits on you: an answer to a question, a go for a push, something to attend to (a sign-in, an Allow prompt, a payment halt, a blocked report), and a ruling to confirm.
+Each item stays until the act it asks for is done or the thing it waits on is gone.
+The engineering manager ends its messages with the items that stop work.
+`compose waiting` prints the list, with what stops work first, and `compose ack <id>` marks an item seen: it stays on the list but leaves those message endings.
+
 ## Projects
 
 A project is one feature in its own worktree.

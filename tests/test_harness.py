@@ -1057,7 +1057,8 @@ class CodexGuard(unittest.TestCase):
         in_repo(self, self.repo)
         d = Path(tempfile.mkdtemp())
         (d / "skill").mkdir(); (d / "skill" / "SKILL.md").write_text("v1\n")
-        for p in (mock.patch.object(fc.fc_hooks, "SKILL_DIR", d / "skill"), mock.patch.object(fc.fc_hooks, "SKILL_SEEN", d / "seen")):
+        for p in (mock.patch.object(fc.fc_hooks, "SKILL_DIR", d / "skill"), mock.patch.object(fc.fc_hooks, "SKILL_SEEN", d / "seen"),
+                  mock.patch.object(fc.fc_waiting, "gather", return_value=[])):  # nothing waits: the real list asks git
             p.start(); self.addCleanup(p.stop)
 
     def run_hook(self, cmd, ev, role):

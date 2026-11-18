@@ -186,6 +186,90 @@ class Decide(unittest.TestCase):
         self.assertEqual(maps["NEB-3"], other)
         self.assertIn("cleared Q1 from Not yet specified on NEB-1", out)
 
+    def maps_on_linear(self, maps, outside=()):
+        """Linear with one map per issue: NEB-1 the feature, the others its stories, but for the issues `outside` its tree."""
+        def gql(query, variables):
+            if "issueUpdate" in query:
+                maps[variables["id"]] = variables["in"]["description"]
+                return {"issueUpdate": {"success": True}}
+            if "children" in query:
+                kids = [{"identifier": i, "description": maps[i], "state": {"name": "Todo"}} for i in maps if i != "NEB-1" and i not in outside]
+                return {"issue": {"children": {"nodes": kids, "pageInfo": {"hasNextPage": False, "endCursor": None}}}}
+            i = variables["id"]
+            return {"issue": {"id": i, "identifier": i, "description": maps[i]}}
+        self.linear.gql = gql
+
+    STORY = "## Decisions so far\n\n## Not yet specified\n\n- Q9: Which copy? - Recommendation: short - it is on every screen\n"
+
+    def decide_reading_maps(self, **kw):
+        """A decide that can read the other maps of the workspace, as one with a Linear key does."""
+        with mock.patch.object(fc.fc_config, "LINEAR_KEY", "k"):
+            return self.decide(**kw)
+
+    def test_an_ask_headed_by_a_story_closes_when_its_question_is_decided_on_the_feature_that_holds_it(self):
+        self.maps_on_linear({"NEB-1": MAP, "NEB-12": self.STORY})  # `report` let the ask through: Q2 is open on the feature's map
+        fc.fc_waiting.open_item(self.proj, "answer", "report:shop-orchestrator:t1", "NEB-12: 1 question Q2", ids=["Q2"], issue="NEB-12")
+        out = self.decide_reading_maps(new=["SQLite"], closes=["Q2"], quote="sqlite")
+        self.assertNotIn("cleared", out)  # the story's map never held it
+        self.assertIn("closed WAIT1 on the waiting list", out)
+        self.assertEqual(fc.fc_waiting.load(self.proj)["items"][0]["closed_by"], "decided")
+
+    def test_an_ask_headed_by_a_story_closes_though_it_also_named_a_question_decided_before_it_was_asked(self):
+        self.maps_on_linear({"NEB-1": MAP, "NEB-12": self.STORY})  # Q0 is under Decisions so far on the feature; `report` let the ask through on Q2
+        fc.fc_waiting.open_item(self.proj, "answer", "report:shop-orchestrator:t1", "NEB-12: 2 questions Q0, Q2", ids=["Q0", "Q2"], issue="NEB-12")
+        out = self.decide_reading_maps(new=["SQLite"], closes=["Q2"], quote="sqlite")
+        self.assertIn("closed WAIT1 on the waiting list", out)
+        self.assertEqual(fc.fc_waiting.load(self.proj)["items"][0]["closed_by"], "decided")
+
+    def test_an_ask_on_a_story_the_decide_cleared_keeps_only_what_the_story_still_holds(self):
+        story = MAP.replace("- Q2: Which database?", "- Q9: Which copy?")  # the story lists Q1 as the feature does, and its own Q9
+        self.maps_on_linear({"NEB-1": MAP, "NEB-12": story})
+        fc.fc_waiting.open_item(self.proj, "answer", "report:shop-orchestrator:t1", "NEB-12: 3 questions Q0, Q1, Q9", ids=["Q0", "Q1", "Q9"], issue="NEB-12")
+        out = self.decide_reading_maps(new=["Clerk"], closes=["Q1"], quote="clerk")
+        self.assertIn("cleared Q1 from Not yet specified on NEB-12", out)
+        self.assertEqual(fc.fc_waiting.load(self.proj)["items"][0]["ids"], ["Q9"])
+
+    def test_a_decide_on_a_story_keeps_its_ask_about_a_question_still_open_on_the_feature(self):
+        self.maps_on_linear({"NEB-1": MAP, "NEB-12": self.STORY})
+        fc.fc_waiting.open_item(self.proj, "answer", "report:shop-orchestrator:t1", "NEB-12: 2 questions Q2, Q7", ids=["Q2", "Q7"], issue="NEB-12")
+        out = self.decide_reading_maps(new=["short copy"], closes=["Q9"], quote="short", issue="NEB-12")
+        item = fc.fc_waiting.load(self.proj)["items"][0]
+        self.assertEqual((item["closed_by"], item["ids"]), (None, ["Q2"]))  # Q7 is open on neither map: it goes
+        self.assertNotIn("on the waiting list", out)
+
+    def test_a_decide_on_a_story_that_cannot_read_the_feature_keeps_the_ask_whole(self):
+        self.maps_on_linear({"NEB-1": MAP, "NEB-12": self.STORY})
+        fc.fc_waiting.open_item(self.proj, "answer", "report:shop-orchestrator:t1", "NEB-12: 2 questions Q2, Q7", ids=["Q2", "Q7"], issue="NEB-12")
+        out = self.decide(new=["short copy"], closes=["Q9"], quote="short", issue="NEB-12")  # no key: the feature's map is not read
+        self.assertEqual(fc.fc_waiting.load(self.proj)["items"][0]["ids"], ["Q2", "Q7"])
+        self.assertNotIn("on the waiting list", out)
+
+    def test_an_ask_of_an_issue_outside_the_tree_keeps_its_own_question_of_the_same_id(self):
+        other = MAP.replace("Which database?", "Which queue?")
+        self.maps_on_linear({"NEB-1": MAP, "NEB-50": other}, outside=["NEB-50"])
+        fc.fc_waiting.open_item(self.proj, "answer", "report:shop-planner:t1", "NEB-50: 1 question Q2", ids=["Q2"], issue="NEB-50")
+        out = self.decide_reading_maps(new=["SQLite"], closes=["Q2"], quote="sqlite")
+        self.assertNotIn("on the waiting list", out)
+        self.assertIsNone(fc.fc_waiting.load(self.proj)["items"][0]["closed"])
+
+    def test_an_ask_on_a_story_closes_when_the_feature_decides_its_question(self):
+        maps = {"NEB-1": MAP, "NEB-12": MAP}
+        self.maps_on_linear(maps)
+        fc.fc_waiting.open_item(self.proj, "answer", "report:shop-orchestrator:t1", "NEB-12: 1 question Q1", ids=["Q1"], issue="NEB-12")
+        out = self.decide(new=["Clerk"], closes=["Q1"], quote="clerk")
+        self.assertIn("cleared Q1 from Not yet specified on NEB-12", out)
+        self.assertIn("closed WAIT1 on the waiting list", out)
+        self.assertEqual(fc.fc_waiting.load(self.proj)["items"][0]["closed_by"], "decided")
+
+    def test_a_decide_on_the_asks_own_map_closes_only_the_ids_that_map_no_longer_holds_open(self):
+        maps = {"NEB-1": MAP, "NEB-12": MAP}
+        self.maps_on_linear(maps)
+        fc.fc_waiting.open_item(self.proj, "answer", "report:shop-orchestrator:t1", "NEB-12: 2 questions Q1, Q2", ids=["Q1", "Q2"], issue="NEB-12")
+        out = self.decide(new=["Clerk"], closes=["Q1"], quote="clerk", issue="NEB-12")
+        item = fc.fc_waiting.load(self.proj)["items"][0]
+        self.assertEqual((item["closed_by"], item["ids"]), (None, ["Q2"]))
+        self.assertNotIn("on the waiting list", out)
+
     def test_closing_a_question_that_is_not_open_refuses_naming_the_open_ones(self):
         self.refuses("Q7 is not an open question on NEB-1; the open ones are Q1, Q2", new=["x"], closes=["Q7"], quote="x")
 
@@ -533,6 +617,107 @@ class Decide(unittest.TestCase):
 
     def yolo(self):
         (self.proj / "results" / "yolo.json").write_text(json.dumps({"mode": "yolo", "since": "2026-10-24 08:00:00", "decisions": [], "words": "", "push": False}))
+
+    def waiting(self, kind=None):
+        """The open waiting items of the project, optionally of one kind."""
+        return [i for i in self.fc_waiting.open_items(self.proj) if kind in (None, i["kind"])]
+
+    @property
+    def fc_waiting(self):
+        return fc.fc_waiting
+
+    def keys(self):
+        """key -> what closed it (None while open), for every waiting item of the project."""
+        return {i["key"]: i["closed_by"] for i in self.fc_waiting.load(self.proj)["items"]}
+
+    def test_a_ruling_opens_a_confirm_item(self):
+        self.decide(new=["use SQLite"], closes=["Q2"], ruling=True)
+        (item,) = [i for i in self.waiting() if i["key"] == "decision:NEB-1:D5"]
+        self.assertEqual((item["kind"], item["stops"]), ("confirm", False))
+        self.assertTrue(item["line"].startswith("D5: use SQLite"))
+        self.assertNotIn("compose ruling", item["line"])
+        self.assertEqual(self.keys(), {"decision:NEB-1:Q3": None, "decision:NEB-1:D5": None})  # the map's earlier unconfirmed line too
+
+    def test_a_recommendation_under_away_opens_a_confirm_item_per_line_and_closes_the_asks_it_answers(self):
+        (self.proj / "results" / "yolo.json").write_text(json.dumps({"mode": "away", "decisions": []}))
+        self.fc_waiting.open_item(self.proj, "answer", "report:shop-orchestrator:t1", "NEB-1: 2 questions Q1, Q2", ids=["Q1", "Q2"], issue="NEB-1")
+        out = self.decide(accept_all=True)
+        self.assertEqual(sorted(i["key"] for i in self.waiting("confirm")), ["decision:NEB-1:D5", "decision:NEB-1:D6", "decision:NEB-1:Q3"])
+        self.assertEqual(self.keys()["report:shop-orchestrator:t1"], "decided")
+        self.assertIn("closed WAIT1 on the waiting list", out)
+
+    def test_their_words_on_the_line_close_the_confirm_item(self):
+        self.decide(new=["use SQLite"], closes=["Q2"], ruling=True)
+        out = self.decide("D5", quote="yes")
+        self.assertEqual(self.keys(), {"decision:NEB-1:Q3": None, "decision:NEB-1:D5": "confirmed"})
+        self.assertIn("closed WAIT2 on the waiting list", out)
+
+    def test_the_older_form_with_new_words_confirms_the_line_and_closes_its_item(self):
+        self.decide(new=["use SQLite"], closes=["Q2"], ruling=True)
+        self.decide("Q3: light theme", quote="light, please")
+        self.assertIn(f'- Q3: light theme (product owner, {TODAY}; said: "light, please")', self.linear.body)
+        self.assertEqual(self.keys(), {"decision:NEB-1:Q3": "confirmed", "decision:NEB-1:D5": None})
+
+    def test_a_hand_decorated_id_is_read_as_its_id(self):
+        self.linear.body = MAP.replace("- Q3: dark theme", "- **Q3**: dark theme")
+        self.decide(new=["Clerk"], closes=["Q1"], quote="clerk")
+        self.assertEqual(self.keys(), {"decision:NEB-1:Q3": None})
+        self.decide("Q3", quote="yes, dark")
+        self.assertEqual(self.keys(), {"decision:NEB-1:Q3": "confirmed"})
+
+    def test_replacing_a_ruling_closes_its_item(self):
+        self.decide(new=["use SQLite"], closes=["Q2"], ruling=True)
+        self.decide(new=["use Postgres"], replaces="D5", ruling=True)
+        self.assertEqual(self.keys(), {"decision:NEB-1:Q3": None, "decision:NEB-1:D5": "replaced", "decision:NEB-1:D6": None})
+
+    def test_an_answer_closes_the_ask_that_named_the_question(self):
+        self.fc_waiting.open_item(self.proj, "answer", "report:shop-orchestrator:t1", "NEB-1: 1 question Q1", ids=["Q1"])
+        out = self.decide(new=["Clerk"], closes=["Q1"], quote="clerk")
+        (item,) = [i for i in self.fc_waiting.load(self.proj)["items"] if i["kind"] == "answer"]
+        self.assertEqual((item["closed_by"], item["ids"]), ("decided", []))
+        self.assertIn("closed WAIT1 on the waiting list\n", out)
+        self.assertEqual(self.waiting("answer"), [])
+
+    def test_an_answer_closes_only_the_asks_about_its_own_issue(self):
+        self.fc_waiting.open_item(self.proj, "answer", "report:a:t1", "NEB-1: 1 question Q1", ids=["Q1"], issue="NEB-1")
+        self.fc_waiting.open_item(self.proj, "answer", "report:b:t2", "NEB-9: 1 question Q1", ids=["Q1"], issue="NEB-9")
+        self.decide(new=["Clerk"], closes=["Q1"], quote="clerk")
+        self.assertEqual((self.keys()["report:a:t1"], self.keys()["report:b:t2"]), ("decided", None))
+
+    def test_an_ask_keeps_only_the_questions_still_open_on_the_map(self):
+        self.fc_waiting.open_item(self.proj, "answer", "report:a:t1", "NEB-1: 2 questions Q1, Q7", ids=["Q1", "Q7"], issue="NEB-1")  # Q7 left the map
+        self.fc_waiting.open_item(self.proj, "answer", "report:b:t2", "NEB-1: 2 questions Q2, Q8", ids=["Q2", "Q8"], issue="NEB-1")
+        self.decide(new=["Clerk"], closes=["Q1"], quote="clerk")
+        items = {i["key"]: i for i in self.fc_waiting.load(self.proj)["items"]}
+        self.assertEqual(items["report:a:t1"]["closed_by"], "decided")
+        self.assertEqual((items["report:b:t2"]["closed_by"], items["report:b:t2"]["ids"]), (None, ["Q2"]))
+
+    def test_a_waiting_list_that_cannot_be_written_does_not_stop_the_decision(self):
+        with mock.patch.object(fc.fc_waiting, "answered", side_effect=OSError("disk")):
+            out = self.decide(new=["Clerk"], closes=["Q1"], quote="clerk")
+        self.assertIn("- D5: Clerk (closes Q1)", self.linear.body)
+        self.assertIn("waiting list not updated (disk)", out)
+        self.assertIn("recorded on NEB-1: D5: Clerk", out)
+
+    def test_a_damaged_waiting_list_of_any_kind_does_not_stop_the_decision(self):
+        with mock.patch.object(fc.fc_waiting, "answered", side_effect=TypeError("ids")):
+            out = self.decide(new=["Clerk"], closes=["Q1"], quote="clerk")
+        self.assertIn("- D5: Clerk (closes Q1)", self.linear.body)
+        self.assertIn("waiting list not updated (ids)", out)
+        self.assertIn("recorded on NEB-1: D5: Clerk", out)
+
+    def test_an_accepted_question_that_replaces_a_line_closes_that_lines_item(self):
+        self.change_map()
+        self.fc_waiting.open_item(self.proj, "confirm", "decision:NEB-1:D4", "D4: one store")
+        self.decide(accept_all=True, quote="all as you say")
+        self.assertEqual(self.keys()["decision:NEB-1:D4"], "replaced")
+
+    def test_an_old_card_answer_that_strikes_a_line_closes_that_lines_item(self):
+        self.linear.body = OLD_CARDS.replace("## Out of scope", self.OLD_CHANGE_CARD)
+        self.fc_waiting.open_item(self.proj, "confirm", "decision:NEB-1:Q0", "Q0: Stripe")
+        self.decide("C1-2: B", quote="paddle", change="C1")
+        (item,) = self.fc_waiting.load(self.proj)["items"]
+        self.assertEqual(item["closed_by"], "replaced")
 
     def refuses(self, want, *a, **kw):
         before = self.linear.body

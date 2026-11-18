@@ -111,12 +111,18 @@ class Yolo(unittest.TestCase):
         self.yolo("decided", "provider?: Stripe")
         for tid in ("001", "002", "003"):
             (self.proj / "results" / f"{tid}.json").write_text("{}")
-        crew = {ORCH: [{"at": "2025-12-31 10:00:00", "state": "needs-user", "message": "before yolo"},
-                       {"at": stamp(), "state": "needs-user", "message": "delete prod data?"}],
-                "hw-q": [{"at": stamp(), "state": "blocked", "message": "answered later"},
-                         {"at": stamp(), "state": "working", "message": "going again"}]}
-        s = snap(tasks={"001": "passed", "002": "failed", "003": "rejected_size"}, crew=crew,
-                 verify=[int(time.time()), False], halt=["2026-01-01 10:00:00", "openrouter", 2])
+        crew = self.proj / "results" / "crew"
+        crew.mkdir()
+        (crew / "hw-q.json").write_text(json.dumps({"name": "hw-q", "reports_to": "manager"}))
+        reports = {ORCH: [{"at": "2025-12-31 10:00:00", "state": "needs-user", "message": "before yolo"},
+                          {"at": stamp(), "state": "needs-user", "message": "delete prod data?"}],
+                   "hw-q": [{"at": stamp(), "state": "blocked", "message": "answered later"},
+                            {"at": stamp(), "state": "working", "message": "going again"}]}
+        for name, rows in reports.items():
+            (crew / f"{name}.status").write_text("".join(json.dumps(r) + "\n" for r in rows))
+        (self.proj / "results" / "resume.json").write_text(json.dumps({"halted_at": "2026-01-01 10:00:00", "provider": "openrouter", "remaining": ["002", "003"]}))
+        (self.proj / "results" / "verify.json").write_text(json.dumps({"passed": False}))
+        s = snap(tasks={"001": "passed", "002": "failed", "003": "rejected_size"}, verify=[int(time.time()), False])
         out = self.yolo("off", snapshot=s)
         heads = ["Your instructions", "Decided for you", "To confirm", "Waiting on you", "Tried and failed", "Done", "Cost"]
         pos = [out.index(h) for h in heads]
@@ -131,14 +137,48 @@ class Yolo(unittest.TestCase):
         self.assertNotIn("before yolo", waiting)
         self.assertNotIn("answered later", waiting)
         self.assertIn("openrouter", waiting)
-        self.assertIn("verify FAIL", waiting)
         failed = sec("Tried and failed")
+        self.assertIn("verify FAIL", failed)
         self.assertIn("002", failed)
         self.assertIn("003", failed)
         self.assertNotIn("001", failed)
         self.assertIn("001", sec("Done"))
         self.assertFalse(self.file.exists())
         self.assertTrue((self.proj / "results" / "yolo-2026-01-01T090000.json").exists())
+
+    def sections(self, y, snapshot=None):
+        """digest_sections of the project as {heading: lines}, read from disk with the host, git and the ledger kept out."""
+        with mock.patch.object(fc.fc_watch, "watch_snapshot", return_value=snapshot or snap()), mock.patch.object(fc.fc_worktree, "stack_order", return_value=[]), \
+                mock.patch.object(fc.fc_cost, "rows", return_value=[]), mock.patch.object(fc.fc_waiting.fc_tasks, "push_stance", return_value="ask"):
+            return dict(fc.fc_yolo.digest_sections(Path("."), self.proj, y))
+
+    def test_waiting_on_you_lists_what_stops_work_and_only_the_confirms_no_other_section_shows(self):
+        long = "D7: " + "a long decision " * 10
+        y = {"mode": "away", "since": stamp(), "words": "", "push": False,
+             "decisions": [{"ts": stamp(), "text": f"D5: Clerk (closes Q1) (away recommendation, unconfirmed, 2026-11-17)"},
+                           {"ts": stamp(), "text": f"{' '.join(long.split())} (away recommendation, unconfirmed, 2026-11-17)"}]}
+        with mock.patch("time.strftime", return_value="2020-01-01 00:00:00"):  # opened long before the posture began: still listed
+            fc.fc_waiting.open_item(self.proj, "confirm", "decision:NEB-1:D5", "D5: Clerk (closes Q1)")  # WAIT1, under Decided for you already
+            fc.fc_waiting.open_item(self.proj, "confirm", "decision:NEB-1:D6", "D6: dark theme")  # WAIT2, a ruling no other section names
+            fc.fc_waiting.open_item(self.proj, "answer", "report:hw-orchestrator:t", "which db?", "SQLite", ids=["Q1"])  # WAIT3, open until Q1 is decided
+            fc.fc_waiting.open_item(self.proj, "review", "review:NEB-1", "review the plan")  # WAIT4
+            fc.fc_waiting.open_item(self.proj, "confirm", "decision:NEB-1:D7", long)  # WAIT5, its line cut short
+        (self.proj / "results" / "resume.json").write_text(json.dumps({"halted_at": "t", "provider": "openrouter", "remaining": ["002", "003"]}))
+        self.assertEqual(self.sections(y)["Waiting on you"], ["WAIT3 answer: which db?", "WAIT6 attend: payment halt at openrouter: 2 task(s) left (top up, then compose resume)",
+                                                             "WAIT2 confirm: D6: dark theme"])
+
+    def test_the_morning_digest_shows_a_failed_verify_as_failed_and_not_as_waiting(self):
+        import fc_digest
+        since = time.time() - 60
+        self.file.write_text(json.dumps({"mode": "away", "since": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(since)), "decisions": [], "words": "", "push": False}))
+        (self.proj / "results" / "verify.json").write_text(json.dumps({"passed": False, "head": "abc"}))
+        with mock.patch.object(fc.fc_core, "all_projects", return_value={"hw": (self.proj.parent, self.proj)}), \
+                mock.patch.object(fc.fc_watch, "watch_snapshot", return_value=snap(verify=[int(time.time()), False])), \
+                mock.patch.object(fc.fc_worktree, "stack_order", return_value=[]), mock.patch.object(fc.fc_cost, "rows", return_value=[]), \
+                mock.patch.object(fc.fc_waiting.fc_tasks, "push_stance", return_value="ask"):
+            confirm, waiting = fc_digest._project_items(".", "hw", since)
+        self.assertEqual(waiting, ["Failed or stuck: hw: verify FAIL: read results/verify.json"])
+        self.assertEqual(confirm, [])
 
     def test_decided_points_at_compose_decide_which_tags_the_map_line(self):
         self.yolo("go")

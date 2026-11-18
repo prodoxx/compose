@@ -1,6 +1,6 @@
 import argparse, fcntl, json, os, re, sys, time
 from pathlib import Path
-import fc_core, fc_proc, fc_tasks, fc_herdr, fc_fleet, fc_change, fc_reports, fc_crew, fc_hooks, fc_load, fc_status, fc_briefs, fc_sleep, fc_stall, fc_shed, fc_checks, fc_manager
+import fc_core, fc_proc, fc_tasks, fc_herdr, fc_fleet, fc_change, fc_reports, fc_crew, fc_hooks, fc_load, fc_status, fc_briefs, fc_sleep, fc_stall, fc_shed, fc_checks, fc_manager, fc_waiting
 
 
 YOLO_HINT = "  {m}=on (answer with the recommendation; log it: compose {m} decided ...)"
@@ -514,13 +514,12 @@ def cmd_watch(a, rewake=False):
                     stalls += watch_stalls(proj, after, limit, key=key, woke=woke, agent_limit=cfg.get("agent_stall_seconds"))
                     ev = look(after, stalls)
                 fc_crew.manager_attention(proj, ev)
+                if not os.environ.get("COMPOSE_ROLE"):
+                    fc_waiting.sync(proj, ev)  # the list is brought up to date by a wake that is not a rewake too
                 if rewake:
                     emit(WOKE)
-                    try:
-                        if note := fc_hooks.skill_notice(a.session):  # a wake is a prompt the UserPromptSubmit hook never sees
-                            emit(note)
-                    except Exception:
-                        pass
+                    for note in fc_hooks.wake_notes(a.session, repo):  # a wake is a prompt the UserPromptSubmit hook never sees
+                        emit(note)
                 for line in ev:
                     emit(f"[{fc_core.now()}] {line}")
                 watch_save(proj, key, base=after)  # after printing: a watch killed in between reports it again rather than never

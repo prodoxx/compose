@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fc_cost, fc_mcp  # noqa: E402
-import fc_core, fc_proc, fc_readguard, fc_libapi, fc_green, fc_gate, fc_config, fc_compact, fc_transcript, fc_snapshot, fc_compactlog, fc_tasks, fc_linear, fc_linear_cmd, fc_prd, fc_delivery, fc_factorystate, fc_factoryturn, fc_lead, fc_factory, fc_claude, fc_models, fc_route, fc_quick, fc_herdr, fc_fleet, fc_worktree, fc_layers, fc_blockers, fc_stack, fc_change, fc_frame0, fc_f0pages, fc_ask, fc_decide, fc_hooks, fc_pin, fc_reports, fc_manager, fc_compactor, fc_crew, fc_toolbug, fc_init, fc_clean, fc_framelink, fc_figmatree, fc_figma, fc_briefs, fc_buildercheck, fc_reconcile, fc_format, fc_implement, fc_shrink, fc_jev, fc_accept, fc_fixround, fc_layergate, fc_detach, fc_verify, fc_taskreview, fc_ship, fc_prove, fc_run, fc_status, fc_tiers, fc_tierpin, fc_budget, fc_spec, fc_watch, fc_rewake, fc_history, fc_yolo, fc_bench, fc_setup, fc_update, fc_readiness, fc_retro, fc_reader, fc_stages  # noqa: E402
+import fc_core, fc_proc, fc_readguard, fc_libapi, fc_green, fc_gate, fc_config, fc_compact, fc_transcript, fc_snapshot, fc_compactlog, fc_tasks, fc_linear, fc_linear_cmd, fc_prd, fc_delivery, fc_factorystate, fc_factoryturn, fc_lead, fc_factory, fc_claude, fc_models, fc_route, fc_quick, fc_herdr, fc_fleet, fc_worktree, fc_layers, fc_blockers, fc_stack, fc_change, fc_frame0, fc_f0pages, fc_ask, fc_decide, fc_hooks, fc_pin, fc_reports, fc_manager, fc_compactor, fc_crew, fc_toolbug, fc_init, fc_clean, fc_framelink, fc_figmatree, fc_figma, fc_briefs, fc_buildercheck, fc_reconcile, fc_format, fc_implement, fc_shrink, fc_jev, fc_accept, fc_fixround, fc_layergate, fc_detach, fc_verify, fc_taskreview, fc_ship, fc_prove, fc_run, fc_status, fc_tiers, fc_tierpin, fc_budget, fc_spec, fc_watch, fc_rewake, fc_history, fc_yolo, fc_bench, fc_setup, fc_update, fc_readiness, fc_retro, fc_reader, fc_stages, fc_waiting, fc_show  # noqa: E402
 
 DETACHED = fc_detach.DETACHED
 
@@ -130,6 +130,9 @@ def main():
                             ("stages", fc_stages.cmd_stages, "follow a verify's stages from a pane of the Herdr app or Rex, where no pane per stage exists: compose opens one itself in the project's `verify` tab (hosts.md)"),
                             ("decisions", fc_decide.cmd_decisions, "print the project's pending-decisions page: every open question with its recommendation and when it was asked, then the decisions to confirm; --issue picks another map"),
                             ("decide", fc_decide.cmd_decide, "record the product owner's decisions on the map (--new \"<decision>\" --closes Q1, --drop Q2, or --accept-all) with their words attached: --quote \"<what they said>\"; without it, under away or yolo as unconfirmed, or with --ruling as compose's own call on an easily reversible decision; it prints the open questions left"),
+                            ("waiting", fc_waiting.cmd_waiting, "print what waits on the product owner across the projects of this session, at most seven lines (--all prints every item, --footer the session footer); `waiting no WAIT<n> --quote \"<their words>\"` answers a go item with no"),
+                            ("show", fc_show.cmd_show, "print the saved output of the last run or verify (`show run|verify`), or with --line one summary line of it"),
+                            ("ack", fc_waiting.cmd_ack, "mark a waiting item seen: it stays on the list until it is closed and leaves the footer; a report's pane stops showing blocked"),
                             ("reconcile", fc_reconcile.cmd_reconcile, "the one-time cleanup of a messy Linear project: list | check --file | show | apply --go | notices"),
                             ("crew", fc_lead.cmd_crew, "start | list | focus | stop teammates, the sessions in the project's space of its terminal host (the team lead, the architect, helpers); restart the team lead fresh from its handoff; prompt | read | keys one teammate (or any agent by --agent), the same command in herdr, the Herdr app and Rex"),
                             ("report", fc_crew.cmd_report, "a teammate session reports up: working | needs-user | blocked | done, with one line"),
@@ -342,6 +345,16 @@ def main():
             s.add_argument("action", choices=("list", "check", "show", "apply", "notices"))
             s.add_argument("--file", help="check: the sheet of how every open ticket is sorted (outside the repo)")
             s.add_argument("--go", help="apply: the product owner's words, verbatim")
+        if name == "waiting":
+            s.add_argument("words", nargs="*", help="`no WAIT<n>`: answer a go item with no (needs --quote); nothing: print the list")
+            s.add_argument("--footer", action="store_true", help="print the session footer (nothing unless an unseen item stops work)")
+            s.add_argument("--all", action="store_true", help="print every item, not the first seven lines")
+            s.add_argument("--quote", help="no: what the product owner said, verbatim")
+        if name == "show":
+            s.add_argument("what", choices=("run", "verify"), help="the last run or the last verify")
+            s.add_argument("--line", action="store_true", help="print one summary line instead of the saved output")
+        if name == "ack":
+            s.add_argument("id", help="the waiting item, WAIT<n>")
         if name == "decide":
             s.add_argument("answers", nargs="*", help='a bare id ("Q3", "D2") confirms the line already recorded; the old "Q1: A" form still answers an open question')
             s.add_argument("--new", action="append", default=[], help="a decision, in a sentence: recorded as the issue's next D<n> under Decisions so far; repeat for more")

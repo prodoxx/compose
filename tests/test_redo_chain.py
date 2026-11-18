@@ -98,6 +98,20 @@ class KeepFinishedLayers(unittest.TestCase):
             fc.fc_run.cmd_resume(mock.Mock(repo=str(self.repo), project="p"))
         self.assertIn("resume 2 task(s): 002, 004", said)
 
+    def test_a_resume_records_its_pid_in_the_halt_so_the_halt_waits_on_no_one_while_it_runs(self):
+        tasks = [{"id": "002", "title": "B", "files": [], "protected": [], "test": "true", "body": "", "model": "m"}]
+        (self.proj / "results" / "tasks.json").write_text(json.dumps({"feature": {}, "tasks": tasks}))
+        halt = self.proj / "results" / "resume.json"
+        halt.write_text(json.dumps({"command": "run", "remaining": ["002"], "halted_at": "x", "provider": "p", "args": {"attempts": 3, "parallel": 3, "trunk": None, "no_stack": False}}))
+        os.utime(halt, (1700000000, 1700000000))
+        seen = []
+        with mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), mock.patch.object(fc.fc_core, "say"), \
+             mock.patch.object(fc.fc_run, "run_tasks", lambda repo, proj, ts, a: seen.append(json.loads(halt.read_text()))):
+            fc.fc_run.cmd_resume(mock.Mock(repo=str(self.repo), project="p", parallel=None))
+        self.assertEqual(seen[0]["resuming"], os.getpid())
+        self.assertEqual(halt.stat().st_mtime, 1700000000.0)  # still the halt's own time: the night reads a newer file as a new halt
+        self.assertEqual((seen[0]["provider"], seen[0]["remaining"]), ("p", ["002"]))
+
 
 class RunDirtyCheck(unittest.TestCase):
     """`run` and `resume` need the tests committed, so they refuse a dirty project worktree and name what is dirty. A graph

@@ -1,7 +1,7 @@
 """What `compose report` records besides the reports themselves: the refusals (a report compose would not send, so the watch can say
 a teammate tried and why it failed) and the test writer's auto-collect, which runs once the turn that reported `test ready` has ended."""
 import json, re, shutil, subprocess, sys, time
-import fc_core, fc_herdr, fc_fleet
+import fc_core, fc_herdr, fc_fleet, fc_ask
 
 
 def reports_dir(proj):
@@ -11,7 +11,10 @@ def reports_dir(proj):
 
 def write_refusal(proj, name, state, message, why):
     """The record of a report compose did not send: the watch turns it into an `event crew=<name> report=refused` so the team lead
-    learns a teammate tried, and why it failed, instead of waiting on a report that never arrived."""
+    learns a teammate tried, and why it failed, instead of waiting on a report that never arrived. A needs-user line refused for its
+    length is not recorded: the reporter reads how to shorten it and reports again, so it wakes no one as urgent."""
+    if str(why).startswith(fc_ask.TOO_LONG):
+        return
     with open(reports_dir(proj) / f"{name}.refused", "a") as f:
         f.write(json.dumps({"at": time.strftime("%Y-%m-%d %H:%M:%S"), "state": state, "message": message, "why": why}) + "\n")
 

@@ -298,5 +298,5 @@ route: check-only
   Draw Frame0 in `compose frame0 draw` lists, a page per call, never shape by shape; reorder, delete, and lint pages with `compose frame0 move|delete|links|lint`.
   A harness subagent gets a named model (`model: "sonnet"` for searches and fixes), never the session's by inheritance.
 - Build a trail graph in the repo (`trail build .`, git-ignored). The CLI prepends a `trail ask` context pack with exact `file:line` and source to every implementer and fixer prompt, and tells the model to use `trail ask` and `trail callers` instead of exploring. Without trail the fast model reads whole files.
-- Always show timing and cost.
-  Paste the CLI's `run start` and `run done` lines, per-task table, `verify` stage lines, and final `cost` line into your report.
+- Always show timing and cost, in one line each.
+  Paste `compose show run --line` and `compose show verify --line` into your report; the per-task table, the stage lines and the cost ledger stay behind `compose show run|verify`.
