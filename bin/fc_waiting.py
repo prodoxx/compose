@@ -113,29 +113,48 @@ def open_items(proj):
     """The open items, the ones that stop work first, then the oldest opened, then the lowest id."""
     return sorted((i for i in load(proj)["items"] if _is_open(i)), key=_order)
 
-def answered(proj, ids, issue=None, still_open=None):
-    """Take `ids` off every open answer item of `issue` (and every one whose issue is not known), and with `still_open` (the ids still under
-    Not yet specified on that issue's map) every id of an ask of that issue that is not among them (an ask whose issue is not known loses only
-    `ids`); an item that had ids and has none left is closed as `decided`.
-    Returns the ids of the items closed."""
-    gone, closed, changed = {str(i) for i in ids}, [], False
+def _drop_ids(proj, keep):
+    """Rewrite the ids of every open ask that names any: `keep(item)` is the ids it still holds, or None to leave it as it is. An ask
+    that has none left is closed as `decided`. Returns the ids of the items closed."""
+    closed, changed = [], False
     with _locked(proj):
         data = load(proj)
         for item in data["items"]:
             have = item.get("ids")
-            if item.get("kind") != "answer" or not _is_open(item) or not have or item.get("issue") not in (issue, None):
+            if item.get("kind") != "answer" or not _is_open(item) or not have or (kept := keep(item)) is None or kept == have:
                 continue
-            sweep = still_open is not None and issue is not None and item.get("issue") == issue  # never an ask whose map is not known
-            keep = [i for i in have if i not in gone and (not sweep or i in still_open)]
-            if keep == have:
-                continue
-            item["ids"], changed = keep, True
-            if not item["ids"]:
+            item["ids"], changed = kept, True
+            if not kept:
                 item["closed"], item["closed_by"] = _stamp(), "decided"
                 closed.append(item["id"])
         if changed:
             _save(proj, data)
     return closed
+
+def answered(proj, ids, issue=None):
+    """Take `ids` off every open ask of `issue` (and every one whose issue is not known); an ask that has none left is closed as
+    `decided`. Returns the ids of the items closed."""
+    gone = {str(i) for i in ids}
+    return _drop_ids(proj, lambda item: [i for i in item["ids"] if i not in gone] if item.get("issue") in (issue, None) else None)
+
+def settle_asks(proj, issue, ids, open_on):
+    """After a decide wrote the map of `issue` and settled the question ids `ids` (they are off every map of the feature's tree by now):
+    an open ask keeps a question only while it is open where `report` read it when it let the ask through, on the map of the ask's own
+    issue or on the feature's. `open_on(issue)` is the ids open on a map now, None when it cannot be read: what cannot be known stays.
+    An ask of `issue` loses `ids` and every id open on neither map. An ask of another issue loses the `ids` its own map does not hold
+    open (the feature's are settled, whatever a read that is behind the write says); what it names besides is not this decide's to
+    judge, and its map is not read. An ask whose issue is not known is left to `answered`. Returns the ids of the items closed."""
+    gone, feature = {str(i) for i in ids}, _feature(proj)
+    def waits(i, maps):
+        return any((held := open_on(m)) is None or i in held for m in maps)
+    def keep(item):
+        own = item.get("issue")
+        if own is None:
+            return None
+        if own == issue:
+            return [i for i in item["ids"] if i not in gone and waits(i, [own] + ([feature] if feature and feature != own else []))]
+        return [i for i in item["ids"] if i not in gone or waits(i, [own])]
+    return _drop_ids(proj, keep)
 
 def reconcile_decisions(proj, ident, unconfirmed, live):
     """Bring the confirm items of one map in line with its Decisions so far: open a `confirm` item (key `decision:<ident>:<id>`) for each
@@ -186,15 +205,18 @@ def _crew_record(proj, name):
         raise ValueError(f"crew record {name}: not an object")
     return record
 
-def _issue(proj, message):
-    """The issue an ask is about: the id at the head of its message, else the project's feature (linear.json), else None."""
-    if head := fc_ask.ASK_HEAD.match(message):
-        return head[2]
+def _feature(proj):
+    """The project's feature issue (linear.json); None when there is none or the file cannot be read."""
     try:
         meta = json.loads((proj / "linear.json").read_text())
     except (OSError, ValueError):
         return None
     return (meta.get("feature") or None) if isinstance(meta, dict) else None
+
+def _issue(proj, message):
+    """The issue an ask is about: the id at the head of its message, else the project's feature (linear.json), else None."""
+    head = fc_ask.ASK_HEAD.match(message)
+    return head[2] if head else _feature(proj)
 
 def _report(proj, name, at, state, message):
     """The condition one report makes: an answer for a needs-user, an attend for a blocked, when the team lead wrote it or its crew record says

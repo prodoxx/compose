@@ -64,13 +64,56 @@ class Store(unittest.TestCase):
     def test_an_ask_of_no_known_issue_loses_only_the_ids_a_decide_settled(self):
         fc_waiting.open_item(self.proj, "answer", "report:a:t1", "which ones? 2 questions Q1, Q2", ids=["Q1", "Q2"], issue=None)
         fc_waiting.open_item(self.proj, "answer", "report:b:t2", "NEB-1: 2 questions Q1, Q2", ids=["Q1", "Q2"], issue="NEB-1")
-        self.assertEqual(fc_waiting.answered(self.proj, ["Q1"], "NEB-9", still_open={"Q7"}), [])  # an unrelated map
-        items = {i["key"]: i for i in fc_waiting.load(self.proj)["items"]}
-        self.assertEqual((items["report:a:t1"]["ids"], items["report:a:t1"]["closed"]), (["Q2"], None))
-        self.assertEqual(items["report:b:t2"]["ids"], ["Q1", "Q2"])
-        self.assertEqual(fc_waiting.answered(self.proj, [], "NEB-1", still_open={"Q2"}), [])  # the sweep reaches only that map's own asks
-        items = {i["key"]: i for i in fc_waiting.load(self.proj)["items"]}
-        self.assertEqual((items["report:a:t1"]["ids"], items["report:b:t2"]["ids"]), (["Q2"], ["Q2"]))
+        self.assertEqual(fc_waiting.answered(self.proj, ["Q1"], "NEB-9"), [])  # an unrelated map
+        self.assertEqual(self.ids(), {"report:a:t1": ["Q2"], "report:b:t2": ["Q1", "Q2"]})
+        self.assertEqual(fc_waiting.settle_asks(self.proj, "NEB-1", [], {"NEB-1": {"Q2"}}.get), [])  # the sweep reaches only that map's own asks
+        self.assertEqual(self.ids(), {"report:a:t1": ["Q2"], "report:b:t2": ["Q2"]})
+
+    def ids(self):
+        """key -> the question ids each ask still holds."""
+        return {i["key"]: i["ids"] for i in fc_waiting.load(self.proj)["items"]}
+
+    def story_ask(self, ids, issue="NEB-2", feature="NEB-1"):
+        """An ask headed by a story of the feature: `report` let it through on the story's map or the feature's."""
+        fc_waiting.open_item(self.proj, "answer", "report:a:t1", f"{issue}: questions {', '.join(ids)}", ids=ids, issue=issue)
+        (self.proj / "linear.json").write_text(json.dumps({"feature": feature}))
+
+    def test_an_ask_of_the_decided_map_keeps_a_question_that_is_open_on_the_feature(self):
+        self.story_ask(["Q2", "Q7"])  # Q2 is written on the feature only, Q7 on no map any more
+        self.assertEqual(fc_waiting.settle_asks(self.proj, "NEB-2", [], {"NEB-2": set(), "NEB-1": {"Q2"}}.get), [])
+        self.assertEqual(self.ids(), {"report:a:t1": ["Q2"]})
+        self.assertEqual(fc_waiting.settle_asks(self.proj, "NEB-2", [], {"NEB-2": set(), "NEB-1": set()}.get), ["W1"])  # the feature settled it since
+
+    def test_an_ask_of_the_decided_map_loses_what_was_settled_though_a_late_read_of_the_feature_still_shows_it(self):
+        self.story_ask(["Q2", "Q3"])
+        self.assertEqual(fc_waiting.settle_asks(self.proj, "NEB-2", ["Q2"], {"NEB-2": set(), "NEB-1": {"Q2", "Q3"}}.get), [])
+        self.assertEqual(self.ids(), {"report:a:t1": ["Q3"]})
+
+    def test_an_ask_of_the_decided_map_keeps_what_a_feature_that_cannot_be_read_may_hold(self):
+        self.story_ask(["Q2"])
+        self.assertEqual(fc_waiting.settle_asks(self.proj, "NEB-2", [], {"NEB-2": set()}.get), [])
+        self.assertEqual(self.ids(), {"report:a:t1": ["Q2"]})
+
+    def test_an_ask_of_another_issue_closes_when_the_question_it_names_was_only_on_the_decided_map(self):
+        self.story_ask(["Q2"])  # the story's own map never held Q2: the ask was let through on the feature's
+        self.assertEqual(fc_waiting.answered(self.proj, ["Q2"], "NEB-1"), [])  # not an ask of that map
+        self.assertEqual(fc_waiting.settle_asks(self.proj, "NEB-1", ["Q2"], {"NEB-1": set(), "NEB-2": set()}.get), ["W1"])
+        self.assertEqual(fc_waiting.load(self.proj)["items"][0]["closed_by"], "decided")
+
+    def test_an_ask_of_another_issue_keeps_a_question_its_own_map_still_holds(self):
+        self.story_ask(["Q1", "Q2"], issue="NEB-9")  # every map starts at Q1: NEB-9's Q1 is another question
+        self.assertEqual(fc_waiting.settle_asks(self.proj, "NEB-1", ["Q1"], {"NEB-1": {"Q2"}, "NEB-9": {"Q1", "Q2"}}.get), [])
+        self.assertEqual(self.ids(), {"report:a:t1": ["Q1", "Q2"]})
+        self.assertEqual(fc_waiting.settle_asks(self.proj, "NEB-1", ["Q1"], {"NEB-1": {"Q2"}}.get), [])  # a map that cannot be read: it stays
+        self.assertEqual(self.ids(), {"report:a:t1": ["Q1", "Q2"]})
+        self.assertEqual(fc_waiting.settle_asks(self.proj, "NEB-1", ["Q1"], {"NEB-1": {"Q2"}, "NEB-9": {"Q2"}}.get), [])  # only the settled id is looked at
+        self.assertEqual(self.ids(), {"report:a:t1": ["Q2"]})
+
+    def test_an_ask_of_another_issue_that_names_nothing_settled_is_not_read(self):
+        self.story_ask(["Q5"], issue="NEB-9")
+        read = []
+        self.assertEqual(fc_waiting.settle_asks(self.proj, "NEB-1", ["Q1"], lambda issue: read.append(issue) or set()), [])
+        self.assertEqual((read, self.ids()), ([], {"report:a:t1": ["Q5"]}))
 
     def test_an_unreadable_file_reads_as_empty_and_the_next_write_replaces_it(self):
         self.file.parent.mkdir(parents=True)

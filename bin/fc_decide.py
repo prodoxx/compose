@@ -215,6 +215,17 @@ def decision_state(body):
                 unconfirmed[m.group(1)] = TAG.sub("", l)
     return unconfirmed, live
 
+def open_reader(ident, body):
+    """issue -> the ids open on its map now, None when the map cannot be read. `ident`'s map is the body just written; another map is
+    read from Linear once, and only when the waiting list asks for it."""
+    known = {ident: set(open_questions(body))}
+    def open_on(issue):
+        if issue not in known:
+            other = fc_ask.map_bodies([issue]).get(issue)
+            known[issue] = None if other is None else set(open_questions(other))
+        return known[issue]
+    return open_on
+
 def record_new(body, items, tag):
     """The map with one `- D<n>: <text> (closes <ids>) <tag>` line appended under Decisions so far per (text, closed ids), and the closed
     questions gone from Not yet specified; <n> runs on from the highest D id the section holds, struck lines included. Returns (body, the lines written)."""
@@ -327,15 +338,16 @@ def cmd_decide(a):
             new_body = replace_decision(new_body, rid, change or (cid.split("-")[0] if re.fullmatch(r"C\d+-\d+", cid) else f"replaced by {by}"))
     unplaced = any(APPROVAL.search(t) for t in news) and fc_stale.shaped_text(new_body) != new_body  # an approval ends the shaping: the placeholder goes with it
     write_map(lid, body, fc_stale.shaped_text(new_body) if unplaced else new_body)
-    closed_items = []
+    closed_items, settled = [], sorted(answered | set(accepted))
     try:  # the waiting list follows the map; it never stops a decision
-        closed_items += fc_waiting.answered(proj, sorted(answered | set(accepted)), ident, set(open_questions(new_body)))
+        closed_items += fc_waiting.answered(proj, settled, ident)
         closed_items += fc_waiting.reconcile_decisions(proj, ident, *decision_state(new_body))
     except Exception as e:  # noqa: BLE001  a waiting-list failure never stops a decision
         print(f"waiting list not updated ({e})")
     cleared = clear_elsewhere(proj, ident, [i for i in qs if i in answered or i in accepted])
-    try:  # an ask about another map that held these questions closes with them
+    try:  # an ask about another map that held these questions closes with them, and every ask keeps only what is still open where it was read
         closed_items += [w for other, ids in cleared for w in fc_waiting.answered(proj, ids, other)]
+        closed_items += fc_waiting.settle_asks(proj, ident, settled, open_reader(ident, new_body))
     except Exception as e:  # noqa: BLE001  a waiting-list failure never stops a decision
         print(f"waiting list not updated ({e})")
     if posture and not quote:
