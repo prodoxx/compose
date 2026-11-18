@@ -1,11 +1,11 @@
 import hashlib, json, os, re, subprocess, sys, time
 from pathlib import Path
 from types import SimpleNamespace
-import fc_core, fc_tasks, fc_linear, fc_linear_cmd, fc_plan, fc_change, fc_models, fc_claude, fc_config
+import fc_core, fc_tasks, fc_linear, fc_linear_cmd, fc_plan, fc_change, fc_stale, fc_models, fc_claude, fc_config
 
 DEEP_DIVE = "deep-dive"
 MAX_CRITERIA = 5
-TAG_RE = re.compile(r"\(readiness check, \d{4}-\d{2}-\d{2}\)")
+TAG_RE = fc_stale.READINESS_TAG
 
 
 class NotAStory(Exception):
@@ -16,7 +16,7 @@ READINESS_TREE = """query($id: String!) { issue(id: $id) { id identifier title d
   children { nodes { identifier title state { name type } description
     inverseRelations(first: 50) { nodes { type issue { identifier state { name } labels { nodes { name } } parent { identifier parent { identifier } } } } } } }
   inverseRelations(first: 250) { nodes { type issue { identifier state { name } labels { nodes { name } } parent { identifier } } } }
-  project { documents(first: 250) { nodes { title content url } } }
+  project { documents(first: 250) { nodes { title content url updatedAt } } }
   parent { id identifier title description labels { nodes { name } }
     parent { id identifier title description labels { nodes { name } } } } } }"""
 
@@ -74,6 +74,8 @@ def gates(chain):
             add("tech doc", iid, f"{iid}'s tech doc is not linked under ## Tech doc.")
         if not any(f"the tech doc on {iid} is approved" in l for l in fc_change.decision_lines(desc)):
             add("tech doc", iid, f"{iid}'s tech doc is not approved yet.")
+        if behind := fc_stale.tech_doc_behind(iid, desc, chain["docs"]):  # a decision recorded after it was written may have outdated it
+            add("tech doc", iid, behind)
     return out
 
 

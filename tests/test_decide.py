@@ -123,6 +123,26 @@ class Decide(unittest.TestCase):
         self.assertIn("no open questions: Not yet specified is empty", self.decisions())
         self.assertNotIn("brainstorming style", self.decisions())
 
+    def test_an_approval_takes_the_placeholder_off_the_ticket_and_any_other_decision_leaves_it(self):
+        # a story went to In Review still opening with "Not shaped yet. Needs a deep dive.": nobody came back to remove the line
+        placeheld = ('Not shaped yet. Needs a deep dive.\nWhy the shop.\n\n## Tech doc\n\nhttps://linear.app/d/1\n\n## Decisions so far\n\n'
+                     '- D1: one store (product owner, 2026-10-20; said: "one")\n')
+        self.linear.body = placeheld
+        self.decide(new=["two stores"], quote="two")
+        self.assertTrue(self.linear.body.startswith("Not shaped yet. Needs a deep dive.\n"))  # still being shaped: the line is true
+        out = self.decide(new=["the tech doc on NEB-1 is approved"], quote="approved")
+        self.assertTrue(self.linear.body.startswith("Why the shop.\n"), self.linear.body[:60])
+        self.assertIn("- D3: the tech doc on NEB-1 is approved (product owner,", self.linear.body)
+        self.assertIn('removed "Not shaped yet" from NEB-1: it is shaped', out)
+
+    def test_a_decision_on_an_issue_with_a_tech_doc_says_to_reread_the_doc(self):
+        # a change of course removed the token expiry, and the tech doc went on describing it
+        self.assertNotIn("has a tech doc", self.decide(new=["two stores"], quote="two"))  # the map links none
+        self.linear.body = MAP + "\n## Tech doc\n\nhttps://linear.app/d/1\n"
+        out = self.decide(new=["three stores"], quote="three")
+        self.assertIn("NEB-1 has a tech doc, and D5 may have outdated it: reread it now", out)
+        self.assertNotIn("has a tech doc", self.decide(new=["the tech doc on NEB-1 stands after D5"], ruling=True))  # the line that answers the note
+
     def test_a_decision_is_recorded_only_with_the_product_owners_words(self):
         with self.assertRaises(SystemExit) as e:
             self.decide(new=["Clerk"], closes=["Q1"])

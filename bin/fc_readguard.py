@@ -23,26 +23,33 @@ def pack_paths(pack):
     return out
 
 
-LOCK_MANAGERS = {"bun.lock": "bun", "bun.lockb": "bun", "package-lock.json": "npm", "npm-shrinkwrap.json": "npm", "pnpm-lock.yaml": "pnpm", "yarn.lock": "yarn"}
+LOCK_MANAGERS = {"bun.lock": "bun", "bun.lockb": "bun", "package-lock.json": "npm", "npm-shrinkwrap.json": "npm", "pnpm-lock.yaml": "pnpm", "yarn.lock": "yarn",
+                 "uv.lock": "uv"}
+PACKAGE_FILE = {"bun": "package.json", "npm": "package.json", "pnpm": "package.json", "yarn": "package.json", "uv": "pyproject.toml"}  # what each manager installs from
+NO_LOCKFILE = {"package.json": "npm"}  # the manager of a package file with no lockfile; a pyproject.toml without a uv.lock has none (poetry, pip)
 
 
 def installers(wt, files):
-    """The package managers a task may run, as the guard's `installers`: none unless its `files` name a package.json or a lockfile (a task that
-    adds a dependency edits one and must install it, which the sandbox of an implementer cannot do for itself). The managers are the ones whose
-    lockfile `files` names or that sits at the clone's root or beside a listed package.json, else npm."""
-    names = {os.path.basename(f) for f in files}
-    if not names & ({"package.json"} | set(LOCK_MANAGERS)):
-        return []
-    dirs = {"", *(os.path.dirname(f) for f in files if os.path.basename(f) == "package.json")}
-    found = {LOCK_MANAGERS[n] for n in names if n in LOCK_MANAGERS}
-    found |= {m for d in dirs for n, m in LOCK_MANAGERS.items() if os.path.exists(os.path.join(wt, d, n))}
-    return sorted(found) or ["npm"]
+    """The package managers a task may run, as the guard's `installers`: none unless its `files` name a package file (package.json,
+    pyproject.toml) or a lockfile (a task that adds a dependency edits one and must install it, which the sandbox of an implementer cannot
+    do for itself). The managers are the ones whose lockfile `files` names, and for each package file the ones whose lockfile sits at the
+    clone's root or beside it, else npm for a package.json. A lockfile only ever gives the manager of its own package file: a uv.lock at
+    the root never hands a JavaScript task uv."""
+    found = {LOCK_MANAGERS[os.path.basename(f)] for f in files if os.path.basename(f) in LOCK_MANAGERS}
+    for f in files:
+        name = os.path.basename(f)
+        found |= {m for d in ("", os.path.dirname(f)) for n, m in LOCK_MANAGERS.items() if PACKAGE_FILE[m] == name and os.path.exists(os.path.join(wt, d, n))}
+    for f in files:
+        name = os.path.basename(f)
+        if name in NO_LOCKFILE and not any(PACKAGE_FILE[m] == name for m in found):
+            found.add(NO_LOCKFILE[name])
+    return sorted(found)
 
 
 def write_guard(wt, files, pack, extra=(), installs=()):
     """Write {"root", "allow", "installers", "log"} to guard_file(wt) and return that path. `allow` holds the absolute paths of `files`, of
     pack_paths(pack), and of `extra` (absolute paths the prompt itself tells the model to read); `installers` the package managers whose
-    plain `install` and `add` the model may run (see `installers`); `log` is `<wt parent>/<wt name>.refused`."""
+    plain commands the model may run (see `installers` and COMMANDS); `log` is `<wt parent>/<wt name>.refused`."""
     root = os.path.realpath(wt)
     allow = sorted({os.path.realpath(os.path.join(root, f)) for f in [*files, *pack_paths(pack), *extra]})
     path = guard_file(wt)
@@ -156,9 +163,20 @@ def view(cmd, root, allow):
     return measure(words, root, allow) or viewer(words, root, allow)
 
 
-PACKAGE_MANAGERS = ("bun", "bunx", "npm", "npx", "pnpm", "yarn")
+PACKAGE_MANAGERS = ("bun", "bunx", "npm", "npx", "pnpm", "yarn", "uv", "uvx", "pip", "pip3", "pipx", "poetry")
 INSTALL_FLAGS = {"-d", "-D", "--dev", "--save-dev", "-E", "--exact", "--save-exact", "--optional", "-O", "--save-optional", "--peer", "--ignore-scripts"}
 PACKAGE_RE = re.compile(r"(@[A-Za-z0-9._~-]+/)?[A-Za-z0-9._~-]+(@[A-Za-z0-9._~^<>=*|+-]+)?")
+PY_VERSION = r"(==|>=|<=|~=|!=|>|<)[A-Za-z0-9.*+!-]+"
+PY_PACKAGE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*(\[[A-Za-z0-9._,-]+\])?(" + PY_VERSION + "(," + PY_VERSION + ")*)?")  # name[extras]>=1,<2: no URL, path or `@`
+JS_COMMANDS = (INSTALL_FLAGS, PACKAGE_RE, {"install": False, "i": False, "add": True}, "`{m} install` and `{m} add <package>[@version]`")
+# manager: (the flags it takes, a package it may name, {command: None for no word after it, True for one package or more, False for any number}, how a reply names them)
+COMMANDS = {"bun": JS_COMMANDS, "npm": JS_COMMANDS, "pnpm": JS_COMMANDS, "yarn": JS_COMMANDS,
+            "uv": ({"--dev"}, PY_PACKAGE_RE, {"lock": None, "sync": None, "add": True}, "`{m} lock`, `{m} sync` and `{m} add <package>`")}
+
+
+def allowed(managers):
+    """The package manager commands a task with `managers` may run, as the prompt and each refusal name them."""
+    return ", ".join(COMMANDS[m][3].format(m=m) for m in managers)
 
 
 def cut_words(words):
@@ -171,9 +189,10 @@ def cut_words(words):
 
 
 def install(cmd, root, managers):
-    """Whether bash line `cmd` is a plain `<manager> install|i|add [flags] [package[@version]...]` of one of `managers`, alone or after
-    `cd <a directory of the clone> &&`, and ended at most by `| head` or `| tail` with a line count. No other flag (a registry, a global or
-    another directory), package spec (a URL, a path), pipe, redirect, second command, substitution or glob."""
+    """Whether bash line `cmd` is one plain command of one of `managers` (COMMANDS: `bun install|i|add [flags] [package[@version]...]`,
+    `uv lock`, `uv sync`, `uv add [--dev] <package>...`), alone or after `cd <a directory of the clone> &&`, and ended at most by `| head`
+    or `| tail` with a line count. No other flag (a registry, an index, a global or another directory), package spec (a URL, a path),
+    pipe, redirect, second command, substitution or glob."""
     words = words_of(cmd)
     if not words:
         return False
@@ -183,11 +202,17 @@ def install(cmd, root, managers):
             return False
         words = words[3:]
     words = cut_words(words)
-    if not words or len(words) < 2 or words[0] not in managers or words[1] not in ("install", "i", "add"):
+    if not words or len(words) < 2 or words[0] not in managers:
         return False
+    flags_ok, package, commands = COMMANDS[words[0]][:3]
+    if words[1] not in commands:
+        return False
+    takes = commands[words[1]]
+    if takes is None:
+        return len(words) == 2
     flags = [w for w in words[2:] if w.startswith("-")]
     specs = [w for w in words[2:] if not w.startswith("-")]
-    return all(f in INSTALL_FLAGS for f in flags) and all(PACKAGE_RE.fullmatch(x) and ".." not in x for x in specs) and (words[1] != "add" or bool(specs))
+    return all(f in flags_ok for f in flags) and all(package.fullmatch(x) and ".." not in x for x in specs) and (not takes or bool(specs))
 
 
 def installs_why(cmd, managers):
@@ -197,11 +222,11 @@ def installs_why(cmd, managers):
     if not words or words[0].split("/")[-1] not in PACKAGE_MANAGERS:
         return None
     if not managers:
-        return ("Blocked: this task may not install or run anything: its files: name no package.json or lockfile, and a package manager is never "
+        return ("Blocked: this task may not install or run anything: its files: names no package file or lockfile, and a package manager is never "
                 "allowed for it. Do not try another form; if the brief needs a dependency, end your reply with a CONTRADICTION line saying so.")
-    return ("Blocked: the only package manager commands allowed here are `{m} install` and `{m} add <package>[@version]...` (flags -d, -E, --optional, "
-            "--peer, --ignore-scripts), each alone or after `cd <directory of this clone> &&`, with at most `| head -N` or `| tail -N`. "
-            "No other form works: not `{m} --version`, a full path to {m}, `export PATH=...`, a second command, a registry flag, or `npm view`.").format(m=managers[0])
+    return ("Blocked: the only package manager commands allowed here are {}, each alone or after `cd <directory of this clone> &&`, with at most "
+            "`| head -N` or `| tail -N`. No other form works: not another command of the manager, a flag it is not listed with, a full path to it, "
+            "`export PATH=...`, a second command, a registry or index flag, a URL or a path as a package.").format(allowed(managers))
 
 
 def refusal(tool, args, guard):
@@ -215,7 +240,7 @@ def refusal(tool, args, guard):
     why += (" The files you may read: " + ", ".join(names[:12]) + (f" and {len(names) - 12} more" if len(names) > 12 else "") + ". " if names else " ") + \
         "A file or an older commit you need that is not among them is a fact the brief lacks: do not guess, end your reply with `CONTRADICTION: brief lacks <the file or fact>`."
     if guard.get("installers"):
-        why += " This task may also run `{} install` and `{} add <package>`, each alone.".format(guard["installers"][0], guard["installers"][0])
+        why += " This task may also run {}, each alone.".format(allowed(guard["installers"]))
     if tool == "bash":
         cmd = (args.get("command") or "").strip()
         if (cmd in ("trail ask", "trail callers") or cmd.startswith(("trail ask ", "trail callers "))) \

@@ -54,6 +54,20 @@ class Gates(unittest.TestCase):
         approved = linked + '\n## Decisions so far\n\n- D1: the tech doc on ENG-0 is approved (product owner, 2026-10-24; said: "ok")\n'
         self.assertEqual(fc_readiness.gates(fc_readiness.story_chain(tree(epic=approved, epic_labels=("Epic", "deep-dive"), docs=[doc]))), [])
 
+    def test_a_tech_doc_written_before_a_live_decision_holds_the_story_until_it_is_reread(self):
+        # a story was built on a tech doc that still described the token expiry a later decision had removed
+        doc = {"title": "ENG-7: tech doc", "content": "Tokens expire after a day.", "url": "https://linear.app/d/1", "updatedAt": "2026-11-11T09:00:00.000Z"}
+        story = (STORY + "\n## Tech doc\n\nhttps://linear.app/d/1\n\n## Decisions so far\n\n- D1: the tech doc on ENG-7 is approved (product owner, 2026-11-11; said: \"ok\")\n"
+                 "- D2: No token expiry in this story (C4; product owner, 2026-11-12; said: \"remove it\")\n")
+        g = fc_readiness.gates(fc_readiness.story_chain(tree(story=story, labels_=("Story", "deep-dive"), docs=[doc])))
+        self.assertEqual([(x["item"], x["issue"]) for x in g], [("tech doc", "ENG-7")])
+        self.assertIn("before D2 (2026-11-12)", g[0]["question"])
+        fresh = dict(doc, updatedAt="2026-11-12T20:00:00.000Z")
+        self.assertEqual(fc_readiness.gates(fc_readiness.story_chain(tree(story=story, labels_=("Story", "deep-dive"), docs=[fresh]))), [])
+        stands = story + "- D3: the tech doc on ENG-7 stands after D2 (compose ruling, unconfirmed, 2026-11-13)\n"
+        self.assertEqual(fc_readiness.gates(fc_readiness.story_chain(tree(story=stands, labels_=("Story", "deep-dive"), docs=[doc]))), [])
+        self.assertIn("updatedAt", fc_readiness.READINESS_TREE)  # the query asks Linear when each document was last written
+
     def test_a_task_or_a_feature_is_refused(self):
         with self.assertRaisesRegex(fc_readiness.NotAStory, "ENG-7 is a task"):
             fc_readiness.story_chain(tree(story=STORY + "\n```compose\nid: 07\ntest: t\n```\n"))

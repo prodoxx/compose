@@ -144,6 +144,24 @@ route: check-only
 ```
 ````
 
+## What an implementer cannot do
+
+An implementer writes the text files its `files:` name and runs nothing, so a brief never asks it for more.
+`spec-check` fails a task whose brief does, and names the route that can:
+
+- A file the task removes goes under `delete:`, and `run` removes it.
+- A rename is `delete:` the old path, `files:` the new one, and `reads: <rev>:<old path>` when its content moves.
+- A new dependency names the package file and its lockfile in `files:`.
+  The implementer may then run its package manager, and nothing else: `bun`, `npm`, `pnpm` or `yarn` with `install` or `add <package>[@version]`, or `uv lock`, `uv sync` and `uv add <package>`.
+  The manager is the one whose lockfile the task names, or whose lockfile sits at the repo's root or beside the package file.
+  A `package.json` with no lockfile gets npm, and a `pyproject.toml` with no `uv.lock` gets none.
+- A file only a program can make (an image, a font, a build output), or any other command, is a hand task, below.
+
+The implementer may always read the repo's package files (`package.json`, `pyproject.toml`, `composer.json`, `go.mod`, `Cargo.toml`, `Gemfile`): the root's own, and the nearest one above each of its files.
+Its prompt names them and says to import only what they declare.
+For a test or story the task creates, the prompt also names one existing file of the same kind in the same directory to write it like (`card.test.mjs` for a new `menu.test.mjs`).
+So a brief never names a test library or environment the package files lack.
+
 ## Hand tasks
 
 A change nobody can write a red test for (removing tests, a rename, a config edit) is built by hand on its own branch.

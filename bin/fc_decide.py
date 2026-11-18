@@ -2,7 +2,7 @@
 with the product owner's words attached, as an unconfirmed recommendation while away or yolo is on, or as compose's own ruling
 on an easily reversible decision (`--ruling`), posture or not."""
 import json, re, sys, time
-import fc_core, fc_tasks, fc_linear, fc_linear_cmd, fc_plan, fc_herdr, fc_fleet, fc_change, fc_ask
+import fc_core, fc_tasks, fc_linear, fc_linear_cmd, fc_plan, fc_herdr, fc_fleet, fc_change, fc_stale, fc_ask
 
 
 # ---------- the map's two decision sections ----------
@@ -312,7 +312,8 @@ def cmd_decide(a):
         if (rid := qs[cid]["replaces"]) and decided_line(new_body, rid) and not KEEP.match(qs[cid]["recommendation"].split(". ", 1)[-1]):
             by = next(l.split(":")[0] for l in added if f"(closes {cid})" in l)
             new_body = replace_decision(new_body, rid, change or (cid.split("-")[0] if re.fullmatch(r"C\d+-\d+", cid) else f"replaced by {by}"))
-    write_map(lid, body, new_body)
+    unplaced = any(APPROVAL.search(t) for t in news) and fc_stale.shaped_text(new_body) != new_body  # an approval ends the shaping: the placeholder goes with it
+    write_map(lid, body, fc_stale.shaped_text(new_body) if unplaced else new_body)
     cleared = clear_elsewhere(proj, ident, [i for i in qs if i in answered or i in accepted])
     if posture and not quote:
         posture["decisions"] += [{"ts": time.strftime("%Y-%m-%d %H:%M:%S"), "text": l} for l in lines]
@@ -325,6 +326,10 @@ def cmd_decide(a):
               f"`compose decide --project {proj.name} --quote \"<their words>\" {ids.split(', ')[0]}`, or `--new ... --replaces` (a change of course once tasks are dispatched)")
     for other, ids in cleared:
         print(f"cleared {', '.join(ids)} from Not yet specified on {other}")
+    if unplaced:
+        print(f'removed "Not shaped yet" from {ident}: it is shaped')
+    if note := fc_stale.reread_note(ident, new_body, lines):
+        print(f"note: {note}")
     if any(ans is not None for _, ans in answers):
         print("note: the new form is " + NEW_FORM.format(slug=proj.name))
     print(open_left(ident, new_body))

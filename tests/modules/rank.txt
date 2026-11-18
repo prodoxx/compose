@@ -59,6 +59,7 @@ fc_layers
 fc_blockers
 fc_stack
 fc_change
+fc_stale
 fc_readiness
 fc_frame0
 fc_f0pages

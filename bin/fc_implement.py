@@ -249,8 +249,9 @@ def run_task(repo, proj, task, attempts, model=None, reset_files=False, tag=""):
     for line in unread:
         fc_core.say(f"{tid} warning  reads: {line}")
     managers = fc_readguard.installers(wt, meta["files"])  # a task that lists a package file adds a dependency, and only it can install it
+    ground, ground_note = fc_reads.grounding(wt, meta["files"] + meta["protected"], bool(managers))  # what is installed, and a test of the repo to write a new one like
     fc_readguard.write_guard(wt, meta["files"] + meta["protected"] + (nodes := fc_figma.code_nodes(proj, wt, meta)), pack,
-                             extra=[proj / "results" / f"{tid}.test.log", *reads], installs=managers)  # the retry prompt sends the model to read it
+                             extra=[proj / "results" / f"{tid}.test.log", *reads, *ground], installs=managers)  # the retry prompt sends the model to read it
     context = (f"CONTEXT PACK from the repo's trail graph (exact file:line, with source). Use it instead of exploring. "
                f"If you need more, run `trail ask \"<question>\"` or `trail callers <symbol>`; do not open unrelated files.\n{pack}\n\n"
                if pack else "")
@@ -266,11 +267,11 @@ def run_task(repo, proj, task, attempts, model=None, reset_files=False, tag=""):
               f"{context}{body}\n\n"
               f"Files you may edit: {abs_files}.\n"
               f"Files you must NOT edit: {abs_protected}.\n" +
-              (f"Files this task reads, read-only (a `.reads/<rev>/` file is that path as of the commit): {', '.join(reads)}.\n" if reads else "") + (f"Figma nodes this task builds, as Framelink JSON (read, never edit): {', '.join(nodes)}.\n" if nodes else "") +
+              (f"Files this task reads, read-only (a `.reads/<rev>/` file is that path as of the commit): {', '.join(reads)}.\n" if reads else "") + (f"Figma nodes this task builds, as Framelink JSON (read, never edit): {', '.join(nodes)}.\n" if nodes else "") + ground_note +
               f"Done means this command exits 0: {meta['test']}\n"
               "Do not run it, or any other test or build: compose runs the test after your turn ends and sends you what failed. "
               "Read the test file, edit, and end your turn.\n" +
-              (f"The files above include a package file, so you may run `{managers[0]} install` and `{managers[0]} add <package>[@version]` to add the dependencies "
+              (f"The files above include a package file, so you may run {fc_readguard.allowed(managers)} to add the dependencies "
                "the task names and update the lockfile: one command alone, from the root or a directory under it. That is the only shell command besides reading files.\n" if managers else "") +
               "The test contains cases beyond the examples listed here, so implement the described behavior, not the examples. "
               "Read only the test file and the files named above; do not explore other docs or directories. "

@@ -1,6 +1,6 @@
 import ast, json, re, sys
 from pathlib import Path
-import fc_core, fc_reads, fc_routerec, fc_tasks, fc_linear, fc_worktree, fc_change, fc_status
+import fc_core, fc_reads, fc_readguard, fc_routerec, fc_stale, fc_tasks, fc_linear, fc_worktree, fc_change, fc_status
 
 
 def ordered(tasks, a, b):
@@ -300,6 +300,7 @@ def spec_check(data, checks=(), defined=None, scripts=None):
     whole = whole_shared_tests(to_run)
     if len(to_run) >= 3 and len(waves) > len(to_run) / 2:
         gaps.append(f"serial chain: {len(to_run)} tasks run in {len(waves)} waves, mostly one after another")
+    gaps += fc_stale.stale({"id": data["feature"]["id"], "description": desc})  # a sync carries no label or state of the feature: judged by what it holds
     out.append((not gaps, data["feature"]["id"], "feature", gaps))
     story_task = any("parentId" in i for i in data["issues"])
     for i in issues:
@@ -334,6 +335,7 @@ def spec_check(data, checks=(), defined=None, scripts=None):
             if re.search(r"(?i)contract\.md|\b(?:from|in|per|see) the (?:groundwork )?contract\b", desc):
                 gaps.append("the brief points at the contract, which implementers never see: state its signatures and exact lines in the brief")
             gaps += scenario_gaps(desc)
+            gaps += beyond_implementer(meta, desc)
             out.append((not gaps, i["id"], "task", gaps))
         elif fc_tasks.hand_task(i):
             out.append((True, i["id"], "hand task", []))
@@ -347,6 +349,7 @@ def spec_check(data, checks=(), defined=None, scripts=None):
                 gaps.append(f"too big: {len(bullets)} criteria under `## Acceptance criteria` (max 5)")
             if story_task and not any(j.get("parentId") == i["id"] for j in issues if fc_tasks.task_from_issue(j) or fc_tasks.hand_task(j)):
                 gaps.append("no task carries this story as its parentId (cut its code, dependency and toolchain changes into tasks)")
+            gaps += fc_stale.stale(i)
             out.append((not gaps, i["id"], "story", gaps))
     return out
 
@@ -407,3 +410,52 @@ def too_big(meta):
     if len(meta.get("body") or "") > MAX_TASK_BRIEF:
         why.append(f"brief is {len(meta['body'])} chars (max {MAX_TASK_BRIEF})")
     return "; ".join(why) or None
+
+
+BINARY_RE = re.compile(r"(?i)\.(png|jpe?g|gif|webp|ico|icns|bmp|pdf|woff2?|ttf|otf|eot|zip|gz|tgz|mp3|mp4|mov|wav|wasm|jar|so|dylib|exe|bin|sqlite|db)$")
+MOVES_RE = re.compile(r"(?:git\s+(?:mv|rm)|rm|mv)\s+\S")
+INSTALLS_RE = re.compile(r"(?:cd\s+\S+\s+&&\s+)?(bun|npm|pnpm|yarn|uv|pip3?|pipx|poetry)\s+(?:install|i|add|remove|rm|uninstall|update|upgrade|up|lock|sync)\b")
+REMOVES_RE = re.compile(r"(?i)(?<!not )(?<!never )(?<!n't )\b(?:delete|remove)[sd]?\s+(?:the\s+)?(?:(?:old|stale|unused|whole)\s+)?(?:(?:files?|tests?|directory|folder|scripts?)\s+)?"
+                        r"((?:`[^`\n]+`(?:\s*,?\s*(?:and\s+)?)?)+)")
+FILE_RE = re.compile(r"(?![/-])[^\s*:(){}$<>|]*/(?:[^\s*:(){}$<>|/]+\.[A-Za-z0-9]{1,6})?")
+
+
+def beyond_implementer(meta, desc):
+    """What the brief of a dispatched task asks for that no implementer can do, each with the route that can: an implementer writes the
+    text files its `files:` name and runs nothing but a listed package manager's own commands (fc_readguard). The CLI's own sections, the
+    fenced blocks and the task's `test:` (which compose runs) are not the brief's asks."""
+    if meta["kind"] in ("hand", "design"):
+        return []
+    text = re.sub(r"(?ms)^```.*?^```[ \t]*$|^## (?:Route|Evidence)\n.*?(?=^## |\Z)", "", desc)
+    spans = [x.strip() for x in re.findall(r"`([^`\n]+)`", text) if x.strip() not in meta["test"]]
+    hand, gaps = "make it a `kind: hand` task (docs/tasks.md)", []
+    if made := [f for f in meta["files"] if BINARY_RE.search(f)]:
+        gaps.append(f"`files:` names {', '.join(made)}, which only a program can make, and an implementer writes text: {hand}")
+    if moves := [x for x in spans if MOVES_RE.match(x)]:
+        gaps.append(f"the brief asks for {', '.join(f'`{x}`' for x in moves)}, and an implementer cannot delete or rename a file: put a file it removes under `delete:` "
+                    f"(a rename is `delete:` the old path, `files:` the new one, and `reads: <rev>:<old path>` when its content moves), or {hand}")
+    under = lambda path: any(path.rstrip("/") == d.rstrip("/") or path.startswith(d.rstrip("/") + "/") for d in meta["delete"])
+    gone = [x for m in REMOVES_RE.finditer(text) for x in re.findall(r"`([^`\n]+)`", m.group(1)) if FILE_RE.fullmatch(x) and not under(x)]
+    if gone:
+        gaps.append(f"the brief has the implementer delete {', '.join(dict.fromkeys(gone))}, which it cannot: name each under `delete:` and `run` removes it")
+    names = {Path(f).name for f in meta["files"]}
+    mine = sorted(m for m, pkg in fc_readguard.PACKAGE_FILE.items() if pkg in names or any(fc_readguard.LOCK_MANAGERS.get(n) == m for n in names))
+    locked = sorted({fc_readguard.LOCK_MANAGERS[n] for n in names if n in fc_readguard.LOCK_MANAGERS}) or mine
+    never, unnamed, refused = [], [], []
+    for x in spans:
+        if not (m := INSTALLS_RE.match(x)):
+            continue
+        if m.group(1) not in fc_readguard.COMMANDS:
+            never.append(x)
+        elif m.group(1) not in mine:
+            unnamed.append(x)
+        elif not fc_readguard.install(x, "/clone", mine):
+            refused.append(x)
+    quoted = lambda xs: ", ".join(f"`{x}`" for x in xs)
+    if never:
+        gaps.append(f"the brief asks for {quoted(never)}, which no implementer may run: {hand}")
+    if unnamed:
+        gaps.append(f"the brief asks for {quoted(unnamed)}, which this task may not run: name the package file and its lockfile in `files:` (docs/tasks.md)")
+    if refused:
+        gaps.append(f"the brief asks for {quoted(refused)}, which the implementer's sandbox refuses: with these `files:` it may run only {fc_readguard.allowed(locked)}; for anything else {hand}")
+    return gaps
