@@ -58,6 +58,19 @@ class Groundwork(unittest.TestCase):
             fc.fc_briefs.cmd_planner(SimpleNamespace(repo=str(self.repo), project="p", issue=issue, extra=extra))
         return out.getvalue()
 
+    def test_planner_brief_says_what_an_implementer_cannot_do_and_the_route_for_each(self):
+        # planners wrote "delete X", `git mv`, `uv lock` and "draw the PNG" into briefs: the limits were in sections/2.md and docs/tasks.md, not in the brief they follow
+        out = self.planner()
+        for want in ("an implementer writes the text files in its `files:` and runs nothing",
+                     "a file it removes goes under `delete:`",
+                     "a rename is `delete:` the old path, `files:` the new one, and `reads: <rev>:<old path>` when its content moves",
+                     "a new dependency names the package file and its lockfile in `files:`",
+                     "`uv lock`, `uv sync` and `uv add <package>`",
+                     "a file only a program can make (an image, a font, a build output), or any other command, is a `kind: hand` task (docs/tasks.md)",
+                     "Keys: id, files, test, route; `delete: <paths the CLI removes>`; `kind: hand`",
+                     "the CLI gives the implementer the repo's package files and, for a new test or story, an existing one of its kind to write it like: never name a test library or environment the package files lack"):
+            self.assertIn(want, out)
+
     def test_planner_brief_includes_the_prd_when_it_exists(self):
         prd = {"id": "d", "title": "PRD", "url": "u/prd", "content": "## Problem\n\nRunners lack shoes.\n"}
         with mock.patch.object(fc.fc_briefs.fc_prd, "read_prd", return_value=prd) as read, mock.patch.object(fc.fc_briefs.fc_config, "LINEAR_KEY", "k"):

@@ -59,6 +59,7 @@ Every title, description, and criterion you write follows sections/0w.md: plain 
    - branch at most 350 lines, added plus deleted
    - no documents: no .md, .txt, .rst, or docs/ files
    - `files:` names every file it may touch, new files too
+   - only what an implementer can do: an implementer writes the text files in its `files:` and runs nothing; a file it removes goes under `delete:` (the CLI removes it); a rename is `delete:` the old path, `files:` the new one, and `reads: <rev>:<old path>` when its content moves; a new dependency names the package file and its lockfile in `files:` (the implementer may then run `bun|npm|pnpm|yarn install` or `add <package>`, or `uv lock`, `uv sync` and `uv add <package>`, and nothing else); a file only a program can make (an image, a font, a build output), or any other command, is a `kind: hand` task (docs/tasks.md), never a line in a brief; `spec-check` fails a brief that asks for more
    - no file shared by two tasks: one task, or one is `after:` the other
    - `after:` for code a task needs (calls, imports, edits what the other creates), as blocked-by links
    - ids numbered in review order; take each new id from `compose linear next-task-id --project {slug}` (it reads every task of the Linear project, not only the stories `sync` shows, and the project's results/), never pick one yourself
@@ -72,6 +73,7 @@ Every title, description, and criterion you write follows sections/0w.md: plain 
    One observable result per bullet, in plain words, each checked by the test; long exact values go in the Goal or Test plan.
    ## Test plan
    Run the `test:` command; what it covers; unlisted holdout cases; then a `scenarios` block (SKILL.md).
+   For a test the implementer writes, the CLI gives the implementer the repo's package files and, for a new test or story, an existing one of its kind to write it like: never name a test library or environment the package files lack.
    ## Constraints
    The plan's Global constraints that apply. No new dependencies beyond what the goal names. Do not edit protected files.
    ## Interfaces
@@ -83,7 +85,7 @@ Every title, description, and criterion you write follows sections/0w.md: plain 
    test: <the check that shows the work exists>
    route: check-only
    ```
-   Keys: id, files, test, route; `protected: <the test path>` replaces `route:` on a policy-matched or requested test, with `test:` running only that test; leave `model:` unset. `reads: <paths, or rev:path>` only when the task calls another module's values or types, or ports data from an older commit: the implementer reads nothing but its own files and the context pack, so name the module (`src/keywords.ts`) or the old file (`940bd04:src/cases.ts`) there, never copy it into the brief. `after` (the blocked-by links) and `title` (the issue title) are not keys.
+   Keys: id, files, test, route; `delete: <paths the CLI removes>`; `kind: hand` for a task built by hand; `protected: <the test path>` replaces `route:` on a policy-matched or requested test, with `test:` running only that test; leave `model:` unset. `reads: <paths, or rev:path>` only when the task calls another module's values or types, or ports data from an older commit: the implementer reads nothing but its own files and the context pack, so name the module (`src/keywords.ts`) or the old file (`940bd04:src/cases.ts`) there, never copy it into the brief. `after` (the blocked-by links) and `title` (the issue title) are not keys.
 
 5. After cutting, read the plan and the task issues once as the implementer will: every criterion has a step and a task,
    every named file is in the file map, one meaning per signature, the Review focus is covered by a test. Then `compose sync`

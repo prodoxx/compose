@@ -124,6 +124,40 @@ class ReadGuard(unittest.TestCase):
         self.assertIsNotNone(rg.refusal("Bash", {"command": "bun install"}, g))
         self.assertIsNotNone(rg.refusal("Bash", {"command": "bun install"}, self.g))  # the plain guard of setUp: no installers
 
+    def test_a_python_task_that_lists_its_package_file_may_lock_sync_and_add_with_uv_and_nothing_else(self):
+        # a task with `files: pyproject.toml, uv.lock` was told "Regenerate uv.lock with uv lock" and the guard blocked every uv command
+        rg = fc.fc_readguard
+        g = self.installing(["pyproject.toml", "uv.lock"])
+        self.assertEqual(g["installers"], ["uv"])
+        for c in ("uv lock", "uv sync", "uv add httpx", "uv add 'httpx[http2]>=0.27,<1'", 'uv add "pyjwt[crypto]==2.9.0" fastapi', "uv add --dev pytest", "uv add httpx~=0.27.0",
+                  "cd . && uv lock | tail -5", f"cd {self.wt} && uv sync", "uv add uvicorn | head -n 20"):
+            self.assertIsNone(rg.refusal("Bash", {"command": c}, g), c)
+        for c in ("uv", "uv add", "uv run pytest", "uv pip install httpx", "uv lock --upgrade", "uv sync --frozen", "uv lock httpx", "uv add ./local", "uv add ../outside", "uv add git+https://x.test/a.git",
+                  "uv add https://x.test/a.whl", "uv add httpx --index https://x.test", "uv add -r requirements.txt", "uv add --script x.py httpx", "uv add httpx>=1", "uv lock > out", "uv lock; rm x",
+                  "uv lock && uv run pytest", "uv add $(cat x)", "uv tool install ruff", "uv python install 3.12", "uv self update", "uv init", "uv venv", "uv build", "uv install", "uvx ruff check .",
+                  "cd .. && uv lock", "~/.local/bin/uv lock", "pip install httpx", "poetry lock", "bun install", "npm install"):
+            self.assertIsNotNone(rg.refusal("Bash", {"command": c}, g), c)
+        self.assertIn("`uv lock`, `uv sync` and `uv add <package>`", rg.refusal("Bash", {"command": "uv run pytest"}, g))  # the refusal names the forms that do work
+        self.assertIn("`uv lock`, `uv sync` and `uv add <package>`", rg.refusal("Read", {"file_path": "src/c.py"}, g))
+
+    def test_a_lockfile_gives_a_task_only_the_manager_of_its_own_package_file(self):
+        rg = fc.fc_readguard
+        self.assertEqual(rg.installers(self.wt, ["pyproject.toml"]), [])  # no uv.lock anywhere: poetry or pip, and neither is allowed
+        self.assertEqual(rg.installers(self.wt, ["uv.lock"]), ["uv"])
+        (self.wt / "uv.lock").write_text("")
+        self.assertEqual(rg.installers(self.wt, ["pyproject.toml"]), ["uv"])
+        self.assertEqual(rg.installers(self.wt, ["package.json"]), ["npm"])  # a uv.lock at the root never hands a JavaScript task uv
+        (self.wt / "bun.lock").write_text("")
+        self.assertEqual(rg.installers(self.wt, ["pyproject.toml"]), ["uv"])  # nor a bun.lock a Python task bun
+        self.assertEqual(rg.installers(self.wt, ["package.json", "pyproject.toml"]), ["bun", "uv"])
+        g = self.installing(["package.json", "pyproject.toml"])
+        for c in ("bun add zod", "uv add httpx", "uv lock", "bun install"):
+            self.assertIsNone(rg.refusal("Bash", {"command": c}, g), c)
+        for c in ("bun lock", "uv install", "bun add 'httpx[http2]'", "uv add @types/node"):  # each manager keeps its own commands and package names
+            self.assertIsNotNone(rg.refusal("Bash", {"command": c}, g), c)
+        self.assertIn("`bun install` and `bun add <package>[@version]`, `uv lock`, `uv sync` and `uv add <package>`", rg.refusal("Bash", {"command": "uv run pytest"}, g))
+        self.assertIn("names no package file or lockfile", rg.refusal("Bash", {"command": "uv lock"}, self.g))  # the plain guard of setUp: no installers
+
     def test_a_blocked_read_names_the_files_it_may_read_and_what_to_do_about_the_rest(self):
         # #451: the generic text never said which files the model may read, so it asked for the wrong thing or gave up
         reply = fc.fc_readguard.refusal("Read", {"file_path": "src/c.py"}, self.g)
@@ -141,7 +175,7 @@ class ReadGuard(unittest.TestCase):
         for c in ("bun --version", "~/.bun/bin/bun install", "cd app && bun install 2>&1 | tail -30", "bun add zod --registry x"):
             self.assertIn("`bun install` and `bun add <package>", rg.refusal("Bash", {"command": c}, g), c)
         self.assertIn("context pack", rg.refusal("Bash", {"command": "cat src/c.py"}, g))  # any other command keeps the read-only text
-        self.assertIn("`bun install` and `bun add <package>`", rg.refusal("Bash", {"command": "cat src/c.py"}, g))  # and says what else is allowed
+        self.assertIn("`bun install` and `bun add <package>[@version]`", rg.refusal("Bash", {"command": "cat src/c.py"}, g))  # and says what else is allowed
         self.assertNotIn("bun add", rg.refusal("Bash", {"command": "cat src/c.py"}, self.g))
 
     def test_the_script_answers_both_event_shapes_and_logs_each_refusal(self):

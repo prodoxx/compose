@@ -433,6 +433,66 @@ class DeleteLine(unittest.TestCase):
         self.assertFalse(has(gaps, "empty `protected:`"), gaps)
         self.assertFalse(has(gaps, "empty `files:`"), gaps)
 
+class BeyondAnImplementer(unittest.TestCase):
+    """8 of 38 missed tasks on one machine had a brief that asked for what an implementer cannot do: delete a file, `git mv`, `uv lock`,
+    draw a PNG. Each cost an attempt and a re-plan; spec-check now says so before the run."""
+
+    def gaps(self, crit, **kv):
+        return check([task("ENG-3", "001", crit=crit, **kv)])["ENG-3"][2]
+
+    def test_a_brief_that_tells_the_implementer_to_delete_or_rename_names_the_route_that_can(self):
+        g = self.gaps("- the workflow is renamed\n\nRun `git mv .github/workflows/pr-build-dev.yml .github/workflows/pr-build-qa.yml`.")
+        self.assertTrue(has(g, "`git mv .github/workflows/pr-build-dev.yml .github/workflows/pr-build-qa.yml`") and has(g, "`delete:`") and has(g, "kind: hand"), g)
+        for cmd in ("rm tests/old_test.go", "git rm -r scripts", "mv a.go b.go"):
+            self.assertTrue(has(self.gaps(f"- gone\n\nThen `{cmd}`."), f"`{cmd}`"), cmd)
+        g = self.gaps("- the harness is gone\n\nDelete `scripts/` and `tests/test_e2e_driver.py`, then remove the file `tools/run.sh`.")
+        self.assertTrue(has(g, "scripts/, tests/test_e2e_driver.py, tools/run.sh") and has(g, "`delete:`"), g)
+        self.assertEqual(self.gaps("- the harness is gone\n\nDelete `scripts/` and `tests/test_e2e_driver.py`.", delete="scripts/, tests/test_e2e_driver.py"), [])
+        self.assertEqual(self.gaps("- gone\n\nRemove `scripts/old/run.sh`.", delete="scripts/"), [])  # under a `delete:` directory
+
+    def test_what_a_brief_removes_inside_a_file_is_no_file_to_delete(self):
+        for text in ("Remove the `hover:opacity-90` class from `src/button.ts`.", "Delete the `company` prop.", "Remove `Button.Root` and `props.id`.", "Remove `w-1/2` and the `/v4/auth/me` call.",
+                     "Removes `application/json` from the header list.", "The test does `rm -rf dist` itself.", "Do not delete `src/keep.ts`: only its export changes."):
+            self.assertEqual(self.gaps(f"- works\n\n{text}", test="rm -rf dist && go test ./..."), [], text)
+
+    def test_a_package_manager_command_needs_the_package_file_in_files_and_a_form_the_guard_allows(self):
+        g = self.gaps("- http2 works\n\nRegenerate `uv.lock` with `uv lock`.", files="server/app.py")
+        self.assertTrue(has(g, "`uv lock`") and has(g, "`files:`"), g)
+        self.assertEqual(self.gaps("- http2 works\n\nRegenerate `uv.lock` with `uv lock`, then `uv add 'httpx[http2]>=0.27'`.", files="pyproject.toml, uv.lock"), [])
+        self.assertEqual(self.gaps("- zod is there\n\nRun `bun add zod@4` in `app/`.", files="app/package.json, bun.lock"), [])
+        g = self.gaps("- zod is newer\n\nRun `bun update zod`.", files="package.json, bun.lock")
+        self.assertTrue(has(g, "`bun update zod`") and has(g, "`bun install` and `bun add <package>[@version]`"), g)
+        g = self.gaps("- deps\n\nRun `pip install httpx` and `poetry lock`.", files="pyproject.toml")
+        self.assertTrue(has(g, "`pip install httpx`, `poetry lock`") and has(g, "kind: hand"), g)
+        self.assertEqual(self.gaps("- builds\n\nThe check is `bun install && bun run build`.", files="src/a.ts", test="bun install && bun run build"), [])  # the task's own check, which compose runs
+
+    def test_a_file_only_a_program_can_make_is_a_hand_task(self):
+        g = self.gaps("- the icon exists", files="qa-icons/icon-128.png, public/font.woff2")
+        self.assertTrue(has(g, "qa-icons/icon-128.png, public/font.woff2") and has(g, "kind: hand"), g)
+        self.assertEqual(self.gaps("- the icon exists", files="qa-icons/icon.svg, src/a.ts"), [])  # text, which an implementer writes
+        self.assertEqual(self.gaps("- the icon exists\n\nRun `git mv a.png b.png` and `uv lock`.", files="qa-icons/icon-128.png", kind="hand", protected=""), [])  # built by hand: nothing to refuse
+
+
+class StaleTicket(unittest.TestCase):
+    """A story went to In Review still opening with "Not shaped yet. Needs a deep dive." and holding a readiness question nobody would
+    ever answer; spec-check now fails a ticket whose own lines its state contradicts."""
+
+    def test_a_story_or_feature_that_says_what_is_no_longer_true_fails(self):
+        shaped = ("Not shaped yet. Needs a deep dive.\n\n## Tech doc\n\nhttps://linear.app/d/1\n\n## Acceptance criteria\n\n* it works\n\n"
+                  "## Open questions\n\n* ENG-2's tech doc is not approved yet (readiness check, 2026-11-11)\n")
+        stale_story = {**STORY, "description": shaped, "status": "In Review", "labels": ["Story", "deep-dive"]}
+        r = fc.fc_spec.spec_check({"feature": {"id": "ENG-1", "title": "F", "description": SETTLED}, "issues": [stale_story, task("ENG-3", "001")]})
+        got = {i: (ok, gaps) for ok, i, _, gaps in r}
+        self.assertFalse(got["ENG-2"][0])
+        for want in ('"Not shaped yet"', '"Needs a deep dive"', "readiness check"):
+            self.assertTrue(has(got["ENG-2"][1], want), (want, got["ENG-2"]))
+        waiting = {**STORY, "description": shaped, "status": "Backlog", "labels": ["Story", "needs-shaping"]}
+        r = fc.fc_spec.spec_check({"feature": {"id": "ENG-1", "title": "F", "description": SETTLED}, "issues": [waiting, task("ENG-3", "001")]})
+        self.assertEqual(next(gaps for _, i, _, gaps in r if i == "ENG-2"), [])  # still waiting to be shaped: every line is true
+        r = fc.fc_spec.spec_check({"feature": {"id": "ENG-1", "title": "F", "description": "Not shaped yet.\n\n" + SETTLED}, "issues": [STORY, task("ENG-3", "001")]})
+        self.assertTrue(has(next(gaps for _, i, _, gaps in r if i == "ENG-1"), '"Not shaped yet"'))
+
+
 def story(ident, n, status="Todo", sub=""):
     crit = "\n".join(f"* c{i}{sub}" for i in range(n))
     return {"id": ident, "title": "All the screens, every flow", "description": f"## Acceptance criteria\n\n{crit}", "status": status, "blockedBy": []}
