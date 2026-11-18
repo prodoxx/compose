@@ -428,7 +428,7 @@ class Rewake(unittest.TestCase):
         self.assertIn(f"compose's skill changed since you read it: {skill / 'SKILL.md'}", err)
 
     def test_a_wake_carries_the_footer_and_brings_the_list_up_to_date(self):
-        item = {"id": "W1", "project": "hw", "kind": "answer", "line": "NEB-1: which db?", "stops": True, "seen": False}
+        item = {"id": "WAIT1", "project": "hw", "kind": "answer", "line": "NEB-1: which db?", "stops": True, "seen": False}
         env = {k: v for k, v in self.env.items() if k != "COMPOSE_ROLE"}  # the engineering manager's wake
         a = SimpleNamespace(repo="/r", project="hw", now=False, from_=None, timeout=0, stall=None, interval=0.01, settle=0, session="s1")
         err = io.StringIO()
@@ -438,12 +438,12 @@ class Rewake(unittest.TestCase):
             with self.assertRaises(SystemExit) as raised:
                 fc.fc_watch.cmd_watch(a, rewake=True)
         self.assertEqual(raised.exception.code, 2)
-        self.assertIn("Waiting on you:\n- W1 hw: NEB-1: which db?", err.getvalue())
+        self.assertIn("Waiting on you:\n- WAIT1 hw: NEB-1: which db?", err.getvalue())
         self.assertEqual(sync.call_args.args[0], self.proj)
         self.assertTrue(any("event task=001 state=passed" in line for line in sync.call_args.args[1]), sync.call_args)
 
     def test_a_team_leads_wake_leaves_the_waiting_list_alone(self):
-        item = {"id": "W1", "project": "hw", "kind": "answer", "line": "q", "stops": True, "seen": False}
+        item = {"id": "WAIT1", "project": "hw", "kind": "answer", "line": "q", "stops": True, "seen": False}
         with mock.patch.object(fc.fc_waiting, "sync") as sync, mock.patch.object(fc.fc_waiting, "gather", return_value=[item]):
             code, err, _ = self.rewake([wsnap("running"), wsnap("passed")])
         self.assertEqual(code, 2)
@@ -1275,14 +1275,14 @@ class OwnerDigest(unittest.TestCase):
         with mock.patch.object(fc.fc_status, "board", return_value={"rows": rows}):
             line = fc.fc_status.digest(self.proj, self.proj)
         self.assertNotIn("\n", line)
-        self.assertRegex(line, r"^hw: 1/3 tasks done, failed 002; no run; verify FAIL at \d\d:\d\d \(checks 1/1 failed\); waits on you: W1 which database\?$")
+        self.assertRegex(line, r"^hw: 1/3 tasks done, failed 002; no run; verify FAIL at \d\d:\d\d \(checks 1/1 failed\); waits on you: WAIT1 which database\?$")
 
     def test_the_digest_names_a_payment_halt_once(self):
         halt = {"halted_at": "2026-11-17 10:00:00", "provider": "openrouter", "remaining": ["002", "003"]}
         (self.proj / "results" / "resume.json").write_text(json.dumps(halt))
         with mock.patch.object(fc.fc_status, "board", return_value={"rows": []}):
             line = fc.fc_status.digest(self.proj, self.proj)
-            self.assertTrue(line.endswith("; no run; waits on you: W1 payment halt at openrouter: 2 task(s) left"), line)
+            self.assertTrue(line.endswith("; no run; waits on you: WAIT1 payment halt at openrouter: 2 task(s) left"), line)
             with mock.patch.object(fc.fc_waiting, "sync", return_value=[]):  # a list that could not be read still shows the halt
                 self.assertTrue(fc.fc_status.digest(self.proj, self.proj).endswith("; no run; HALTED on payment"))
             (self.proj / "results" / "resume.json").write_text(json.dumps({**halt, "resuming": os.getpid()}))  # its resume runs

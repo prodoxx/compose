@@ -158,14 +158,14 @@ class Yolo(unittest.TestCase):
              "decisions": [{"ts": stamp(), "text": f"D5: Clerk (closes Q1) (away recommendation, unconfirmed, 2026-11-17)"},
                            {"ts": stamp(), "text": f"{' '.join(long.split())} (away recommendation, unconfirmed, 2026-11-17)"}]}
         with mock.patch("time.strftime", return_value="2020-01-01 00:00:00"):  # opened long before the posture began: still listed
-            fc.fc_waiting.open_item(self.proj, "confirm", "decision:NEB-1:D5", "D5: Clerk (closes Q1)")  # W1, under Decided for you already
-            fc.fc_waiting.open_item(self.proj, "confirm", "decision:NEB-1:D6", "D6: dark theme")  # W2, a ruling no other section names
-            fc.fc_waiting.open_item(self.proj, "answer", "report:hw-orchestrator:t", "which db?", "SQLite", ids=["Q1"])  # W3, open until Q1 is decided
-            fc.fc_waiting.open_item(self.proj, "review", "review:NEB-1", "review the plan")  # W4
-            fc.fc_waiting.open_item(self.proj, "confirm", "decision:NEB-1:D7", long)  # W5, its line cut short
+            fc.fc_waiting.open_item(self.proj, "confirm", "decision:NEB-1:D5", "D5: Clerk (closes Q1)")  # WAIT1, under Decided for you already
+            fc.fc_waiting.open_item(self.proj, "confirm", "decision:NEB-1:D6", "D6: dark theme")  # WAIT2, a ruling no other section names
+            fc.fc_waiting.open_item(self.proj, "answer", "report:hw-orchestrator:t", "which db?", "SQLite", ids=["Q1"])  # WAIT3, open until Q1 is decided
+            fc.fc_waiting.open_item(self.proj, "review", "review:NEB-1", "review the plan")  # WAIT4
+            fc.fc_waiting.open_item(self.proj, "confirm", "decision:NEB-1:D7", long)  # WAIT5, its line cut short
         (self.proj / "results" / "resume.json").write_text(json.dumps({"halted_at": "t", "provider": "openrouter", "remaining": ["002", "003"]}))
-        self.assertEqual(self.sections(y)["Waiting on you"], ["W3 answer: which db?", "W6 attend: payment halt at openrouter: 2 task(s) left (top up, then compose resume)",
-                                                             "W2 confirm: D6: dark theme"])
+        self.assertEqual(self.sections(y)["Waiting on you"], ["WAIT3 answer: which db?", "WAIT6 attend: payment halt at openrouter: 2 task(s) left (top up, then compose resume)",
+                                                             "WAIT2 confirm: D6: dark theme"])
 
     def test_the_morning_digest_shows_a_failed_verify_as_failed_and_not_as_waiting(self):
         import fc_digest

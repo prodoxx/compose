@@ -11,6 +11,7 @@ import fc_core, fc_tasks, fc_herdr, fc_fleet, fc_ask
 KINDS = ("answer", "go", "attend", "confirm", "review")
 STOPS = ("answer", "go", "attend")  # the kinds that hold work until the owner acts
 LINE_MAX = 120
+PREFIX = "WAIT"  # an item is WAIT<n>: four letters, so it is never read as a question id (at most three, fc_ask.CARD_ID), and maps do number questions W1, W2
 ITEM_KEYS = ("id", "key", "kind", "line", "stops")  # what every reader of an item relies on
 
 def _path(proj):
@@ -62,8 +63,8 @@ def _is_open(item):
     return not item.get("closed")
 
 def _new(data, kind, key, line, recommendation="", ids=(), issue=None):
-    """Append a new open item with the next id (W<n>) to the loaded store and return it; an answer item keeps the issue its questions are on."""
-    item = {"id": f"W{data['next']}", "key": key, "kind": kind, "line": _one_line(line), "recommendation": _one_line(recommendation),
+    """Append a new open item with the next id (WAIT<n>) to the loaded store and return it; an answer item keeps the issue its questions are on."""
+    item = {"id": f"{PREFIX}{data['next']}", "key": key, "kind": kind, "line": _one_line(line), "recommendation": _one_line(recommendation),
             "ids": [str(i) for i in ids], "stops": kind in STOPS, "opened": _stamp(), "seen": None, "closed": None, "closed_by": None}
     if kind == "answer":
         item["issue"] = issue
@@ -72,7 +73,7 @@ def _new(data, kind, key, line, recommendation="", ids=(), issue=None):
     return item
 
 def open_item(proj, kind, key, line, recommendation="", ids=(), issue=None):
-    """The open item with that key when one exists, else a new open item with the next id (W<n>)."""
+    """The open item with that key when one exists, else a new open item with the next id (WAIT<n>)."""
     with _locked(proj):
         data = load(proj)
         for item in data["items"]:
@@ -106,8 +107,8 @@ def mark_seen(proj, wid):
 
 def _order(item):
     """The sort key of an open item: stoppers first, then the oldest opened, then the lowest id as a number."""
-    num = str(item["id"])[1:]
-    return (not item.get("stops"), item.get("opened") or "", int(num) if num.isdigit() else 0)
+    num = re.search(r"\d+$", str(item["id"]))
+    return (not item.get("stops"), item.get("opened") or "", int(num[0]) if num else 0)
 
 def open_items(proj):
     """The open items, the ones that stop work first, then the oldest opened, then the lowest id."""
@@ -403,7 +404,7 @@ def _recommended(item, gap=" "):
     return item["line"] + (f"{gap}(recommendation: {item['recommendation']})" if item.get("recommendation") else "")
 
 def listing(items, cap=7):
-    """One line per item (`W3  hw  answer  12m  <line>  (recommendation: <rec>)`, ` [seen]` when seen); more than `cap` lines: the first cap - 1
+    """One line per item (`WAIT3  hw  answer  12m  <line>  (recommendation: <rec>)`, ` [seen]` when seen); more than `cap` lines: the first cap - 1
     and a count line (`cap=None` prints all); no item: one line saying so."""
     if not items:
         return ["nothing waits on you"]
@@ -456,12 +457,12 @@ def cmd_ack(a):
 
 def cmd_waiting(a):
     """Print what waits on the product owner (at most seven lines; --all prints every item, --footer the session footer), or close a go item
-    with `no W<n> --quote "<their words>"`."""
+    with `no WAIT<n> --quote "<their words>"`."""
     if a.words:
         if len(a.words) != 2 or a.words[0] != "no":
-            sys.exit('usage: compose waiting [--all | --footer] | compose waiting no W<n> --quote "<what the product owner said>"')
+            sys.exit('usage: compose waiting [--all | --footer] | compose waiting no WAIT<n> --quote "<what the product owner said>"')
         if not (a.quote or "").strip():
-            sys.exit('no needs the product owner\'s words: compose waiting no W<n> --quote "<what they said>"')
+            sys.exit('no needs the product owner\'s words: compose waiting no WAIT<n> --quote "<what they said>"')
         proj, item = _locate(a, a.words[1], "compose waiting no")
         if item["kind"] != "go":
             sys.exit(f"{item['id']} is a {item['kind']} item; only a go can be answered with no")

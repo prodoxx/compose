@@ -211,7 +211,7 @@ class Decide(unittest.TestCase):
         fc.fc_waiting.open_item(self.proj, "answer", "report:shop-orchestrator:t1", "NEB-12: 1 question Q2", ids=["Q2"], issue="NEB-12")
         out = self.decide_reading_maps(new=["SQLite"], closes=["Q2"], quote="sqlite")
         self.assertNotIn("cleared", out)  # the story's map never held it
-        self.assertIn("closed W1 on the waiting list", out)
+        self.assertIn("closed WAIT1 on the waiting list", out)
         self.assertEqual(fc.fc_waiting.load(self.proj)["items"][0]["closed_by"], "decided")
 
     def test_a_decide_on_a_story_keeps_its_ask_about_a_question_still_open_on_the_feature(self):
@@ -243,7 +243,7 @@ class Decide(unittest.TestCase):
         fc.fc_waiting.open_item(self.proj, "answer", "report:shop-orchestrator:t1", "NEB-12: 1 question Q1", ids=["Q1"], issue="NEB-12")
         out = self.decide(new=["Clerk"], closes=["Q1"], quote="clerk")
         self.assertIn("cleared Q1 from Not yet specified on NEB-12", out)
-        self.assertIn("closed W1 on the waiting list", out)
+        self.assertIn("closed WAIT1 on the waiting list", out)
         self.assertEqual(fc.fc_waiting.load(self.proj)["items"][0]["closed_by"], "decided")
 
     def test_a_decide_on_the_asks_own_map_closes_only_the_ids_that_map_no_longer_holds_open(self):
@@ -629,13 +629,13 @@ class Decide(unittest.TestCase):
         out = self.decide(accept_all=True)
         self.assertEqual(sorted(i["key"] for i in self.waiting("confirm")), ["decision:NEB-1:D5", "decision:NEB-1:D6", "decision:NEB-1:Q3"])
         self.assertEqual(self.keys()["report:shop-orchestrator:t1"], "decided")
-        self.assertIn("closed W1 on the waiting list", out)
+        self.assertIn("closed WAIT1 on the waiting list", out)
 
     def test_their_words_on_the_line_close_the_confirm_item(self):
         self.decide(new=["use SQLite"], closes=["Q2"], ruling=True)
         out = self.decide("D5", quote="yes")
         self.assertEqual(self.keys(), {"decision:NEB-1:Q3": None, "decision:NEB-1:D5": "confirmed"})
-        self.assertIn("closed W2 on the waiting list", out)
+        self.assertIn("closed WAIT2 on the waiting list", out)
 
     def test_the_older_form_with_new_words_confirms_the_line_and_closes_its_item(self):
         self.decide(new=["use SQLite"], closes=["Q2"], ruling=True)
@@ -660,7 +660,7 @@ class Decide(unittest.TestCase):
         out = self.decide(new=["Clerk"], closes=["Q1"], quote="clerk")
         (item,) = [i for i in self.fc_waiting.load(self.proj)["items"] if i["kind"] == "answer"]
         self.assertEqual((item["closed_by"], item["ids"]), ("decided", []))
-        self.assertIn("closed W1 on the waiting list\n", out)
+        self.assertIn("closed WAIT1 on the waiting list\n", out)
         self.assertEqual(self.waiting("answer"), [])
 
     def test_an_answer_closes_only_the_asks_about_its_own_issue(self):

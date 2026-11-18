@@ -1,5 +1,5 @@
 import hermetic  # first: no test sees the real home
-import argparse, contextlib, importlib.machinery, importlib.util, io, json, os, sys, tempfile, time, unittest
+import argparse, contextlib, importlib.machinery, importlib.util, io, json, os, re, sys, tempfile, time, unittest
 from pathlib import Path
 from unittest import mock
 os.environ["HERDR_ENV"] = ""
@@ -20,7 +20,7 @@ class Store(unittest.TestCase):
     def test_an_item_gets_the_next_id_and_one_line(self):
         a = fc_waiting.open_item(self.proj, "answer", "report:hw-orchestrator:t1", "which\n database?  " + "x" * 200, "SQLite", ids=["Q1"])
         b = fc_waiting.open_item(self.proj, "confirm", "decision:NEB-1:D7", "D7: dark theme")
-        self.assertEqual((a["id"], b["id"]), ("W1", "W2"))
+        self.assertEqual((a["id"], b["id"]), ("WAIT1", "WAIT2"))
         self.assertEqual(len(a["line"]), 120)
         self.assertTrue(a["line"].startswith("which database? x"))
         self.assertTrue(a["line"].endswith("..."))
@@ -31,7 +31,7 @@ class Store(unittest.TestCase):
     def test_the_same_key_is_one_item(self):
         a = fc_waiting.open_item(self.proj, "go", "k", "wait for the go")
         b = fc_waiting.open_item(self.proj, "go", "k", "wait for the go again")
-        self.assertEqual((a["id"], b["id"]), ("W1", "W1"))
+        self.assertEqual((a["id"], b["id"]), ("WAIT1", "WAIT1"))
         self.assertEqual(len(json.loads(self.file.read_text())["items"]), 1)
 
     def test_a_closed_item_leaves_the_open_list_and_its_id_is_not_reused(self):
@@ -42,23 +42,30 @@ class Store(unittest.TestCase):
         closed = json.loads(self.file.read_text())["items"][0]
         self.assertEqual(closed["closed_by"], "settled")
         self.assertTrue(closed["closed"])
-        self.assertEqual(fc_waiting.open_item(self.proj, "go", "k2", "again")["id"], "W2")
+        self.assertEqual(fc_waiting.open_item(self.proj, "go", "k2", "again")["id"], "WAIT2")
 
     def test_seen_keeps_it_open(self):
         fc_waiting.open_item(self.proj, "confirm", "k", "D1: a thing")
-        self.assertTrue(fc_waiting.mark_seen(self.proj, "W1")["seen"])
-        self.assertEqual([i["id"] for i in fc_waiting.open_items(self.proj)], ["W1"])
-        self.assertIsNone(fc_waiting.mark_seen(self.proj, "W9"))
+        self.assertTrue(fc_waiting.mark_seen(self.proj, "WAIT1")["seen"])
+        self.assertEqual([i["id"] for i in fc_waiting.open_items(self.proj)], ["WAIT1"])
+        self.assertIsNone(fc_waiting.mark_seen(self.proj, "WAIT9"))
+
+    def test_a_waiting_id_is_never_read_as_a_question_id(self):
+        item = fc_waiting.open_item(self.proj, "confirm", "decision:NEB-1:D7", "D7: dark theme")
+        self.assertEqual(item["id"], "WAIT1")
+        self.assertIsNone(re.fullmatch(fc.fc_ask.CARD_ID, item["id"]))  # a map may number its questions W1, W2, ...: an item never looks like one
+        self.assertEqual(fc.fc_ask.question_ids(f"NEB-1: 1 questions {item['id']}"), [])
+        self.assertIsNone(fc.fc_decide.ANSWER.match(f"{item['id']}: yes"))  # nor is `decide "WAIT1: yes"` an answer to a question
 
     def test_an_answered_question_closes_its_item_at_once(self):
         fc_waiting.open_item(self.proj, "answer", "report:a:t1", "which one?", ids=["Q1", "Q2"])
         fc_waiting.open_item(self.proj, "answer", "report:b:t2", "no ids here")
         self.assertEqual(fc_waiting.answered(self.proj, ["Q1"]), [])
         self.assertEqual(fc_waiting.open_items(self.proj)[0]["ids"], ["Q2"])
-        self.assertEqual(fc_waiting.answered(self.proj, ["Q2"]), ["W1"])
+        self.assertEqual(fc_waiting.answered(self.proj, ["Q2"]), ["WAIT1"])
         items = {i["id"]: i for i in json.loads(self.file.read_text())["items"]}
-        self.assertEqual(items["W1"]["closed_by"], "decided")
-        self.assertIsNone(items["W2"]["closed"])
+        self.assertEqual(items["WAIT1"]["closed_by"], "decided")
+        self.assertIsNone(items["WAIT2"]["closed"])
         self.assertEqual(fc_waiting.answered(self.proj, ["Q1", "Q2"]), [])
 
     def test_an_ask_of_no_known_issue_loses_only_the_ids_a_decide_settled(self):
@@ -82,7 +89,7 @@ class Store(unittest.TestCase):
         self.story_ask(["Q2", "Q7"])  # Q2 is written on the feature only, Q7 on no map any more
         self.assertEqual(fc_waiting.settle_asks(self.proj, "NEB-2", [], {"NEB-2": set(), "NEB-1": {"Q2"}}.get), [])
         self.assertEqual(self.ids(), {"report:a:t1": ["Q2"]})
-        self.assertEqual(fc_waiting.settle_asks(self.proj, "NEB-2", [], {"NEB-2": set(), "NEB-1": set()}.get), ["W1"])  # the feature settled it since
+        self.assertEqual(fc_waiting.settle_asks(self.proj, "NEB-2", [], {"NEB-2": set(), "NEB-1": set()}.get), ["WAIT1"])  # the feature settled it since
 
     def test_an_ask_of_the_decided_map_loses_what_was_settled_though_a_late_read_of_the_feature_still_shows_it(self):
         self.story_ask(["Q2", "Q3"])
@@ -97,7 +104,7 @@ class Store(unittest.TestCase):
     def test_an_ask_of_another_issue_closes_when_the_question_it_names_was_only_on_the_decided_map(self):
         self.story_ask(["Q2"])  # the story's own map never held Q2: the ask was let through on the feature's
         self.assertEqual(fc_waiting.answered(self.proj, ["Q2"], "NEB-1"), [])  # not an ask of that map
-        self.assertEqual(fc_waiting.settle_asks(self.proj, "NEB-1", ["Q2"], {"NEB-1": set(), "NEB-2": set()}.get), ["W1"])
+        self.assertEqual(fc_waiting.settle_asks(self.proj, "NEB-1", ["Q2"], {"NEB-1": set(), "NEB-2": set()}.get), ["WAIT1"])
         self.assertEqual(fc_waiting.load(self.proj)["items"][0]["closed_by"], "decided")
 
     def test_an_ask_of_another_issue_keeps_a_question_its_own_map_still_holds(self):
@@ -120,15 +127,15 @@ class Store(unittest.TestCase):
         self.file.write_text("{")
         self.assertEqual(fc_waiting.open_items(self.proj), [])
         self.assertEqual(self.file.read_text(), "{")
-        self.assertEqual(fc_waiting.open_item(self.proj, "go", "k", "go?")["id"], "W1")
-        self.assertEqual(json.loads(self.file.read_text())["items"][0]["id"], "W1")
+        self.assertEqual(fc_waiting.open_item(self.proj, "go", "k", "go?")["id"], "WAIT1")
+        self.assertEqual(json.loads(self.file.read_text())["items"][0]["id"], "WAIT1")
 
     def test_a_file_that_is_not_a_store_reads_as_empty(self):
         self.file.parent.mkdir(parents=True)
-        for bad in ('[]', '{"next": "3", "items": []}', '{"next": 3, "items": {}}', '{"next": 3, "items": [1]}', '{"next": 3, "items": [{"id": "W1"}]}',
-                    '{"next": 3, "items": [{"id": "W1", "key": "k", "line": "l", "stops": true}]}',  # no kind: every reader would crash on it
-                    '{"next": 3, "items": [{"id": "W1", "key": "k", "kind": "go", "stops": true}]}',
-                    '{"next": 3, "items": [{"id": "W1", "key": "k", "kind": "go", "line": "l"}]}'):
+        for bad in ('[]', '{"next": "3", "items": []}', '{"next": 3, "items": {}}', '{"next": 3, "items": [1]}', '{"next": 3, "items": [{"id": "WAIT1"}]}',
+                    '{"next": 3, "items": [{"id": "WAIT1", "key": "k", "line": "l", "stops": true}]}',  # no kind: every reader would crash on it
+                    '{"next": 3, "items": [{"id": "WAIT1", "key": "k", "kind": "go", "stops": true}]}',
+                    '{"next": 3, "items": [{"id": "WAIT1", "key": "k", "kind": "go", "line": "l"}]}'):
             self.file.write_text(bad)
             self.assertEqual(fc_waiting.load(self.proj), {"next": 1, "items": []}, bad)
 
@@ -136,15 +143,15 @@ class Store(unittest.TestCase):
         def open_at(stamp, *args):
             with mock.patch("time.strftime", lambda fmt: stamp):
                 fc_waiting.open_item(self.proj, *args)
-        open_at("2026-01-01 10:00:00", "confirm", "c1", "confirm late")    # W1, not a stopper, opened 10:00
-        open_at("2026-01-01 09:00:00", "review", "r1", "review early")     # W2, not a stopper, 09:00
-        open_at("2026-01-01 09:00:00", "go", "g1", "go early")             # W3, stopper, 09:00
-        open_at("2026-01-01 09:00:00", "attend", "a1", "attend early")     # W4, stopper, 09:00
-        open_at("2026-01-01 09:00:00", "answer", "q1", "answer")           # W5, stopper, 09:00
-        self.assertEqual([i["id"] for i in fc_waiting.open_items(self.proj)], ["W3", "W4", "W5", "W2", "W1"])
-        for n in range(6, 11):  # ids sort as numbers: W10 after W9 within one second
+        open_at("2026-01-01 10:00:00", "confirm", "c1", "confirm late")    # WAIT1, not a stopper, opened 10:00
+        open_at("2026-01-01 09:00:00", "review", "r1", "review early")     # WAIT2, not a stopper, 09:00
+        open_at("2026-01-01 09:00:00", "go", "g1", "go early")             # WAIT3, stopper, 09:00
+        open_at("2026-01-01 09:00:00", "attend", "a1", "attend early")     # WAIT4, stopper, 09:00
+        open_at("2026-01-01 09:00:00", "answer", "q1", "answer")           # WAIT5, stopper, 09:00
+        self.assertEqual([i["id"] for i in fc_waiting.open_items(self.proj)], ["WAIT3", "WAIT4", "WAIT5", "WAIT2", "WAIT1"])
+        for n in range(6, 11):  # ids sort as numbers: WAIT10 after WAIT9 within one second
             open_at("2026-01-01 08:00:00", "go", f"n{n}", "go")
-        self.assertEqual([i["id"] for i in fc_waiting.open_items(self.proj)][:6], ["W6", "W7", "W8", "W9", "W10", "W3"])
+        self.assertEqual([i["id"] for i in fc_waiting.open_items(self.proj)][:6], ["WAIT6", "WAIT7", "WAIT8", "WAIT9", "WAIT10", "WAIT3"])
 
 
 class Conditions(unittest.TestCase):
@@ -203,24 +210,24 @@ class Conditions(unittest.TestCase):
         fc_waiting.sync(self.proj)
         self.report(self.lead, "working", "carrying on", at="2026-11-17 10:05:00")
         [item] = fc_waiting.sync(self.proj)
-        self.assertEqual((item["id"], item["ids"]), ("W1", ["Q1", "Q2"]))
-        self.assertEqual(fc_waiting.answered(self.proj, ["Q1", "Q2"], "NEB-1"), ["W1"])
+        self.assertEqual((item["id"], item["ids"]), ("WAIT1", ["Q1", "Q2"]))
+        self.assertEqual(fc_waiting.answered(self.proj, ["Q1", "Q2"], "NEB-1"), ["WAIT1"])
         self.assertEqual(fc_waiting.sync(self.proj), [])
 
     def test_a_reminder_of_an_open_ask_is_the_same_item(self):
         self.report(self.lead, "needs-user", "NEB-1: 2 questions Q1, Q2")
         fc_waiting.sync(self.proj)
         self.report(self.lead, "needs-user", "reminder: NEB-1: 2 questions Q1, Q2", at="2026-11-17 11:00:00")
-        self.assertEqual([(i["id"], i["ids"]) for i in fc_waiting.sync(self.proj)], [("W1", ["Q1", "Q2"])])
+        self.assertEqual([(i["id"], i["ids"]) for i in fc_waiting.sync(self.proj)], [("WAIT1", ["Q1", "Q2"])])
         self.report(self.lead, "needs-user", "NEB-1: 2 questions Q2, Q3", at="2026-11-17 11:05:00")  # a new question: a new ask
-        self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj)], ["W1", "W2"])
+        self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj)], ["WAIT1", "WAIT2"])
 
     def test_an_item_closed_by_a_decision_stays_closed_while_its_report_is_still_the_last_line(self):
         self.report(self.lead, "needs-user", "NEB-1: 1 question Q1")
         fc_waiting.sync(self.proj)
         fc_waiting.answered(self.proj, ["Q1"], "NEB-1")
         self.assertEqual(fc_waiting.sync(self.proj), [])
-        self.assertEqual([(i["id"], i["closed_by"]) for i in self.stored()], [("W1", "decided")])
+        self.assertEqual([(i["id"], i["closed_by"]) for i in self.stored()], [("WAIT1", "decided")])
 
     def test_an_ask_the_watch_saw_opens_though_the_reporter_reported_again_since(self):
         self.report(self.lead, "needs-user", "NEB-1: 2 questions Q1, Q2; recommendation: SQLite")
@@ -228,7 +235,7 @@ class Conditions(unittest.TestCase):
         event = f"event crew={self.lead} state=needs-user message={'NEB-1: 2 questions Q1, Q2; recommendation: SQLite'!r}  yolo=on (answer it)"
         [item] = fc_waiting.sync(self.proj, [event])
         self.assertEqual((item["key"], item["ids"], item["line"], item["issue"]), (f"report:{self.lead}:2026-11-17 10:00:00", ["Q1", "Q2"], "NEB-1: 2 questions Q1, Q2", "NEB-1"))
-        self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj, [event])], ["W1"])  # the same ask read again is the same item
+        self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj, [event])], ["WAIT1"])  # the same ask read again is the same item
 
     def test_an_ask_without_an_issue_at_its_head_is_about_the_feature_else_no_known_issue(self):
         self.report(self.lead, "needs-user", "2 questions Q1, Q2")
@@ -266,7 +273,7 @@ class Conditions(unittest.TestCase):
         fc_waiting.sync(self.proj)
         (self.crew / "hw-planner.json").write_text("[]")
         with contextlib.redirect_stderr(io.StringIO()) as err:
-            self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj)], ["W1"])
+            self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj)], ["WAIT1"])
         self.assertTrue(err.getvalue().startswith("waiting list not updated ("))
         self.assertIsNone(fc_waiting._reporter_pane(self.proj, "report:hw-planner:t"))
         with self.assertRaises(ValueError):
@@ -276,10 +283,10 @@ class Conditions(unittest.TestCase):
     def test_a_second_ask_is_a_new_unseen_item(self):
         self.report(self.lead, "needs-user", "first?")
         fc_waiting.sync(self.proj)
-        fc_waiting.mark_seen(self.proj, "W1")
+        fc_waiting.mark_seen(self.proj, "WAIT1")
         self.report(self.lead, "needs-user", "second?", at="2026-11-17 10:05:00")
         [item] = fc_waiting.sync(self.proj)
-        self.assertEqual((item["id"], item["line"], item["seen"]), ("W2", "second?", None))
+        self.assertEqual((item["id"], item["line"], item["seen"]), ("WAIT2", "second?", None))
 
     def test_a_status_line_without_a_time_keys_on_the_name_alone(self):
         (self.crew / f"{self.lead}.status").write_text(json.dumps({"state": "needs-user", "message": "which?"}) + "\n")
@@ -357,16 +364,16 @@ class Conditions(unittest.TestCase):
         fc_waiting.close_item(self.proj, "go:abc", "no: later")
         self.assertEqual(fc_waiting.sync(self.proj), [])
         self.verify(passed=True, head="def")
-        self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj)], ["W2"])
+        self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj)], ["WAIT2"])
 
     def test_a_condition_that_comes_back_after_settling_is_a_new_item(self):
         self.verify(passed=True, head="abc")
-        self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj)], ["W1"])
+        self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj)], ["WAIT1"])
         self.verify(passed=False, head="abc")
         self.assertEqual(fc_waiting.sync(self.proj), [])
         self.assertEqual(self.stored()[0]["closed_by"], "settled")
         self.verify(passed=True, head="abc")
-        self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj)], ["W2"])
+        self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj)], ["WAIT2"])
 
     def host(self, **status):
         """fc_fleet.agents patched to list these agents with these statuses (None: the host did not answer)."""
@@ -415,7 +422,7 @@ class Conditions(unittest.TestCase):
     def test_decisions_and_reviews_are_left_alone(self):
         fc_waiting.open_item(self.proj, "confirm", "decision:NEB-1:D7", "D7: dark theme")
         fc_waiting.open_item(self.proj, "review", "review:NEB-1", "review the plan")
-        self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj)], ["W1", "W2"])
+        self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj)], ["WAIT1", "WAIT2"])
 
     def test_sync_on_a_broken_file_still_returns_what_waits(self):
         (self.proj / "results" / "waiting.json").write_text("{")
@@ -426,10 +433,10 @@ class Conditions(unittest.TestCase):
     def test_a_crew_record_that_cannot_be_read_closes_nothing(self):
         self.record("hw-planner", "manager")
         self.report("hw-planner", "blocked", "no Linear key")
-        self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj)], ["W1"])
+        self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj)], ["WAIT1"])
         (self.crew / "hw-planner.json").write_text("{")
         with contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj)], ["W1"])
+            self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj)], ["WAIT1"])
         self.assertIsNone(self.stored()[0]["closed"])
 
     def test_a_source_that_cannot_be_read_closes_nothing(self):
@@ -438,7 +445,7 @@ class Conditions(unittest.TestCase):
         status = self.crew / f"{self.lead}.status"
         status.write_text(status.read_text()[:-30])  # the last line is cut in half
         with contextlib.redirect_stderr(io.StringIO()) as err:
-            self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj)], ["W1"])
+            self.assertEqual([i["id"] for i in fc_waiting.sync(self.proj)], ["WAIT1"])
         self.assertIsNone(self.stored()[0]["closed"])
         self.assertEqual(len(err.getvalue().splitlines()), 1)
         self.assertTrue(err.getvalue().startswith("waiting list not updated ("))
@@ -492,12 +499,12 @@ class Commands(unittest.TestCase):
     def test_a_line_names_the_item_its_age_and_its_recommendation(self):
         item = self.open(self.hw, "answer", "k1", "which database?", "SQLite")
         self.open(self.shop, "confirm", "k2", "D1: a thing")
-        fc_waiting.mark_seen(self.shop, "W1")
+        fc_waiting.mark_seen(self.shop, "WAIT1")
         now = time.time()
         for age, text in ((0, "0m"), (5 * 60, "5m"), (2 * 3600 + 10 * 60, "2h 10m"), (3 * 86400 + 3600, "3d")):
             item["opened"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now - age))
             with mock.patch("time.time", return_value=now):
-                self.assertEqual(fc_waiting.listing([{**item, "project": "hw"}])[0], f"W1  hw  answer  {text}  which database?  (recommendation: SQLite)")
+                self.assertEqual(fc_waiting.listing([{**item, "project": "hw"}])[0], f"WAIT1  hw  answer  {text}  which database?  (recommendation: SQLite)")
         seen = fc_waiting.gather(".")
         self.assertEqual([i["project"] for i in seen], ["hw", "shop"])  # the stopper first
         self.assertTrue(fc_waiting.listing(seen)[1].endswith("D1: a thing [seen]"))
@@ -508,9 +515,9 @@ class Commands(unittest.TestCase):
         self.open(self.hw, "go", "k2", "the stack waits for your go", "compose stack --submit --project hw")
         self.open(self.hw, "attend", "report:hw-planner:t", "no Linear key", "top up at the provider's page, then run compose resume for the project")
         items = [{**i, "project": "hw"} for i in fc_waiting.open_items(self.hw)]
-        self.assertEqual(fc_waiting.footer(items), ["Waiting on you:", "- W1 hw: which database?",
-                                                    "- W2 hw: the stack waits for your go (recommendation: compose stack --submit --project hw)",
-                                                    "- W3 hw: no Linear key (recommendation: top up at the provider's page, then run compose resume fo...)"])
+        self.assertEqual(fc_waiting.footer(items), ["Waiting on you:", "- WAIT1 hw: which database?",
+                                                    "- WAIT2 hw: the stack waits for your go (recommendation: compose stack --submit --project hw)",
+                                                    "- WAIT3 hw: no Linear key (recommendation: top up at the provider's page, then run compose resume fo...)"])
         self.assertIn("(recommendation: SQLite, since hosting hangs on it)", fc_waiting.listing(fc_waiting.gather("."))[0])  # the manager's own view keeps it
 
     def test_the_footer_never_cuts_a_command_the_cli_wrote(self):
@@ -519,8 +526,8 @@ class Commands(unittest.TestCase):
         self.open(self.hw, "go", "go:abc", "the stack waits for your go", go)
         self.open(self.hw, "attend", "report:hw-orchestrator:t", "no Linear key", "add the key to the config, then report again from the team lead pane")
         foot = fc_waiting.footer([{**i, "project": "hw"} for i in fc_waiting.open_items(self.hw)])  # as opened, before a sync reads the files
-        self.assertIn(f"- W1 hw: the stack waits for your go (recommendation: {go})", foot)
-        self.assertIn("- W2 hw: no Linear key (recommendation: add the key to the config, then report again from the tea...)", foot)
+        self.assertIn(f"- WAIT1 hw: the stack waits for your go (recommendation: {go})", foot)
+        self.assertIn("- WAIT2 hw: no Linear key (recommendation: add the key to the config, then report again from the tea...)", foot)
 
     def test_the_footer_is_at_most_four_lines_and_only_unseen_stoppers(self):
         for n in range(5):
@@ -528,16 +535,16 @@ class Commands(unittest.TestCase):
         for n in range(2):
             self.open(self.shop, "confirm", f"d{n}", f"D{n}: a thing")
         foot = fc_waiting.footer(fc_waiting.gather("."))
-        self.assertEqual(foot, ["Waiting on you:", "- W1 hw: question 0", "- W2 hw: question 1", "+5 more: compose waiting"])  # an ask is asked open
+        self.assertEqual(foot, ["Waiting on you:", "- WAIT1 hw: question 0", "- WAIT2 hw: question 1", "+5 more: compose waiting"])  # an ask is asked open
         self.assertEqual(self.run_cmd(fc.fc_waiting.cmd_waiting, footer=True), foot)
         alone = Path(tempfile.mkdtemp()) / "solo"
         self.projects = {"solo": (alone.parent, alone)}
         for n in range(3):
             self.open(alone, "go", f"g{n}", f"go {n}")
         three = fc_waiting.footer(fc_waiting.gather("."))
-        self.assertEqual(three, ["Waiting on you:", "- W1 solo: go 0", "- W2 solo: go 1", "- W3 solo: go 2"])
+        self.assertEqual(three, ["Waiting on you:", "- WAIT1 solo: go 0", "- WAIT2 solo: go 1", "- WAIT3 solo: go 2"])
         for n in range(1, 4):
-            fc_waiting.mark_seen(alone, f"W{n}")
+            fc_waiting.mark_seen(alone, f"WAIT{n}")
         self.assertEqual(fc_waiting.footer(fc_waiting.gather(".")), [])
         self.assertEqual(self.run_cmd(fc.fc_waiting.cmd_waiting, footer=True), [])
 
@@ -561,29 +568,29 @@ class Commands(unittest.TestCase):
         crew = self.hw / "results" / "crew"
         (crew / "hw-planner.status").write_text(json.dumps({"at": "2026-11-17 10:00:00", "state": "needs-user", "message": "which database?"}) + "\n")
         (crew / "hw-planner.json").write_text(json.dumps({"name": "hw-planner", "reports_to": "manager", "pane": "p7"}))
-        self.open(self.shop, "confirm", "d1", "D1: a thing")  # shop's W1 is not the report
+        self.open(self.shop, "confirm", "d1", "D1: a thing")  # shop's WAIT1 is not the report
         with mock.patch.object(fc_waiting.fc_tasks, "push_stance", return_value="ask"):
-            out = self.run_cmd(fc.fc_waiting.cmd_ack, id="W1", project="hw")
-            self.assertEqual(out, ["seen W1 (hw): which database?; it stays on the list until it is closed, and leaves the footer"])
+            out = self.run_cmd(fc.fc_waiting.cmd_ack, id="WAIT1", project="hw")
+            self.assertEqual(out, ["seen WAIT1 (hw): which database?; it stays on the list until it is closed, and leaves the footer"])
             self.pane_label.assert_called_once_with("p7", state_labels={"blocked": "seen"})
             self.assertTrue(fc_waiting.open_items(self.hw)[0]["seen"])
             (crew / "hw-planner.json").write_text(json.dumps({"name": "hw-planner", "reports_to": "manager"}))  # no pane: no relabel, no error
             self.pane_label.reset_mock()
-            self.run_cmd(fc.fc_waiting.cmd_ack, id="W1", project="hw")
+            self.run_cmd(fc.fc_waiting.cmd_ack, id="WAIT1", project="hw")
             self.pane_label.assert_not_called()
         with self.assertRaises(SystemExit) as e:
-            self.run_cmd(fc.fc_waiting.cmd_ack, id="W9")
-        self.assertEqual(str(e.exception), "no open item W9; compose waiting lists them")
+            self.run_cmd(fc.fc_waiting.cmd_ack, id="WAIT9")
+        self.assertEqual(str(e.exception), "no open item WAIT9; compose waiting lists them")
 
     def test_ack_refuses_an_id_two_projects_share(self):
         self.open(self.hw, "confirm", "a", "in hw")
         self.open(self.shop, "confirm", "b", "in shop")
         with self.assertRaises(SystemExit) as e:
-            self.run_cmd(fc.fc_waiting.cmd_ack, id="W1")
-        self.assertIn("compose ack --project hw W1", str(e.exception))
-        self.assertIn("compose ack --project shop W1", str(e.exception))
+            self.run_cmd(fc.fc_waiting.cmd_ack, id="WAIT1")
+        self.assertIn("compose ack --project hw WAIT1", str(e.exception))
+        self.assertIn("compose ack --project shop WAIT1", str(e.exception))
         self.assertIsNone(fc_waiting.open_items(self.hw)[0]["seen"])
-        self.run_cmd(fc.fc_waiting.cmd_ack, id="W1", project="shop")
+        self.run_cmd(fc.fc_waiting.cmd_ack, id="WAIT1", project="shop")
         self.assertTrue(fc_waiting.open_items(self.shop)[0]["seen"])
 
     def test_no_closes_a_go_item_with_their_words_and_refuses_other_kinds(self):
@@ -592,27 +599,27 @@ class Commands(unittest.TestCase):
         stance = mock.patch.object(fc_waiting.fc_tasks, "push_stance", return_value="ask")
         stance.start()
         self.addCleanup(stance.stop)
-        self.open(self.hw, "confirm", "d1", "D1: a thing")  # W1 in hw
-        fc_waiting.gather(".")  # the go items open: W1 in shop, W2 in hw
+        self.open(self.hw, "confirm", "d1", "D1: a thing")  # WAIT1 in hw
+        fc_waiting.gather(".")  # the go items open: WAIT1 in shop, WAIT2 in hw
         with self.assertRaises(SystemExit) as e:  # no words
-            self.run_cmd(fc.fc_waiting.cmd_waiting, words=["no", "W2"], project="hw")
+            self.run_cmd(fc.fc_waiting.cmd_waiting, words=["no", "WAIT2"], project="hw")
         self.assertIn("--quote", str(e.exception))
-        with self.assertRaises(SystemExit) as e:  # W1 of hw is a confirm, not a go
-            self.run_cmd(fc.fc_waiting.cmd_waiting, words=["no", "W1"], project="hw", quote="not that")
-        self.assertIn("W1 is a confirm item", str(e.exception))
+        with self.assertRaises(SystemExit) as e:  # WAIT1 of hw is a confirm, not a go
+            self.run_cmd(fc.fc_waiting.cmd_waiting, words=["no", "WAIT1"], project="hw", quote="not that")
+        self.assertIn("WAIT1 is a confirm item", str(e.exception))
         with self.assertRaises(SystemExit) as e:  # unknown
-            self.run_cmd(fc.fc_waiting.cmd_waiting, words=["no", "W9"], project="hw", quote="not that")
-        self.assertEqual(str(e.exception), "no open item W9; compose waiting lists them")
-        with self.assertRaises(SystemExit) as e:  # W1 is open in both projects
-            self.run_cmd(fc.fc_waiting.cmd_waiting, words=["no", "W1"], quote="not yet")
-        self.assertIn("compose waiting no --project hw W1", str(e.exception))
-        self.assertIn("compose waiting no --project shop W1", str(e.exception))
+            self.run_cmd(fc.fc_waiting.cmd_waiting, words=["no", "WAIT9"], project="hw", quote="not that")
+        self.assertEqual(str(e.exception), "no open item WAIT9; compose waiting lists them")
+        with self.assertRaises(SystemExit) as e:  # WAIT1 is open in both projects
+            self.run_cmd(fc.fc_waiting.cmd_waiting, words=["no", "WAIT1"], quote="not yet")
+        self.assertIn("compose waiting no --project hw WAIT1", str(e.exception))
+        self.assertIn("compose waiting no --project shop WAIT1", str(e.exception))
         self.assertEqual(len(fc_waiting.open_items(self.hw)), 2)
-        out = self.run_cmd(fc.fc_waiting.cmd_waiting, words=["no", "W2"], project="hw", quote="not yet")
-        self.assertEqual(out, ['closed W2 (hw): the product owner said no: "not yet"'])
+        out = self.run_cmd(fc.fc_waiting.cmd_waiting, words=["no", "WAIT2"], project="hw", quote="not yet")
+        self.assertEqual(out, ['closed WAIT2 (hw): the product owner said no: "not yet"'])
         closed = json.loads((self.hw / "results" / "waiting.json").read_text())["items"][1]
         self.assertEqual((closed["closed_by"], bool(closed["closed"])), ("no: not yet", True))
-        self.assertEqual([i["id"] for i in fc_waiting.gather(".", project="hw")], ["W1"])  # the same verify does not ask again
+        self.assertEqual([i["id"] for i in fc_waiting.gather(".", project="hw")], ["WAIT1"])  # the same verify does not ask again
 
 
 if __name__ == "__main__":

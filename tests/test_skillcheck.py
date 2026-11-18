@@ -148,14 +148,14 @@ class SkillCheck(unittest.TestCase):
 
     def unseen(self, project="hw"):
         """One unseen answer item that stops work, as fc_waiting.gather returns it."""
-        return [{"id": "W1", "project": project, "kind": "answer", "line": "NEB-1: which db?", "stops": True, "seen": False}]
+        return [{"id": "WAIT1", "project": project, "kind": "answer", "line": "NEB-1: which db?", "stops": True, "seen": False}]
 
     def test_the_managers_prompt_carries_the_footer(self):
         self.prompt(text="/compose", role=None)  # the skill was seen
         with mock.patch.object(fc.fc_waiting, "gather", return_value=self.unseen()) as gather:
             note = self.context(self.prompt(role=None))
         self.assertIn("Waiting on you:", note)
-        self.assertIn("- W1 hw:", note)
+        self.assertIn("- WAIT1 hw:", note)
         self.assertIn("If you ran `compose decide`, `compose ack`, `compose waiting no`, a push or `compose resume`, or cleared an agent's prompt in this turn, run `compose waiting --footer` "
                       "again and end with what it prints (nothing printed means no footer).", note)  # the lines go stale once the turn closes the item
         self.assertIs(gather.call_args.kwargs["probe"], False)  # a prompt never asks the terminal host

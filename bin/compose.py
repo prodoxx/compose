@@ -130,7 +130,7 @@ def main():
                             ("stages", fc_stages.cmd_stages, "follow a verify's stages from a pane of the Herdr app or Rex, where no pane per stage exists: compose opens one itself in the project's `verify` tab (hosts.md)"),
                             ("decisions", fc_decide.cmd_decisions, "print the project's pending-decisions page: every open question with its recommendation and when it was asked, then the decisions to confirm; --issue picks another map"),
                             ("decide", fc_decide.cmd_decide, "record the product owner's decisions on the map (--new \"<decision>\" --closes Q1, --drop Q2, or --accept-all) with their words attached: --quote \"<what they said>\"; without it, under away or yolo as unconfirmed, or with --ruling as compose's own call on an easily reversible decision; it prints the open questions left"),
-                            ("waiting", fc_waiting.cmd_waiting, "print what waits on the product owner across the projects of this session, at most seven lines (--all prints every item, --footer the session footer); `waiting no W<n> --quote \"<their words>\"` answers a go item with no"),
+                            ("waiting", fc_waiting.cmd_waiting, "print what waits on the product owner across the projects of this session, at most seven lines (--all prints every item, --footer the session footer); `waiting no WAIT<n> --quote \"<their words>\"` answers a go item with no"),
                             ("show", fc_show.cmd_show, "print the saved output of the last run or verify (`show run|verify`), or with --line one summary line of it"),
                             ("ack", fc_waiting.cmd_ack, "mark a waiting item seen: it stays on the list until it is closed and leaves the footer; a report's pane stops showing blocked"),
                             ("reconcile", fc_reconcile.cmd_reconcile, "the one-time cleanup of a messy Linear project: list | check --file | show | apply --go | notices"),
@@ -346,7 +346,7 @@ def main():
             s.add_argument("--file", help="check: the sheet of how every open ticket is sorted (outside the repo)")
             s.add_argument("--go", help="apply: the product owner's words, verbatim")
         if name == "waiting":
-            s.add_argument("words", nargs="*", help="`no W<n>`: answer a go item with no (needs --quote); nothing: print the list")
+            s.add_argument("words", nargs="*", help="`no WAIT<n>`: answer a go item with no (needs --quote); nothing: print the list")
             s.add_argument("--footer", action="store_true", help="print the session footer (nothing unless an unseen item stops work)")
             s.add_argument("--all", action="store_true", help="print every item, not the first seven lines")
             s.add_argument("--quote", help="no: what the product owner said, verbatim")
@@ -354,7 +354,7 @@ def main():
             s.add_argument("what", choices=("run", "verify"), help="the last run or the last verify")
             s.add_argument("--line", action="store_true", help="print one summary line instead of the saved output")
         if name == "ack":
-            s.add_argument("id", help="the waiting item, W<n>")
+            s.add_argument("id", help="the waiting item, WAIT<n>")
         if name == "decide":
             s.add_argument("answers", nargs="*", help='a bare id ("Q3", "D2") confirms the line already recorded; the old "Q1: A" form still answers an open question')
             s.add_argument("--new", action="append", default=[], help="a decision, in a sentence: recorded as the issue's next D<n> under Decisions so far; repeat for more")
