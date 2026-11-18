@@ -113,8 +113,40 @@ class Store(unittest.TestCase):
         self.assertEqual(self.ids(), {"report:a:t1": ["Q1", "Q2"]})
         self.assertEqual(fc_waiting.settle_asks(self.proj, "NEB-1", ["Q1"], {"NEB-1": {"Q2"}}.get), [])  # a map that cannot be read: it stays
         self.assertEqual(self.ids(), {"report:a:t1": ["Q1", "Q2"]})
-        self.assertEqual(fc_waiting.settle_asks(self.proj, "NEB-1", ["Q1"], {"NEB-1": {"Q2"}, "NEB-9": {"Q2"}}.get), [])  # only the settled id is looked at
+        self.assertEqual(fc_waiting.settle_asks(self.proj, "NEB-1", ["Q1"], {"NEB-1": {"Q2"}, "NEB-9": {"Q2"}}.get), [])  # its map no longer holds Q1
         self.assertEqual(self.ids(), {"report:a:t1": ["Q2"]})
+
+    def test_an_ask_of_another_issue_also_loses_an_id_that_was_decided_before_it_was_asked(self):
+        self.story_ask(["Q1", "Q2"])  # `report` lets an ask through on one open question: Q1 was decided on the feature already
+        self.assertEqual(fc_waiting.settle_asks(self.proj, "NEB-1", ["Q2"], {"NEB-1": set(), "NEB-2": set()}.get), ["WAIT1"])
+
+    def test_an_ask_of_a_map_the_decide_cleared_loses_what_was_settled_whatever_a_late_read_shows(self):
+        self.story_ask(["Q1", "Q2", "Q3"])  # Q1 decided before the ask, Q2 settled now and cleared from the story's map, Q3 still open on it
+        late = {"NEB-1": set(), "NEB-2": {"Q2", "Q3"}}  # the read of the story's map is behind the write that cleared Q2
+        self.assertEqual(fc_waiting.settle_asks(self.proj, "NEB-1", ["Q2"], late.get, cleared=["NEB-2"]), [])
+        self.assertEqual(self.ids(), {"report:a:t1": ["Q3"]})
+
+    def test_an_ask_of_a_cleared_map_that_cannot_be_read_loses_only_what_was_settled(self):
+        self.story_ask(["Q1", "Q2"])
+        self.assertEqual(fc_waiting.settle_asks(self.proj, "NEB-1", ["Q2"], {"NEB-1": set()}.get, cleared=["NEB-2"]), [])
+        self.assertEqual(self.ids(), {"report:a:t1": ["Q1"]})
+
+    def test_no_map_is_read_while_the_list_is_locked(self):
+        self.story_ask(["Q2"])
+        held, lock = [], fc_waiting._locked
+        @contextlib.contextmanager
+        def locked(proj):
+            with lock(proj):
+                held.append(proj)
+                try:
+                    yield
+                finally:
+                    held.pop()
+        def open_on(issue):
+            self.assertEqual(held, [], f"{issue} was read under the lock: a slow Linear would hold up the prompt hook, the watch and ack")
+            return set()
+        with mock.patch.object(fc_waiting, "_locked", locked):
+            self.assertEqual(fc_waiting.settle_asks(self.proj, "NEB-1", ["Q2"], open_on), ["WAIT1"])
 
     def test_an_ask_of_another_issue_that_names_nothing_settled_is_not_read(self):
         self.story_ask(["Q5"], issue="NEB-9")

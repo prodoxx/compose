@@ -138,24 +138,32 @@ def answered(proj, ids, issue=None):
     gone = {str(i) for i in ids}
     return _drop_ids(proj, lambda item: [i for i in item["ids"] if i not in gone] if item.get("issue") in (issue, None) else None)
 
-def settle_asks(proj, issue, ids, open_on):
-    """After a decide wrote the map of `issue` and settled the question ids `ids` (they are off every map of the feature's tree by now):
-    an open ask keeps a question only while it is open where `report` read it when it let the ask through, on the map of the ask's own
-    issue or on the feature's. `open_on(issue)` is the ids open on a map now, None when it cannot be read: what cannot be known stays.
-    An ask of `issue` loses `ids` and every id open on neither map. An ask of another issue loses the `ids` its own map does not hold
-    open (the feature's are settled, whatever a read that is behind the write says); what it names besides is not this decide's to
-    judge, and its map is not read. An ask whose issue is not known is left to `answered`. Returns the ids of the items closed."""
-    gone, feature = {str(i) for i in ids}, _feature(proj)
-    def waits(i, maps):
-        return any((held := open_on(m)) is None or i in held for m in maps)
-    def keep(item):
+def settle_asks(proj, issue, ids, open_on, cleared=()):
+    """After a decide wrote the map of `issue`, settled the question ids `ids` and took them off the maps `cleared`: an open ask keeps
+    a question only while it is open where `report` read it when it let the ask through, on the map of the ask's own issue or on the
+    feature's. Every ask this decide can have changed is judged, on all its ids (an ask may name one that was decided before it was
+    asked): the asks of `issue`, of a map in `cleared`, and those that name one of `ids`. `open_on(issue)` is the ids open on a map
+    now, None when it cannot be read: what cannot be known stays. `ids` are open on none of `issue`, `cleared` and the feature, whatever
+    a read that is behind the write says. An ask whose issue is not known is left to `answered`. The maps are read before the list is
+    locked, so a slow read never holds up the list's other readers. Returns the ids of the items closed."""
+    gone, feature, seen = {str(i) for i in ids}, _feature(proj), {}
+    settled_on = {issue, feature, *cleared}
+    def read(m):
+        if m not in seen:
+            seen[m] = open_on(m)
+        return seen[m]
+    def keep(item, look):
+        """The ids the ask still holds, None when this decide cannot have changed it; `look(map)` is the ids open on a map, None when not known."""
         own = item.get("issue")
-        if own is None:
+        if own is None or not (own == issue or own in cleared or gone & set(item["ids"])):
             return None
-        if own == issue:
-            return [i for i in item["ids"] if i not in gone and waits(i, [own] + ([feature] if feature and feature != own else []))]
-        return [i for i in item["ids"] if i not in gone or waits(i, [own])]
-    return _drop_ids(proj, keep)
+        def holds(m, i):
+            return not (i in gone and m in settled_on) and ((held := look(m)) is None or i in held)
+        return [i for i in item["ids"] if any(holds(m, i) for m in [own] + ([feature] if feature and feature != own else []))]
+    for item in load(proj)["items"]:
+        if item.get("kind") == "answer" and _is_open(item) and item.get("ids"):
+            keep(item, read)  # reads the maps the rule asks for, before the lock
+    return _drop_ids(proj, lambda item: keep(item, seen.get))  # under the lock a map not read yet is not known: its ask stays as it is
 
 def reconcile_decisions(proj, ident, unconfirmed, live):
     """Bring the confirm items of one map in line with its Decisions so far: open a `confirm` item (key `decision:<ident>:<id>`) for each

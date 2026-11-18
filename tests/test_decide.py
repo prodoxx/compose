@@ -214,6 +214,21 @@ class Decide(unittest.TestCase):
         self.assertIn("closed WAIT1 on the waiting list", out)
         self.assertEqual(fc.fc_waiting.load(self.proj)["items"][0]["closed_by"], "decided")
 
+    def test_an_ask_headed_by_a_story_closes_though_it_also_named_a_question_decided_before_it_was_asked(self):
+        self.maps_on_linear({"NEB-1": MAP, "NEB-12": self.STORY})  # Q0 is under Decisions so far on the feature; `report` let the ask through on Q2
+        fc.fc_waiting.open_item(self.proj, "answer", "report:shop-orchestrator:t1", "NEB-12: 2 questions Q0, Q2", ids=["Q0", "Q2"], issue="NEB-12")
+        out = self.decide_reading_maps(new=["SQLite"], closes=["Q2"], quote="sqlite")
+        self.assertIn("closed WAIT1 on the waiting list", out)
+        self.assertEqual(fc.fc_waiting.load(self.proj)["items"][0]["closed_by"], "decided")
+
+    def test_an_ask_on_a_story_the_decide_cleared_keeps_only_what_the_story_still_holds(self):
+        story = MAP.replace("- Q2: Which database?", "- Q9: Which copy?")  # the story lists Q1 as the feature does, and its own Q9
+        self.maps_on_linear({"NEB-1": MAP, "NEB-12": story})
+        fc.fc_waiting.open_item(self.proj, "answer", "report:shop-orchestrator:t1", "NEB-12: 3 questions Q0, Q1, Q9", ids=["Q0", "Q1", "Q9"], issue="NEB-12")
+        out = self.decide_reading_maps(new=["Clerk"], closes=["Q1"], quote="clerk")
+        self.assertIn("cleared Q1 from Not yet specified on NEB-12", out)
+        self.assertEqual(fc.fc_waiting.load(self.proj)["items"][0]["ids"], ["Q9"])
+
     def test_a_decide_on_a_story_keeps_its_ask_about_a_question_still_open_on_the_feature(self):
         self.maps_on_linear({"NEB-1": MAP, "NEB-12": self.STORY})
         fc.fc_waiting.open_item(self.proj, "answer", "report:shop-orchestrator:t1", "NEB-12: 2 questions Q2, Q7", ids=["Q2", "Q7"], issue="NEB-12")

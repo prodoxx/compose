@@ -345,9 +345,8 @@ def cmd_decide(a):
     except Exception as e:  # noqa: BLE001  a waiting-list failure never stops a decision
         print(f"waiting list not updated ({e})")
     cleared = clear_elsewhere(proj, ident, [i for i in qs if i in answered or i in accepted])
-    try:  # an ask about another map that held these questions closes with them, and every ask keeps only what is still open where it was read
-        closed_items += [w for other, ids in cleared for w in fc_waiting.answered(proj, ids, other)]
-        closed_items += fc_waiting.settle_asks(proj, ident, settled, open_reader(ident, new_body))
+    try:  # every ask this decide can have changed keeps only what is still open where `report` read it: its own map or the feature's
+        closed_items += fc_waiting.settle_asks(proj, ident, settled, open_reader(ident, new_body), [other for other, _ in cleared])
     except Exception as e:  # noqa: BLE001  a waiting-list failure never stops a decision
         print(f"waiting list not updated ({e})")
     if posture and not quote:
