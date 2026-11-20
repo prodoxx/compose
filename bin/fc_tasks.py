@@ -197,6 +197,7 @@ def task_finished(proj, meta, redo=False, since=None):
 
 CRITERION = re.compile(r"^(?:[-*+]|\d+[.)]|\*\*\d+[.)]\*\*)(?:\s+|$)")  # `- a`, `* a`, `1. a`, `1) a`, `**1.** a`; never `**bold**`
 GIVEN = re.compile(r"^(?:[*_]+)?Given\b", re.I)
+AC_LINE = re.compile(r"^(?:[*_]+)?AC[ \t]?\d+[*_]*[:.)]")  # `AC1: Given ...` written with no bullet, the way a person types a scenario
 
 # A test runner's flag that runs only the tests whose names match: vitest, jest and bun `-t` / `--testNamePattern`, pytest `-k`
 # and `file::name`, go `-run`, mocha and playwright `-g` / `--grep`, node `--test-name-pattern`, dotnet `--filter`, gradle `--tests`.
@@ -211,8 +212,9 @@ def parse_criteria(text):
     """Criteria under '## Acceptance criteria' in a task or issue body: one per top-level bullet or numbered item.
     Top level is the first item's indent (Linear stores "-" as "*" and nests with 2 or 4 spaces); deeper items and
     wrapped lines fold into their parent, sub-items joined with "; ".
-    A list with no markers at all is read as plain Given/When/Then lines: each Given starts a criterion."""
-    m = re.search(r"## Acceptance criteria\n(.*?)(?:\n## |\Z)", text or "", re.S)
+    A list with no markers at all is read as plain Given/When/Then lines: each Given starts a criterion, and so does a line
+    that opens with its scenario number (`AC1: Given ...`), which keeps the number as part of the criterion."""
+    m = re.search(r"## Acceptance criteria\n(.*?)(?:\n## |\n---[ \t]*(?:\n|\Z)|\Z)", text or "", re.S)  # the rule opens the planning and decision log
     out, base, plain = [], None, False
     for line in (m.group(1) if m else "").splitlines():
         body = line.strip()
@@ -224,6 +226,9 @@ def parse_criteria(text):
         if mark and top:
             base, plain = indent if base is None else base, False
             out.append([body[mark.end():].strip()])
+        elif AC_LINE.match(body) and top:
+            base, plain = indent if base is None else base, False
+            out.append([body])
         elif mark and out:
             out[-1].append(body[mark.end():].strip())
         elif GIVEN.match(body) and top and (plain or not out):

@@ -59,6 +59,10 @@ Questions and planning both wait for that brief.
 
 By default the team lead writes the feature's Intent, Constraints and My calls to the feature issue from your brief and the codebase brief, in one pass, and the planner starts at once; you steer from its first report.
 Every choice it made for you is listed under "My calls" so you can check it while reading, and every decision you make is recorded with your words through `compose decide`, as a numbered line under the feature issue's "Decisions so far".
+An epic, feature or story has two parts on Linear.
+The top is what a product manager, designer or tester reads: what it is for, why, and the acceptance criteria, in plain words.
+Below a rule, under "Planning and decision log", sits what the planning wrote and the build reads: My calls, Decisions so far, constraints, notes, the plan and the evidence.
+A note there says the log is for compose and its agents and is not edited by hand; the CLI keeps each section on its side of the rule on every write.
 The shaping conversation runs only when you ask for it, when the ticket carries the `needs-shaping` label, when a verification policy names the files the feature touches, or when the Intent would need a guess that is not easily reversible.
 Then the engineering manager shapes the feature with you in one conversation, one question at a time, playing each part back with its guesses marked, a builder check reads the design before you do, and the plan starts once you approve it.
 

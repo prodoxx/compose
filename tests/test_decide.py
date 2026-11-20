@@ -164,7 +164,8 @@ class Decide(unittest.TestCase):
     def test_one_answer_may_close_several_questions_and_the_last_leaves_none_open(self):
         out = self.decide(new=["Clerk on SQLite"], closes=["Q1", "Q2"], quote="clerk and sqlite")
         self.assertIn("- D5: Clerk on SQLite (closes Q1, Q2) (product owner,", self.linear.body)
-        self.assertIn("## Not yet specified\n\n## Out of scope\n\n- payments v2\n", self.linear.body)
+        self.assertIn("## Out of scope\n\n- payments v2\n\n---\n\n## Planning and decision log\n", self.linear.body)  # the questions and decisions sit under the log
+        self.assertTrue(self.linear.body.endswith("\n\n## Not yet specified\n"))
         self.assertIn("no open questions on NEB-1", out)
 
     def test_closing_a_question_on_a_story_clears_it_from_the_feature_and_its_other_stories(self):
@@ -532,7 +533,8 @@ class Decide(unittest.TestCase):
         self.assertIn("- D1: Own JWT, we keep auth in house (closes Q1) (product owner,", body)
         for gone in ("Which auth?", "every screen signs in", "Clerk", "less to build"):
             self.assertNotIn(gone, body)
-        self.assertIn("## Not yet specified\n\nQ2. Database?\nA. Postgres - affects: hosting\nB. SQLite - affects: deploy only\nRecommendation: B\n\n## Out of scope", body)
+        self.assertIn("## Not yet specified\n\nQ2. Database?\nA. Postgres - affects: hosting\nB. SQLite - affects: deploy only\nRecommendation: B\n", body)
+        self.assertLess(body.index("## Out of scope"), body.index("## Planning and decision log"))
         self.assertIn("open questions on NEB-1 (1):\n- Q2: Database?", out)
 
     def test_a_multi_line_quote_records_one_line_and_replaces_strikes_it_cleanly(self):

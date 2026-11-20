@@ -112,10 +112,11 @@ def refresh(issue, select=None):
     """Rewrite the issue description's `## Evidence` section from its rows, or from `select(issue)`, best effort."""
     if not issue or not fc_linear.linear_ready():
         return None
-    import fc_plan
+    import fc_layout, fc_plan
     try:
-        d = fc_linear.linear_gql("query($id: String!) { issue(id: $id) { id description } }", {"id": issue})["issue"]
+        d = fc_linear.linear_gql("query($id: String!) { issue(id: $id) { id description labels { nodes { name } } } }", {"id": issue})["issue"]
         new = fc_plan.replace_section(d["description"] or "", "## Evidence", table(select(issue) if select else rows(issue)))
+        new = fc_layout.laid_out(new, [l["name"] for l in (d.get("labels") or {}).get("nodes") or []])
         if new != (d["description"] or ""):
             fc_linear.linear_gql("mutation($id: String!, $d: String!) { issueUpdate(id: $id, input: {description: $d}) { success } }",
                                  {"id": d["id"], "d": new})

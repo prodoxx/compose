@@ -180,6 +180,11 @@ class SpecCheck(unittest.TestCase):
         self.assertEqual(parse("Given a user\nWhen they scan\nThen a price\n\nGiven a payer\nThen it succeeds\n"),
                          ["Given a user When they scan Then a price", "Given a payer Then it succeeds"])
         self.assertEqual(parse("* **1.** Given a user\n  * When they scan\n*emphasis* wraps\n"), ["**1.** Given a user; When they scan *emphasis* wraps"])
+        ac = ["AC1: Given I am logged in, When I click Download, Then a PDF downloads.", "AC2: Given no report, When I click Download, Then I see why."]
+        self.assertEqual(parse("- " + ac[0] + "\n- " + ac[1] + "\n"), ac)  # the form 0w asks of a feature and a story
+        self.assertEqual(parse(ac[0] + "\n" + ac[1] + "\n"), ac)  # a person typed them with no bullets
+        self.assertEqual(parse("**AC1:** Given I am logged in\nWhen I click Download\nThen a PDF downloads\n\nAC2. Given no report\n"),
+                         ["**AC1:** Given I am logged in When I click Download Then a PDF downloads", "AC2. Given no report"])
         story = {**STORY, "id": "ENG-2", "description": STORY["description"].split("## Acceptance criteria")[0]
                  + "## Acceptance criteria\n\n1. Given a user, when they scan, then they see a price.\n"}
         self.assertFalse(has(check([story])["ENG-2"][2], "no bullet"), check([story])["ENG-2"])

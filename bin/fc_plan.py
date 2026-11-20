@@ -32,15 +32,23 @@ def section_end(lines, heading, start, stop):
     """Where the section that opens at `start` ends before `stop`: the next heading of its level or higher, else `stop`."""
     return next((i for i, n in headings(lines) if start < i < stop and n <= heading_level(heading)), stop)
 
+LOG_HEADING = "## Planning and decision log"  # opens the part of an epic, feature or story that compose and its agents work from (fc_layout)
+
+def log_start(lines):
+    """Index where a ticket's planning and decision log opens: the rule above its heading, else the heading; None when it has none."""
+    at = next((i for i, _ in headings(lines) if lines[i].strip() == LOG_HEADING), None)
+    above = next((j for j in range((at or 0) - 1, -1, -1) if lines[j].strip()), None)
+    return above if at is not None and above is not None and LINEAR_RULE.match(lines[above]) else at
+
 def section_span(lines, heading):
     """The section's lines as (start, end): from its heading to the next heading of the same or a higher level, so an H2
-    takes its H3s and an H3 leaves its siblings alone, or to the task's `compose` block, which is no section's text.
-    None when the heading is not there."""
+    takes its H3s and an H3 leaves its siblings alone, or to the task's `compose` block or the rule above the planning and
+    decision log, which are no section's text. None when the heading is not there."""
     start = next((i for i, _ in headings(lines) if lines[i] == heading), None)
     if start is None:
         return None
-    block = compose_block_start(lines)
-    return start, section_end(lines, heading, start, block if block is not None and block > start else len(lines))
+    stops = [i for i in (compose_block_start(lines), log_start(lines)) if i is not None and i > start]
+    return start, section_end(lines, heading, start, min(stops, default=len(lines)))
 
 def block_inside(body, heading):
     """Whether the task's `compose` block sits inside the section as a reader sees it, between its heading and the next heading

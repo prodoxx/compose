@@ -2,7 +2,7 @@
 import datetime, json, sys
 from pathlib import Path
 
-import fc_core, fc_config, fc_crew, fc_herdr, fc_fleet, fc_linear, fc_linear_cmd, fc_tasks
+import fc_core, fc_config, fc_crew, fc_herdr, fc_fleet, fc_layout, fc_linear, fc_linear_cmd, fc_tasks
 
 SORTS = ("keep", "cancel", "merge", "verify")
 LABELS = ("Epic", "Feature", "Story")
@@ -353,7 +353,7 @@ def create_ticket(stored, n, team):
     backlog = next((s for s in team.team["states"]["nodes"] if s["name"].lower() == "backlog"), None)
     if not backlog:
         raise RuntimeError(f"team {team.team['name']} has no Backlog state")
-    inp = {"teamId": team.id, "projectId": stored["project"]["id"], "title": n.get("title") or "", "description": n.get("body") or "",
+    inp = {"teamId": team.id, "projectId": stored["project"]["id"], "title": n.get("title") or "", "description": fc_layout.laid_out(n.get("body") or "", [n["label"]]),
            "stateId": backlog["id"], "labelIds": [team.label(name) for name in names]}
     parent = stored["created"].get(n["parent"], n["parent"])
     if n["parent"] in {x["key"] for x in stored["new"]} and n["parent"] not in stored["created"]:

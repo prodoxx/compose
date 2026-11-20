@@ -16,7 +16,7 @@ Every title, description, and criterion you write follows sections/0w.md: plain 
      that proves it, and dependencies; settled decisions are not reopened. Code only where the implementer
      cannot derive it; an unknown the plan cannot settle is a spike task whose answer goes on the issue's
      Notes. Stories missing: cut them in ship order, each the thinnest slice that works end to end and
-     unblocks the next, at most 5 criteria; each story opens with what the user gets and why (0w). Split cues: "all", "every", several When/Then pairs, several
+     unblocks the next, at most 5 criteria, each `- AC<n>: Given ..., When ..., Then ...` (0w); each story opens with `As a <role>, I want <goal>, so that <benefit>.` and keeps files, code and exact values under `## Notes` (0w: the planning and decision log). Split cues: "all", "every", several When/Then pairs, several
      outside systems. No split fits: a time-boxed probe answers the unknown first, then the split. Create them
      with `compose linear create` (label `deep-dive` where a story's how is not obvious) and report
      `working "stories <issue>: <n> created: <titles>"`; nobody waits for a go. Then check and cut each story.

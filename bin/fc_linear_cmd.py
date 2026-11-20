@@ -2,7 +2,7 @@
 import hashlib, json, os, re, select, sys, time, urllib.parse
 from pathlib import Path
 
-import fc_core, fc_config, fc_linear, fc_plan, fc_tasks
+import fc_core, fc_config, fc_layout, fc_linear, fc_plan, fc_tasks
 
 
 def issue_line(issue):
@@ -315,6 +315,10 @@ def verb_next_task_id(a):
     nums = [int(i) for i in used if i.isdigit()]
     print(f"{max(nums, default=0) + 1:03d}")
 
+def issue_labels(issue):
+    """The names of the labels on an issue as Linear returned it: what `fc_layout.laid_out` reads the ticket's level from."""
+    return [l["name"] for l in ((issue.get("labels") or {}).get("nodes") or [])]
+
 def verb_create(a):
     if not a.title:
         sys.exit("create needs --title")
@@ -323,7 +327,7 @@ def verb_create(a):
     p = linear_project(a.repo)
     team = fc_linear.linear_gql("query($id: String!) { team(id: $id) { name states { nodes { id name } } labels(first: 250) { nodes { id name } } } }",
                                 {"id": p["team"]["id"]})["team"]
-    inp = {"teamId": p["team"]["id"], "projectId": p["id"], "title": a.title, "description": read_body(a)}
+    inp = {"teamId": p["team"]["id"], "projectId": p["id"], "title": a.title, "description": fc_layout.laid_out(read_body(a), ids(a.label))}
     inp.update(state_and_labels(team, a))
     inp.update(priority(a))
     if a.parent:
@@ -360,7 +364,7 @@ def verb_update(a):
     if a.blocked_by is not None and (add or drop):
         sys.exit("update takes --blocked-by (the whole list) or --add-blocked-by/--drop-blocked-by, not both")
     prio = priority(a)  # a bad value refuses before the issue is read
-    issue = fc_linear.linear_gql("query($id: String!) { issue(id: $id) { id identifier description project { id name } team { name states { nodes { id name } } labels(first: 250) { nodes { id name } } } } }",
+    issue = fc_linear.linear_gql("query($id: String!) { issue(id: $id) { id identifier description labels { nodes { name } } project { id name } team { name states { nodes { id name } } labels(first: 250) { nodes { id name } } } } }",
                                  {"id": a.target[0]})["issue"]
     in_scope(issue, a)
     inp = {}
@@ -373,7 +377,7 @@ def verb_update(a):
     inp.update(prio)
     same = False
     if writes:
-        body = new_body(a, issue["description"])
+        body = fc_layout.laid_out(new_body(a, issue["description"]), issue_labels(issue))
         same = body.strip() == (issue["description"] or "").strip()  # a write of what is already there changes nothing: Linear keeps the old text
         if not same:
             inp["description"] = body

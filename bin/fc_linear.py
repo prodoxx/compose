@@ -1,7 +1,7 @@
 import json, re, sys
 from pathlib import Path
 from typing import Callable, Optional
-import fc_core, fc_config, fc_linearapi, fc_plan, fc_tasks
+import fc_core, fc_config, fc_layout, fc_linearapi, fc_plan, fc_tasks
 
 
 # A connection costs its `first` times what it holds, and the API key's hour is 3,000,000 points shared by the whole fleet: 50 relations and 20
@@ -477,7 +477,7 @@ def linear_plan(feature):
         doc = linear_gql("mutation($title: String!, $content: String!, $project: String!) { documentCreate(input: {title: $title, content: $content, projectId: $project}) { success document { id title url content } } }",
                          {"title": title, "content": fc_plan.plan_skeleton(), "project": map_["project"]["id"]})["documentCreate"]["document"]
         linear_gql("mutation($id: String!, $description: String!) { issueUpdate(id: $id, input: {description: $description}) { success } }",
-                   {"id": map_["id"], "description": fc_plan.with_plan_link(map_["description"], title, doc["url"])})
+                   {"id": map_["id"], "description": fc_layout.laid_out(fc_plan.with_plan_link(map_["description"], title, doc["url"]))})
     content = doc["content"]
     for heading, text in fc_plan.plan_sections(lanes).items():
         content = fc_plan.replace_section(content, heading, text)

@@ -93,7 +93,7 @@ class Refresh(unittest.TestCase):
         a, b = [row("a", at="2026-10-21T09:00:00.000Z")], [row("b", at="2026-10-21T10:00:00.000Z")]
         self.assertIsNone(self.refresh(a))
         self.assertEqual(self.desc, "## Goal\nx\n\n```compose\nid: 1\n```\n\n" + fc_evidence.table(a))
-        self.assertEqual(self.calls[0], ("query($id: String!) { issue(id: $id) { id description } }", {"id": "ENG-4"}))
+        self.assertEqual(self.calls[0], ("query($id: String!) { issue(id: $id) { id description labels { nodes { name } } } }", {"id": "ENG-4"}))
         self.assertEqual(self.calls[1], ("mutation($id: String!, $d: String!) { issueUpdate(id: $id, input: {description: $d}) { success } }", {"id": "uuid-ENG-4", "d": self.desc}))
         self.desc += "\n## Notes\n\nkeep\n"
         self.refresh(b)

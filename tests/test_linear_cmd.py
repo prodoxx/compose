@@ -11,7 +11,7 @@ _spec = importlib.util.spec_from_loader("fc", importlib.machinery.SourceFileLoad
 fc = importlib.util.module_from_spec(_spec)
 for _m in [m for m in sys.modules if m.startswith("fc_") and m not in ("fc_cost", "fc_mcp", "fc_sessions")]: del sys.modules[_m]
 _spec.loader.exec_module(fc)
-import fc_plan  # noqa: E402
+import fc_layout, fc_plan  # noqa: E402
 
 
 KEY, URL = "lin_api_SECRET_do_not_print", "https://linear.app/acme/project/my-shop-abc123"
@@ -358,6 +358,13 @@ class LinearCreate(unittest.TestCase):
                              (1, "--add-label and --drop-label change an existing issue: compose linear update <id> takes them, and create takes --label"))
         self.assertEqual(self.calls, [])
 
+    def test_a_story_is_created_with_its_planning_under_the_log(self):
+        self.team["labels"]["nodes"].append({"id": "l3", "name": "Story"})
+        (body := self.repo / "body.md").write_text("Shoppers keep their cart.\n\n## Notes\n\nuse the cookie\n\n## Acceptance criteria\n\n- kept\n")
+        sent = self.create(file=str(body), label=["story", "ui"])[0][0]
+        self.assertEqual(sent["description"], "Shoppers keep their cart.\n\n## Acceptance criteria\n\n- kept\n\n---\n\n" + fc_plan.LOG_HEADING + "\n\n"
+                         + fc_layout.DISCLAIMER + "\n\n## Notes\n\nuse the cookie\n")
+
     def test_read_body_takes_the_file_then_piped_stdin_then_nothing(self):
         (body := self.repo / "body.md").write_text("from file\n")
         with mock.patch("sys.stdin", io.StringIO("from stdin")):
@@ -455,7 +462,7 @@ class LinearCreate(unittest.TestCase):
 
 
 class LinearUpdate(unittest.TestCase):
-    READ, UPDATE = "issue(id: $id) { id identifier description project { id name } team { name states { nodes { id name } } labels(first: 250) { nodes { id name } } } }", "issueUpdate(id: $id, input: $in) { success }"
+    READ, UPDATE = "issue(id: $id) { id identifier description labels { nodes { name } } project { id name } team { name states { nodes { id name } } labels(first: 250) { nodes { id name } } } }", "issueUpdate(id: $id, input: $in) { success }"
     args, fails = LinearProject.args, LinearProject.fails
 
     def setUp(self):
@@ -484,6 +491,14 @@ class LinearUpdate(unittest.TestCase):
         sent = [v for q, v in self.calls if self.UPDATE in q]  # at most one; none when only the blockers change
         self.assertLessEqual(len(sent), 1); self.assertTrue(all(s["id"] in ("iid", "ENG-7") for s in sent))
         return (sent[0]["in"] if sent else None), issue, blocked
+
+    def test_a_body_write_to_an_epic_feature_or_story_puts_planning_under_the_log(self):
+        log = "---\n\n" + fc_plan.LOG_HEADING + "\n\n" + fc_layout.DISCLAIMER
+        self.issue["labels"] = {"nodes": [{"name": "Feature"}]}
+        self.assertEqual(self.update("Keep the cart.", section="## Intent")[0],
+                         {"description": "# Cart\n\n## Intent\n\nKeep the cart.\n\n" + log + "\n\n## Plan\n\nold\n\n## Notes\n\nkeep\n"})
+        self.issue["labels"] = {"nodes": [{"name": "Task"}]}
+        self.assertEqual(self.update("Keep the cart.", section="## Intent")[0], {"description": "# Cart\n\n## Plan\n\nold\n\n## Notes\n\nkeep\n\n## Intent\n\nKeep the cart.\n"})
 
     TASK = "## Goal\n\ng\n\n## Constraints\n\nold\n\n```compose\nid: t1\nfiles: a.py\ntest: t\n```\n\n## Route\n\nroute\n"
 

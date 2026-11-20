@@ -2,7 +2,7 @@
 with the product owner's words attached, as an unconfirmed recommendation while away or yolo is on, or as compose's own ruling
 on an easily reversible decision (`--ruling`), posture or not."""
 import json, re, sys, time
-import fc_core, fc_tasks, fc_linear, fc_linear_cmd, fc_plan, fc_herdr, fc_fleet, fc_change, fc_stale, fc_ask, fc_waiting
+import fc_core, fc_tasks, fc_linear, fc_linear_cmd, fc_layout, fc_plan, fc_herdr, fc_fleet, fc_change, fc_stale, fc_ask, fc_waiting
 
 
 # ---------- the map's two decision sections ----------
@@ -249,7 +249,8 @@ def check_replaces(body, ident, replaces, change, quote, ruling=False):
                  + ("" if not ruling else ", or a change of course (--change <id>) so the struck line keeps their choice"))
 
 def write_map(lid, old, new):
-    """Write a map's description and wait until Linear reads it back."""
+    """Write a map's description, its sections on their side of the planning and decision log's line, and wait until Linear reads it back."""
+    new = fc_layout.laid_out(new)
     fc_linear.linear_gql("mutation($id: String!, $in: IssueUpdateInput!) { issueUpdate(id: $id, input: $in) { success } }", {"id": lid, "in": {"description": new}})
     fc_linear_cmd.await_write(lambda: fc_linear.linear_gql("query($id: String!) { issue(id: $id) { description } }", {"id": lid})["issue"]["description"], old, new)
 

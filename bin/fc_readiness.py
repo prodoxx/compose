@@ -1,7 +1,7 @@
 import hashlib, json, os, re, subprocess, sys, time
 from pathlib import Path
 from types import SimpleNamespace
-import fc_core, fc_tasks, fc_linear, fc_linear_cmd, fc_plan, fc_change, fc_stale, fc_models, fc_claude, fc_config
+import fc_core, fc_tasks, fc_linear, fc_linear_cmd, fc_layout, fc_plan, fc_change, fc_stale, fc_models, fc_claude, fc_config
 
 DEEP_DIVE = "deep-dive"
 MAX_CRITERIA = 5
@@ -110,7 +110,9 @@ STRONG_SYSTEM = ("You judge whether a story is specced well enough for an implem
 
 
 def _without_open_questions(description):
-    return re.sub(r"^#+[ \t]*Open questions[^\n]*$.*?(?=^#|\Z)", "", description or "", flags=re.M | re.S).rstrip()
+    """The description the judge reads: no Open questions, and no planning and decision log when the questions were all it held,
+    so a check that writes its questions does not change what the next check is keyed on."""
+    return fc_layout.without_empty_log(re.sub(r"^#+[ \t]*Open questions[^\n]*$.*?(?=^#|\Z)", "", description or "", flags=re.M | re.S)).rstrip()
 
 
 def judge_state(chain, cap=None):
@@ -283,6 +285,7 @@ def story_readiness(repo, story, refresh=False, write=True):
     description = node.get("description") or ""
     new = with_questions(description, own, time.strftime("%Y-%m-%d"))
     if write and new.strip() != description.strip() and _asked(description) != [x["question"].rstrip(".") for x in own]:
+        new = fc_layout.laid_out(new)  # Open questions belongs under the story's planning and decision log
         fc_linear.linear_gql("mutation($id: String!, $in: IssueUpdateInput!) { issueUpdate(id: $id, input: $in) { success } }", {"id": node["id"], "in": {"description": new}})
         fc_linear_cmd.await_write(lambda: fc_linear.linear_gql(READINESS_TREE, {"id": story})["issue"].get("description"), description, new)
         fc_linear_cmd.drop_get_cache(SimpleNamespace(repo=str(repo)))

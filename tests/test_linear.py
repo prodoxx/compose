@@ -10,7 +10,7 @@ _spec = importlib.util.spec_from_loader("fc", importlib.machinery.SourceFileLoad
 fc = importlib.util.module_from_spec(_spec)
 for _m in [m for m in sys.modules if m.startswith("fc_") and m not in ("fc_cost", "fc_mcp", "fc_sessions")]: del sys.modules[_m]
 _spec.loader.exec_module(fc)
-import fc_evidence, fc_ledger, fc_plan, fc_routectx  # noqa: E402
+import fc_evidence, fc_layout, fc_ledger, fc_plan, fc_routectx  # noqa: E402
 
 
 def issue(ident, title, desc="", blocked_by=()):
@@ -795,7 +795,7 @@ class DeliveryPlan(unittest.TestCase):
             story("NEB-8", "Todo", ["Story"], [{"id": "NEB-9", "state": "Done", "labels": ["Design"]}]), story("NEB-9", "In Review", ["Design"], [])]}])
         skeleton, title = fc_plan.plan_skeleton(), "NEB-7: delivery plan"
         self.assertTrue({skeleton, title, "p-NEB-7"} <= set(self.writes("documentCreate")[0]))
-        self.assertIn(fc_plan.with_plan_link("## Goal\nG.\n", title, "https://linear.app/x/document/d-new"), self.writes("issueUpdate")[0])
+        self.assertIn(fc_layout.laid_out(fc_plan.with_plan_link("## Goal\nG.\n", title, "https://linear.app/x/document/d-new")), self.writes("issueUpdate")[0])
         self.assertIn(fc_plan.replace_section(skeleton, "## Start today", "x"), self.writes("documentUpdate")[0])
 
     def test_an_epic_map_has_a_lane_per_feature_and_only_its_data_sections_are_rewritten(self):
