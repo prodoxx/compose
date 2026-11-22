@@ -362,7 +362,7 @@ class FigmaJudge(unittest.TestCase):
         self.assertEqual((res["status"], self.ask.call_count, self.confirm.called), ("passed", 2, False))
         for first, again in (("NOT_MET", "NOT_MET"), ("NOT_MET", "UNCLEAR"), ("UNCLEAR", "NOT_MET"), ("UNCLEAR", "UNCLEAR")):
             res = self.judge("004", {"Pay": [(first, 0.9)]}, confirm=refuted, reask=again, blocks=True)
-            self.assertEqual((res["status"], len(res["unclear"]), self.ask.call_count), ("failed", 1, 2), (first, again))
+            self.assertEqual((res["status"], len(res["unclear"]), self.ask.call_count), ("unclear", 1, 2), (first, again))
 
     def test_a_task_figma_line_is_the_file_the_result_names(self):
         fc.fc_tasks.sync_tasks(self.proj, {"feature": {"id": "ENG-1", "title": "F", "description": ""}, "issues": [
@@ -403,7 +403,7 @@ class FigmaJudge(unittest.TestCase):
 
     def test_only_all_met_passes_so_unclear_and_unconfirmed_not_met_block(self):
         res = self.judge("001", {"Cart page": [("NOT_MET", 0.0), ("UNCLEAR", 0.14)]}, confirm={"violated": False, "evidence": ""}, blocks=True)
-        self.assertEqual((res["status"], res["failed"], len(res["unclear"])), ("failed", [], 2))
+        self.assertEqual((res["status"], res["failed"], len(res["unclear"])), ("unclear", [], 2))
         self.assertFalse(self.ev.called)
 
     def test_refuses_with_one_line(self):
@@ -434,7 +434,7 @@ class FigmaJudge(unittest.TestCase):
     def test_a_billing_halt_from_the_confirm_call_stops_the_command(self):
         with self.assertRaises(fc.fc_models.PaymentRequired):
             self.judge("001,004", {"Cart page": [("NOT_MET", 0.9), ("MET", 0.9)], "Pay": [("MET", 0.9)]}, fail=fc.fc_models.PaymentRequired("openrouter", "402"))
-        self.assertEqual((self.confirm.call_count, self.ask.call_count, self.ev.called), (1, 1, False))
+        self.assertEqual((self.confirm.call_count, self.ask.call_count, self.ev.called), (1, 2, False))  # 2 asks: the scope sort of its two criteria, then the tree
         self.assertFalse((self.proj / "results" / "001.json").exists())
 
     def test_a_confirm_reply_wrapped_in_a_list_is_unwrapped(self):
@@ -561,7 +561,7 @@ class FigmaJudge(unittest.TestCase):
 
     def test_no_chunk_showing_met_leaves_the_criterion_unmet(self):
         res = self.judge_big(lambda t: ("UNCLEAR", 0.0), confirm={"confirmed": False, "evidence": "the tree does not show it"})
-        self.assertEqual((res["status"], res["criteria"][0]["choice"]), ("failed", "UNCLEAR"))
+        self.assertEqual((res["status"], res["criteria"][0]["choice"]), ("unclear", "UNCLEAR"))
 
     def test_a_criterion_whose_nodes_sit_in_different_chunks_is_settled_on_the_whole_tree(self):
         """Issue 343: no chunk holds both 2:0 and 2:4, so each answers UNCLEAR and none can say MET. The whole tree fits one call,
@@ -570,7 +570,7 @@ class FigmaJudge(unittest.TestCase):
         text, crit = big_tree(5), "The first and last variants have their Tint (2:0 and 2:4)"
         self.assertGreater(len(fc.fc_figma.fc_figmanodes.tree_chunks(text)), 2)
         both = lambda user: '"id": "2:0"' in user and '"id": "2:4"' in user
-        for met, status, choice in ((True, "passed", "MET"), (False, "failed", "UNCLEAR")):
+        for met, status, choice in ((True, "passed", "MET"), (False, "unclear", "UNCLEAR")):
             with self.subTest(met=met):
                 res = self.judge_big(lambda t: ("UNCLEAR", 0.0), text=text, criterion=crit,
                                      confirm=lambda system, user: {"confirmed": met and both(user), "evidence": "2:0 and 2:4 each hold a Tint"})
@@ -590,7 +590,7 @@ class FigmaJudge(unittest.TestCase):
         call that says so was never made. Only a tree beyond SETTLE_TREE_CHARS stays with the chunks."""
         text, crit = big_tree(), "The first and last variants have their Tint (2:0 and 2:14)"
         self.assertTrue(fc.fc_figma.CONFIRM_TREE_CHARS < len(text) <= fc.fc_figma.SETTLE_TREE_CHARS)
-        for met, status in ((True, "passed"), (False, "failed")):
+        for met, status in ((True, "passed"), (False, "unclear")):
             with self.subTest(met=met):
                 res = self.judge_big(lambda t: ("UNCLEAR", 0.0), text=text, criterion=crit, confirm={"confirmed": met, "evidence": "both hold a Tint"})
                 self.assertEqual((res["status"], self.confirm.call_count, res["criteria"][0]["whole_tree"]["met"]), (status, 1, met))
@@ -598,7 +598,7 @@ class FigmaJudge(unittest.TestCase):
         huge = big_tree(40)
         self.assertGreater(len(huge), fc.fc_figma.SETTLE_TREE_CHARS)
         res = self.judge_big(lambda t: ("UNCLEAR", 0.0), text=huge, criterion=crit, confirm={"confirmed": True, "evidence": "x"})
-        self.assertEqual((res["status"], self.confirm.call_count, "whole_tree" in res["criteria"][0]), ("failed", 0, False))
+        self.assertEqual((res["status"], self.confirm.call_count, "whole_tree" in res["criteria"][0]), ("unclear", 0, False))
 
     def test_a_chunk_that_errors_blocks_and_is_never_a_pass(self):
         def jev(env, cfg, state, q, label):
@@ -1169,13 +1169,13 @@ class FigmaJudgeScreens(unittest.TestCase):
         self.assertIn(fc.fc_figma.fc_figmashots.SCREEN_RULES, system)
 
     def test_a_screens_not_met_that_names_no_element_stays_unclear(self):
-        """#466: a NOT_MET nobody can point at is not a finding: the tree's UNCLEAR stands, and the task fails as UNCLEAR, not as a violation."""
+        """#466: a NOT_MET nobody can point at is not a finding: the tree's UNCLEAR stands, and the task is unclear, not failed on a violation (#487)."""
         for named in ({"violated": False, "element": "", "evidence": "every row is whole"}, {"violated": True, "element": "  ", "evidence": "looks cut"},
                       {"violated": True, "evidence": "looks cut"}):
             with self.subTest(named=named):
                 res = self.judge(("UNCLEAR", 0.0), [("NOT_MET", 0.9), ("NOT_MET", 0.8)], named=named)
                 row = res["criteria"][0]
-                self.assertEqual((res["status"], row["choice"], row["screen"]["violated"], row["screen"]["element"]), ("failed", "UNCLEAR", False, None))
+                self.assertEqual((res["status"], row["choice"], row["screen"]["violated"], row["screen"]["element"]), ("unclear", "UNCLEAR", False, None))
                 self.assertNotEqual(row.get("by"), "screens")
         res = self.judge(("MET", 0.0), [("NOT_MET", 0.9), ("NOT_MET", 0.8)], named={"violated": False, "element": "", "evidence": "fine"})
         self.assertEqual((res["status"], res["criteria"][0]["choice"]), ("passed", "MET"))
@@ -1220,7 +1220,7 @@ class FigmaJudgeScreens(unittest.TestCase):
         res = self.judge(("NOT_MET", 0.9), [("MET", 0.0)], confirm={"violated": True, "evidence": "no total"})
         self.assertEqual((res["status"], res["criteria"][0]["choice"]), ("failed", "NOT_MET"))
         res = self.judge(("UNCLEAR", 0.0), [("UNCLEAR", 0.0)])
-        self.assertEqual(res["status"], "failed")
+        self.assertEqual(res["status"], "unclear")
 
     def test_screens_that_cannot_be_judged_block_and_none_saved_judges_the_tree_alone(self):
         res = self.judge(("MET", 0.0), RuntimeError("typesafe: HTTP 400"))
@@ -1238,9 +1238,9 @@ class FigmaJudgeScreens(unittest.TestCase):
         self.assertNotIn("screens", state)  # sorted on its text alone: shown screens, Jev judges a token criterion by the look
         self.assertEqual((q["c0"]["criteria"], q["c0"]["instructions"]["criterion"]), (fc.fc_figma.fc_figmashots.LOOK_CHOICES, "Shows the total"))
         res = self.judge(("UNCLEAR", 0.0), [("MET", 0.0)], look="STRUCTURE")
-        self.assertEqual((res["status"], res["criteria"][0]["choice"]), ("failed", "UNCLEAR"))
+        self.assertEqual((res["status"], res["criteria"][0]["choice"]), ("unclear", "UNCLEAR"))
         res = self.judge(("UNCLEAR", 0.0), [("MET", 0.0)], look=("LOOK", 0.72))  # a named style: a look, but not surely
-        self.assertEqual((res["status"], self.screen_states), ("failed", []))
+        self.assertEqual((res["status"], self.screen_states), ("unclear", []))
         res = self.judge(("MET", 0.0), [("MET", 0.0)], look="MAYBE")
         self.assertEqual(res["status"], "blocked")
         self.assertIn("which a screen can decide", res["judge_errors"][0]["evidence"])

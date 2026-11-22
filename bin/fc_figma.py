@@ -1,7 +1,7 @@
 import argparse, json, os, re, sys, time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-import fc_core, fc_config, fc_tasks, fc_linear, fc_models, fc_textmodel, fc_herdr, fc_fleet, fc_crew, fc_init, fc_figmaplan, fc_figmanodes, fc_figmashots, fc_framelink, fc_figmatree
+import fc_core, fc_config, fc_tasks, fc_linear, fc_models, fc_textmodel, fc_herdr, fc_fleet, fc_crew, fc_init, fc_figmaplan, fc_figmanodes, fc_figmashots, fc_figmascope, fc_framelink, fc_figmatree
 
 
 FIGMA_CONNECTOR = ("Figma tools: the authenticated Figma connector, `mcp__claude_ai_Figma__*` or the Figma plugin's `mcp__plugin_figma_figma__*` (the same server; use whichever ToolSearch finds), is for WRITES ONLY: `use_figma` (and the `create_session` it needs), never a read-only script, and never `whoami`, `get_libraries`, `search_design_system`, or `create_new_file`. Load it in one ToolSearch select call.\n"
@@ -196,7 +196,8 @@ def cmd_designcrews(a):
 
 
 CONFIRM_TREE_CHARS = 120000  # a tree up to this size goes to the confirm call whole, so it sees a node any chunk holds; a larger one goes chunk by chunk
-SETTLE_TREE_CHARS = 300000  # a criterion no chunk can decide goes to one call on the whole tree up to this size (186304 characters worked; larger is not verified)
+EVIDENCE_CHARS = 1200  # of a confirm or whole-tree answer kept on the criterion: 300 cut the node and the reason mid-sentence
+SETTLE_TREE_CHARS = 300000 # a criterion no chunk can decide goes to one call on the whole tree up to this size (186304 characters worked; larger is not verified)
 
 TREE_READING = ("Every field on a node belongs to that node alone: its strokes and strokeWeight are its own outline, never a neighbour's. "
                 "A node with \"visible\": false exists and is hidden. An instance's componentProperties hold its variant properties "
@@ -410,6 +411,11 @@ def cmd_figma(a):
         crits_id = crits.get(tid, [])
         if not crits_id:
             sys.exit(f"{tid}: no acceptance criteria to judge")
+        crits_id, skipped, scope_note = fc_figmascope.split_scope(env, cfg, meta, crits_id)
+        if scope_note:
+            print(f"{tid}: {scope_note}")
+        for r in skipped:
+            print(f"{tid} SKIPPED, not this task's work: {r['criterion']}")
         chunks = fc_figmanodes.tree_chunks(text)
         parted = len(chunks) > 1
         choices, rules = (PART_CHOICES, TREE_RULES + PART_RULES) if parted else (TREE_CHOICES, TREE_RULES)
@@ -422,7 +428,10 @@ def cmd_figma(a):
         seen, screen_error = None, None
         if not shots:
             print(f"{tid}: no screens, judged from the tree alone; `compose figma tree` saves them with the tree")
-        elif not chunk_error:
+        elif missing:  # past the screen budget: the nodes with no screen are judged from the tree alone, and the result says which
+            seen_nodes = {label.split(" ")[0] for label, _ in shots}
+            print(f"{tid}: screens cover {len(seen_nodes)} of {len(seen_nodes) + len(missing)} nodes; {', '.join(missing)} have no screen and are judged from the tree alone")
+        if shots and not chunk_error:
             try:
                 seen = fc_figmashots.judge_screens(env, cfg, meta["title"], crits_id, shots, missing, threshold)
             except fc_models.PaymentRequired:
@@ -448,7 +457,7 @@ def cmd_figma(a):
             errors = []
             for system, user in confirm_asks(c, text, chunks, targets):
                 try:
-                    row["confirmed"], row["evidence"] = fc_models.confirm_call(env, system, user, key="violated")
+                    row["confirmed"], row["evidence"] = fc_models.confirm_call(env, system, user, key="violated", chars=EVIDENCE_CHARS)
                 except fc_models.PaymentRequired:
                     raise
                 except fc_textmodel.TextModelError as e:
@@ -468,10 +477,13 @@ def cmd_figma(a):
                 # no chunk's NOT_MET survived its confirm: those chunks showed no violation, so the chunks that show the
                 # criterion met decide it (MET when one does and none contradicts)
                 row["choice"] = combine_choices([x for x in per_chunk if x != "NOT_MET"])
+            if parted and row["choice"] == "UNCLEAR" and not row.get("judge_error") and len(text) > SETTLE_TREE_CHARS:
+                row["whole_tree_skipped"] = f"not read whole: the tree has {len(text)} characters, over the {SETTLE_TREE_CHARS} one call reads, so no call saw every node together"
+                print(f"{tid}: {row['whole_tree_skipped']}: {c}")
             if parted and row["choice"] == "UNCLEAR" and not row.get("judge_error") and len(text) <= SETTLE_TREE_CHARS:
                 # no chunk holds every node the criterion names, so none can say MET: the whole tree, which fits one call, settles it
                 try:
-                    met, evidence = fc_models.confirm_call(env, SETTLE, f"CRITERION: {c}\n\nTREE:\n{text}")
+                    met, evidence = fc_models.confirm_call(env, SETTLE, f"CRITERION: {c}\n\nTREE:\n{text}", chars=EVIDENCE_CHARS)
                     row["whole_tree"] = {"met": met, "evidence": evidence}
                     if met:
                         row["choice"] = "MET"
@@ -495,8 +507,9 @@ def cmd_figma(a):
                 prev = json.loads(rf.read_text())
             except json.JSONDecodeError:
                 pass
-        result = {"id": tid, "title": meta["title"], "status": "blocked" if any(r.get("judge_error") for r in rows) else "passed" if all(r["choice"] == "MET" for r in rows) else "failed", "kind": "design",
+        result = {"id": tid, "title": meta["title"], "status": "blocked" if any(r.get("judge_error") for r in rows) else "passed" if all(r["choice"] == "MET" for r in rows) else "failed" if failed else "unclear", "kind": "design",  # failed: a confirmed NOT_MET; unclear: none shown violated, not all shown met
                   "judge_errors": [r for r in rows if r.get("judge_error")], "chunks": len(chunks), "tree_chars": len(text), "screens": [label for label, _ in shots],
+                  "screens_missing": missing, "skipped": skipped,
                   "criteria": rows, "failed": failed, "unclear": [r for r in rows if r["choice"] != "MET" and not r.get("confirmed")], "attempts": (prev.get("attempts") or 0) + 1, "seconds": 0.0,
                   "cost": 0.0, "model": outs[0].get("model") if outs else None, "branch": f"figma:{meta.get('figma') or stored}",
                   "finished_at": time.strftime("%Y-%m-%d %H:%M:%S")}
@@ -507,5 +520,8 @@ def cmd_figma(a):
             bad += 1
             if result["status"] == "blocked":
                 print(f"{tid} BLOCKED by a judge tool error, not a NOT_MET finding: {result['judge_errors'][0]['evidence']}")
+            elif result["status"] == "unclear":
+                print(f"{tid} UNCLEAR: no criterion is violated, but {len(result['unclear'])} could not be shown met from the tree and screens; read them, and if the design is right: "
+                      f"compose done --project {proj.name} --only {tid} --note \"<why>\"")
     if bad:
         sys.exit(1)

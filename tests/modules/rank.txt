@@ -92,6 +92,7 @@ fc_stages
 fc_figmaplan
 fc_figmanodes
 fc_figmashots
+fc_figmascope
 fc_framelink
 fc_figmatree
 fc_figma

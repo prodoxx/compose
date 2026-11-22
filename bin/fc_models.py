@@ -513,7 +513,7 @@ def fast_object(env, system, user, shape, key, max_tokens=1500, timeout=90):
 class ConfirmError(Exception):
     pass
 
-def confirm_call(env, system, user, max_tokens=500, key="confirmed"):
+def confirm_call(env, system, user, max_tokens=500, key="confirmed", chars=300):
     """The confirm step shared by figma judge, review, and jev acceptance: returns (the boolean `key`, evidence). A reply that is
     still not an {evidence, key} object after fast_object's retry raises ConfirmError, which the caller records as a judge error
     and never as a verdict."""
@@ -521,7 +521,7 @@ def confirm_call(env, system, user, max_tokens=500, key="confirmed"):
         v = fast_object(env, system, user, f'{{"evidence": str, "{key}": bool}}', key, max_tokens=max_tokens)
     except BadReply as e:
         raise ConfirmError(f"confirm call failed: {e}") from e
-    return bool(v[key]), str(v.get("evidence", ""))[:300]
+    return bool(v[key]), str(v.get("evidence", ""))[:chars]
 
 
 class Image:
