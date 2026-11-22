@@ -93,6 +93,9 @@ A start stops while a target differs from the record or an env file sets one the
    Failures above the threshold that the second call confirms become findings.
    Each task's verdict is kept in `results/acceptance/<id>.json` with the commit it judged, keyed by the task's title, criteria, the hunks of its files, and the question the second call is asked, so a verdict kept from another question is judged again.
    The next verify reuses it, and asks jev nothing for that task, while the key matches and `git diff` shows the task's `files` and `protected` unchanged since that commit; it prints `jev    acceptance N of M tasks unchanged since their last verify, not rejudged`.
+   Only a settled verdict is reused: every row is MET, proven by a passing test of the task, or dismissed.
+   A kept row that is none of these is first matched to its task's ledger again (a test may cover it since), and when it still is not settled the task is asked again, with `jev    acceptance N task(s) unchanged but rejudged` naming it; a kept UNCLEAR is never repeated for ever.
+   A row no passing test event covers says so in its `note` when the task has a passing event that names other criteria: a criterion reworded after the test ran voids the old events, so the task's test has to run again (`compose run`) for the new words to be covered.
    Every criterion that is not MET, a NOT_MET included, is printed with an `id` (a hash of its task and its words).
    `compose review --project <name> --dismiss <id>[,<id>] --reason "<why the criterion is met>"` dismisses it like a review finding: the reason is kept in `dismissed.json` and written on the feature issue's ledger as an `acceptance` row with source `dismiss`, and every later verify shows the row as `dismissed`, with the reason, and passes it.
    A criterion reworded on Linear is a new row with a new id.

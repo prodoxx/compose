@@ -106,6 +106,26 @@ class Rows(unittest.TestCase):
         self.asked.clear()
         return fc_accept.jev_acceptance({}, self.proj, "diff --git a/a.go b/a.go\n+alpha\n+beta\n", repo=self.repo, **kw)
 
+    def test_a_kept_row_that_is_neither_met_nor_proven_is_judged_again_at_the_next_verify(self):
+        first = self.judge()
+        self.assertEqual([r["choice"] for r in first["criteria"]], ["MET", "UNCLEAR"])
+        self.judge()
+        self.assertIn("Jev acceptance", self.asked)  # #482: it was reused whole, for ever
+
+    def test_a_kept_unproven_row_whose_test_now_covers_it_is_reused_with_its_proof(self):
+        self.judge()
+        self.proof = {"beta": "abc123abc123"}
+        again = self.judge()
+        self.assertEqual(self.asked, [])
+        self.assertEqual([(r["choice"], r.get("proven_by"), r.get("reused")) for r in again["criteria"]], [("MET", None, True), ("UNCLEAR", "abc123abc123", True)])
+        self.assertTrue(again["pass"])
+
+    def test_a_kept_verdict_whose_every_row_is_met_or_proven_is_reused(self):
+        self.proof = {"beta": "abc123abc123"}
+        self.judge()
+        self.assertEqual(self.judge()["pass"], True)
+        self.assertEqual(self.asked, [])
+
     def test_every_row_that_is_not_met_carries_an_id_a_not_met_included(self):
         self.choice = {"alpha": "NOT_MET", "beta": "UNCLEAR"}
         acc = self.judge()
@@ -158,6 +178,7 @@ class Rows(unittest.TestCase):
             self.assertIn(f"[264] {r['criterion']}  id {r['id']}", text)
         self.assertIn("NOT MET ", text)
         self.assertIn("compose review --project feat --dismiss <id> --reason", text)
+        self.assertIn("is judged again at every verify", text)
         self.assertEqual(fc_accept.report_lines({"criteria": [], "unclear": [], "failed": []}, "feat"), [])
         self.assertIn("compose review --project feat --dismiss <id>", fc_accept.no_change_note(acc, "feat"))
         self.assertEqual(fc_accept.no_change_note({"criteria": [], "unclear": [], "failed": []}, "feat"), "")
@@ -166,6 +187,23 @@ class Rows(unittest.TestCase):
         done = self.judge(fresh=True)
         self.assertIn("dismissed p_met=", "\n".join(fc_accept.report_lines(done, "feat")))
         self.assertNotIn("clear a row", "\n".join(fc_accept.report_lines(done, "feat")))
+
+
+class ProofNote(unittest.TestCase):
+    """#482: a criterion reworded after the task's test ran has no covering event; the row says why instead of staying unexplained."""
+    def test_a_row_the_ledger_cannot_match_says_that_a_passing_event_names_other_criteria(self):
+        proj = Path(tempfile.mkdtemp()) / "feat"; (proj / "results").mkdir(parents=True)
+        self.addCleanup(shutil.rmtree, proj.parent, True)
+        (proj / "results" / "tasks.json").write_text(json.dumps({"tasks": [task("264", ["a.go"], "* alpha\n* beta, reworded\n")]}))
+        (proj / "linear.json").write_text('{"feature": "ENG-1"}')
+        ids = fc_ledger.criterion_ids(task("264", ["a.go"], "* alpha\n* beta, reworded\n"))
+        event = lambda eid, crit: {"event_id": eid, "phase": "final", "result": "pass", "criterion_id": crit}
+        rows = [{"task": "264", "criterion": "alpha", "choice": "UNCLEAR"}, {"task": "264", "criterion": "beta, reworded", "choice": "UNCLEAR"}]
+        with mock.patch.object(fc_evidence, "task_rows", return_value=[]), mock.patch.object(fc_ledger, "counted", return_value=[event("e1", [ids[0]])]):
+            fc_accept.proven_by_test(Path("."), proj, rows)
+        self.assertEqual(rows[0].get("proven_by"), "e1")
+        self.assertNotIn("proven_by", rows[1])
+        self.assertIn("a passing test event (e1) names other criteria of the task, not this one", rows[1]["note"])
 
 
 if __name__ == "__main__":

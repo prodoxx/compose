@@ -123,6 +123,10 @@ def dismiss(rows, dismissed):
         if r["choice"] != "MET" and (reason := dismissed.get(fc_review.acceptance_id(r))):
             r["dismissed"] = reason
 
+def unsettled(r):
+    """A kept row verify cannot rest on: not MET, no passing test of the task proves it, and the team lead has not dismissed it."""
+    return r["choice"] != "MET" and not r.get("proven_by") and not r.get("dismissed")
+
 def report_lines(acc, name):
     """What verify prints for the criteria that are not MET: each with its verdict, probabilities, task, id and note, then, when one blocks, how to clear it."""
     lines = []
@@ -134,7 +138,7 @@ def report_lines(acc, name):
                             else f"  (note: {r['note']})" if r.get("note") else ""))
     if blocking(acc):
         lines += [f"           clear a row by its id: `compose review --project {name} --dismiss <id> --reason \"<why the criterion is met>\"` (kept in dismissed.json and on the ledger),",
-                  "           or change the code it names, or have a passing test of the task cover the criterion"]
+                  "           or change the code it names, or have a passing test of the task cover the criterion; a row neither MET, proven by a test nor dismissed is judged again at every verify"]
     return lines
 
 def blocking(acc):
@@ -174,6 +178,7 @@ def jev_acceptance(cfg, proj, diff, repo=None, fresh=False):
     metas = fc_tasks.code_tasks(fc_tasks.load_tasks(proj))
     own = own_changes(repo, proj, cfg, {m["id"]: m for m in metas}) if repo else {}
     dismissed = {d["id"]: d["reason"] for d in fc_review.read_dismissed(proj)}
+    rejudged = []
     for meta in metas:
         crits = fc_tasks.parse_criteria(meta["body"])
         if not crits:
@@ -191,9 +196,13 @@ def jev_acceptance(cfg, proj, diff, repo=None, fresh=False):
         if kept is not None:
             old = [{**r, "reused": True} for r in kept]
             dismiss(old, dismissed)
-            rows += old
-            reused.append(meta["id"])
-            continue
+            loose = [r for r in old if unsettled(r)]
+            proven_by_test(repo, proj, loose)  # a test may cover a criterion since the verdict was kept
+            if not any(unsettled(r) for r in old):
+                rows += old
+                reused.append(meta["id"])
+                continue
+            rejudged.append(meta["id"])  # a kept row that is neither MET, nor proven by a test, nor dismissed is asked again, not kept for ever
         keys[meta["id"]] = key
         questions = {f"c{i}": {"type": "choice", "criteria": choices,
                                "instructions": {"criterion": text, "task": meta["id"], "rules": rules}}
@@ -208,6 +217,8 @@ def jev_acceptance(cfg, proj, diff, repo=None, fresh=False):
                          "p_not_met": round(probs.get("NOT_MET", 0), 3), "confidence": a.get("confidence")})
     if reused:
         fc_core.say(f"jev    acceptance {len(reused)} of {len(reused) + len(states)} tasks unchanged since their last verify, not rejudged")
+    if rejudged:
+        fc_core.say(f"jev    acceptance {len(rejudged)} task(s) unchanged but rejudged: a kept row is neither MET, nor proven by a passing test of the task, nor dismissed: {', '.join(rejudged)}")
     if asis:
         fc_core.say(f"jev    acceptance {len(asis)} task(s) changed none of their files, judged on those files as they are: {', '.join(asis)}")
     if nocode := sorted({r["task"] for r in rows if r.get("note") == NO_CODE}):
@@ -272,6 +283,9 @@ def proven_by_test(repo, proj, rows):
         covering = [e for e in events[meta["id"]] if not e["criterion_id"] or cid in e["criterion_id"]]
         if covering and covering[-1]["result"] == "pass":
             r["proven_by"] = covering[-1]["event_id"]
+        elif passed := [e for e in events[meta["id"]] if e["result"] == "pass"]:
+            r["note"] = f"a passing test event ({passed[-1]['event_id']}) names other criteria of the task, not this one (reworded after the test ran?)"
+
 VERDICTS = ("proven", "unproven", "contradicted")
 NEEDS = ("test", "prove", "check", "e2e", "review", "acceptance", "manual", "none")
 DETERMINISTIC = ("attempt", "final", "checks", "scoped", "e2e")
