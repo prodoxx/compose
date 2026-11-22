@@ -242,7 +242,7 @@ def check_replaces(body, ident, replaces, change, quote, ruling=False):
     old = decided_line(body, replaces)
     if not old:
         sys.exit(f"not recorded: {replaces} is not a live decision on {ident}; --replaces names a line that is not struck through")
-    if not change and [c for c in fc_linear.linear_children(ident) if ((c.get("state") or {}).get("name") or "").lower() not in fc_tasks.CANCELED]:
+    if not change and [c for c in fc_linear.linear_children(ident) if fc_tasks.state_name(c.get("state")).lower() not in fc_tasks.CANCELED]:
         sys.exit(f"not recorded: {ident} already has stories or tasks, so {replaces} changes through a change of course: compose change start")
     if not quote and not (ruling and change) and "unconfirmed" not in old:
         sys.exit(f'not recorded: {replaces} is confirmed; replacing it needs the product owner\'s words: add --quote "<their message, verbatim>"'
@@ -261,7 +261,7 @@ def clear_elsewhere(proj, ident, closed):
     if not closed or not feature:
         return []
     root = fc_linear.linear_gql("query($id: String!) { issue(id: $id) { id identifier description } }", {"id": feature})["issue"]
-    kids = [c for c in fc_linear.linear_children(feature) if ((c.get("state") or {}).get("name") or "").lower() not in fc_tasks.CANCELED]
+    kids = [c for c in fc_linear.linear_children(feature) if fc_tasks.state_name(c.get("state")).lower() not in fc_tasks.CANCELED]
     done = []
     for m in [root] + kids:
         body = m.get("description") or ""

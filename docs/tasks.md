@@ -205,6 +205,9 @@ A model cannot count columns, so a brief that only states the limit fails every 
  "issues": [{"id": "ENG-124", "title": "...", "description": "<brief + compose block>", "status": "Todo", "blockedBy": ["ENG-125"]}]}
 ```
 
+A state of Linear's canceled type (Canceled, Duplicate, Won't Do, or a team's own) reads as Canceled: its issue is no task, and as a blocker it holds nothing.
+From `--stdin`, give such an issue the status `Canceled` (or `Cancelled`).
+
 `sync` refuses a feature other than the one `linear.json` names, a block without `id` or `test`, and an id used twice.
 `run`, `verify`, `resume`, `bench`, and `tasks` read what was last synced, so the team lead syncs right before each.
 

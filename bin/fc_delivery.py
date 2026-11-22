@@ -23,9 +23,9 @@ NOT_FOUND = "Entity not found: Issue"  # Linear's whole answer for an issue id i
 
 def _issue(n):
     """A Linear issue node as the plan's modules read it."""
-    return {"id": n["identifier"], "title": n["title"], "url": n.get("url") or "", "state": n["state"]["name"] or "", "description": n.get("description") or "",
+    return {"id": n["identifier"], "title": n["title"], "url": n.get("url") or "", "state": fc_tasks.state_name(n["state"]), "description": n.get("description") or "",
             "labels": [l["name"] for l in n["labels"]["nodes"]], "parent": (n.get("parent") or {}).get("identifier"), "plan_url": None, "stories": [],
-            "blockers": [{"id": r["issue"]["identifier"], "state": r["issue"]["state"]["name"] or "",
+            "blockers": [{"id": r["issue"]["identifier"], "state": fc_tasks.state_name(r["issue"]["state"]),
                           "labels": [l["name"] for l in r["issue"]["labels"]["nodes"]]} for r in n["inverseRelations"]["nodes"] if r["type"] == "blocks"]}
 
 def _paged(query, variables, pick):

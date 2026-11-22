@@ -336,6 +336,12 @@ def yolo_by(y):
 
 CANCELED = ("canceled", "cancelled")
 
+def state_name(state):
+    """The name compose reads a Linear state by (`{"name", "type"}`): Canceled for every state of the canceled type, so Duplicate, Won't Do
+    and a team's own spelling all read as canceled; any other state keeps its own name. A state read without its type keeps its name."""
+    state = state or {}
+    return "Canceled" if state.get("type") == "canceled" else state.get("name") or ""
+
 
 def run_marker(proj):
     f = proj / "results" / "run.json"

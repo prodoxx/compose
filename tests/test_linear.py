@@ -432,6 +432,14 @@ class ReadyRule(unittest.TestCase):
         self.assertEqual(fc.fc_linear.task_holds(held("In Progress", "NEB-1"), "NEB-1"), ["NEB-2"])
         self.assertEqual(fc.fc_linear.task_holds(held("In Review", "NEB-1")), ["NEB-2"])
 
+    def test_a_blocker_in_a_canceled_type_state_is_finished_whatever_its_name(self):
+        gone = lambda name: ("blocks", "NEB-1", name, ())
+        for rel in (gone("Duplicate"), gone("Won't Do")):
+            blocker = {"type": rel[0], "issue": {"identifier": rel[1], "state": {"name": rel[2], "type": "canceled"}, "labels": {"nodes": []}}}
+            self.assertEqual(fc.fc_linear.ready_ids([{**self.node("NEB-3", "Todo"), "inverseRelations": {"nodes": [blocker]}}]), ["NEB-3"], rel[2])
+        dupe = {**self.node("NEB-4", "Todo"), "state": {"name": "Duplicate", "type": "canceled"}}
+        self.assertEqual(self.ready(dupe), [])
+
     def test_a_non_open_issue_is_never_ready_even_with_finished_blockers(self):
         done = ("blocks", "NEB-1", "Done", ())
         self.assertEqual(self.ready(*(self.node("NEB-2", s, done) for s in ("In Progress", "In Review", "Done", "Canceled"))), [])

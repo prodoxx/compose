@@ -546,6 +546,12 @@ class Decide(unittest.TestCase):
         dec = fc.fc_change.map_section(self.linear.body, "Decisions so far").splitlines()
         self.assertEqual(dec[1:], [f"- ~~D2: two stores {said}~~ (replaced by D3)", f'- D3: three stores (product owner, {TODAY}; said: "three now")'])
 
+    def test_a_duplicate_child_does_not_block_replaces_either(self):
+        self.recorded('- D1: one store (product owner, 2026-10-20; said: "ok")')
+        self.linear.children = [{"identifier": "NEB-2", "state": {"name": "Duplicate", "type": "canceled"}}]
+        self.decide(new=["two stores"], replaces="D1", quote="two")
+        self.assertIn("(replaced by D2)", self.linear.body)
+
     def test_canceled_children_do_not_block_replaces(self):
         self.recorded('- D1: one store (product owner, 2026-10-20; said: "ok")')
         self.linear.children = [{"identifier": "NEB-2", "state": {"name": "Canceled"}}, {"identifier": "NEB-3", "state": {"name": "cancelled"}}]

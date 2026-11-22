@@ -6,8 +6,8 @@ import fc_core, fc_config, fc_layout, fc_linearapi, fc_plan, fc_tasks
 
 # A connection costs its `first` times what it holds, and the API key's hour is 3,000,000 points shared by the whole fleet: 50 relations and 20
 # labels keep a page of 50 children near 56,000 points where 250 relations and the default 50 labels cost about 650,000.
-LINEAR_TREE_FIELDS = """identifier title description state { name } parent { identifier } labels(first: 20) { nodes { name } }
-  inverseRelations(first: 50) { nodes { type issue { identifier state { name } labels(first: 20) { nodes { name } } } } }"""
+LINEAR_TREE_FIELDS = """identifier title description state { name type } parent { identifier } labels(first: 20) { nodes { name } }
+  inverseRelations(first: 50) { nodes { type issue { identifier state { name type } labels(first: 20) { nodes { name } } } } }"""
 LINEAR_FEATURE = "query($id: String!) { issue(id: $id) { %s } }" % LINEAR_TREE_FIELDS
 LINEAR_CHILDREN = """query($id: String!, $after: String) { issue(id: $id) { children(first: 50, after: $after) {
   pageInfo { hasNextPage endCursor } nodes { %s } } } }""" % LINEAR_TREE_FIELDS
@@ -57,10 +57,10 @@ def linear_sync_payload(proj):
     except (RuntimeError, OSError) as e:  # urllib errors name the status, never the key
         sys.exit(f"sync: Linear failed ({str(e)[:200]}); compose sync --stdin still works ({fc_tasks.SYNC_SHAPE})")
     return {"feature": {"id": feature["identifier"], "title": feature["title"], "description": feature["description"] or ""},
-            "issues": [{"id": i["identifier"], "title": i["title"], "description": i["description"] or "", "status": i["state"]["name"],
+            "issues": [{"id": i["identifier"], "title": i["title"], "description": i["description"] or "", "status": fc_tasks.state_name(i["state"]),
                         "parentId": i["parent"]["identifier"] if i["parent"] else None,
                         "labels": [l["name"] for l in i["labels"]["nodes"]],
-                        "blockedBy": [{"id": r["issue"]["identifier"], "status": r["issue"]["state"]["name"],
+                        "blockedBy": [{"id": r["issue"]["identifier"], "status": fc_tasks.state_name(r["issue"]["state"]),
                                        "labels": [l["name"] for l in r["issue"]["labels"]["nodes"]]}
                                       for r in i["inverseRelations"]["nodes"] if r["type"] == "blocks"]}
                        for i in issues]}
@@ -323,13 +323,13 @@ NEEDS_SHAPING = "needs-shaping"
 def freed(b, its_feature, feature):
     """A blocker no longer holds back what it blocks: finished (fc_tasks.blocker_finished), or verified (In Review) under the same
     feature, whose stack the blocked work builds on (fc_plan.base_built)."""
-    s, ls = b["state"]["name"] or "", [l["name"] for l in b["labels"]["nodes"]]
+    s, ls = fc_tasks.state_name(b["state"]), [l["name"] for l in b["labels"]["nodes"]]
     return fc_tasks.blocker_finished(s, ls) or (feature is not None and its_feature == feature and fc_plan.base_built(s, ls))
 
 def task_holds(issue, feature=None):
     """The blockers outside the issue that still hold back any of its children (a story's tasks; freed, with `feature` the story's
     feature), each named by its parent story (by itself when it has none), in first-seen order. A child read without its relations holds nothing."""
-    kids = [c for c in ((issue.get("children") or {}).get("nodes") or ()) if ((c.get("state") or {}).get("name") or "").lower() not in fc_tasks.CANCELED]
+    kids = [c for c in ((issue.get("children") or {}).get("nodes") or ()) if fc_tasks.state_name(c.get("state")).lower() not in fc_tasks.CANCELED]
     own, out = {c.get("identifier") for c in kids} | {issue.get("identifier")}, []
     for r in (r for c in kids for r in ((c.get("inverseRelations") or {}).get("nodes") or ())):
         b = r["issue"]
@@ -345,7 +345,7 @@ def ready_ids(issues, parent=None):
     verified in its feature's stack frees its siblings), none of their tasks waiting on another story's (task_holds), and
     none carries the needs-shaping label."""
     return [i["identifier"] for i in issues
-            if (i["state"]["name"] or "").lower() in ("todo", "backlog")
+            if fc_tasks.state_name(i["state"]).lower() in ("todo", "backlog")
             and NEEDS_SHAPING not in [l["name"].lower() for l in i["labels"]["nodes"]]
             and all(freed(r["issue"], (r["issue"].get("parent") or {}).get("identifier"), parent)
                     for r in i["inverseRelations"]["nodes"] if r["type"] == "blocks")
@@ -362,12 +362,12 @@ def open_questions(description):
 # The Ready marks and the delivery plan read a feature or epic as flat pages, never a nested tree: a connection costs its `first`
 # times what it holds, so a page of 50 children with 25 relations of 10 labels stays near 20,000 points where the same tree
 # nested two levels deep cost millions, most of the key's 3,000,000 points an hour, in one call.
-READY_NODE = """fragment ReadyNode on Issue { id identifier title url description state { name } labels(first: 10) { nodes { id name } }
-  inverseRelations(first: 25) { nodes { type issue { identifier state { name } labels(first: 10) { nodes { name } } parent { identifier parent { identifier } } } } } }"""
+READY_NODE = """fragment ReadyNode on Issue { id identifier title url description state { name type } labels(first: 10) { nodes { id name } }
+  inverseRelations(first: 25) { nodes { type issue { identifier state { name type } labels(first: 10) { nodes { name } } parent { identifier parent { identifier } } } } } }"""
 READY_ROOT = """id identifier title url description project { id } labels(first: 10) { nodes { name } }
   team { labels(first: 5, filter: { name: { eqIgnoreCase: "Ready" } }) { nodes { id name } } }
   parent { id identifier title url description project { id } labels(first: 10) { nodes { name } } }
-  inverseRelations(first: 25) { nodes { type issue { identifier state { name } labels(first: 10) { nodes { name } } } } }"""
+  inverseRelations(first: 25) { nodes { type issue { identifier state { name type } labels(first: 10) { nodes { name } } } } }"""
 LINEAR_READY_ROOT = "query($id: String!) { issue(id: $id) { %s } }" % READY_ROOT
 # ready_reads: what linear_mark_ready reads, for many features at once (Linear's id filter takes identifiers too).
 LINEAR_READY_ROOTS = """query($ids: [ID!], $after: String) { issues(first: 50, after: $after, filter: { id: { in: $ids } }) {

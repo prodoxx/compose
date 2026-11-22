@@ -18,6 +18,14 @@ def node(ident, state, *blockers, title=None, parent=None, project="p1"):
             "inverseRelations": {"nodes": [{"type": "blocks", "issue": {"identifier": b, "state": {"name": s}, "labels": {"nodes": []}}} for b, s in blockers]}}
 
 
+class DuplicateIsCanceled(unittest.TestCase):
+    def test_a_node_in_a_canceled_type_state_reads_as_canceled_whatever_its_name(self):
+        n = node("NEB-60", "Duplicate", ("NEB-61", "Won't Do"))
+        n["state"]["type"] = n["inverseRelations"]["nodes"][0]["issue"]["state"]["type"] = "canceled"
+        got = fc.fc_delivery._issue(n)
+        self.assertEqual((got["state"], got["blockers"][0]["state"]), ("Canceled", "Canceled"))
+
+
 class Fake(unittest.TestCase):
     def setUp(self):
         settle = mock.patch.object(fc.fc_linear_cmd, "SETTLE_SECONDS", 0)  # a fake that keeps its document still would wait the whole settle

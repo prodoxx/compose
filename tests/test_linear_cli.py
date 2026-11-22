@@ -253,6 +253,28 @@ class SyncFromLinear(unittest.TestCase):
                          [("004", "", []), ("005", "004", []), ("006", "", ["ENG-91 (In Progress)"])])  # a design at In Review is finished
         self.assertEqual(json.loads((self.proj / "results" / "tasks.json").read_text())["issues"]["ENG-5"]["labels"], ["Task"])
 
+    def test_a_duplicate_issue_is_read_as_canceled_by_its_state_type_not_its_name(self):
+        # #488: Linear files Duplicate (and Won't Do) under the canceled type; ENG-6 repeats task id 005 and is a Duplicate of ENG-5
+        def gql(query, variables):
+            got = self.gql(query, variables)
+            for n in (got.get("issue") or {}).get("children", {}).get("nodes", []):
+                if n["identifier"] == "ENG-6":
+                    n["state"] = {"name": "Duplicate", "type": "canceled"}
+                    n["description"] = n["description"].replace("id: 006", "id: 005")
+                if n["identifier"] == "ENG-5":
+                    n["inverseRelations"]["nodes"].append({"type": "blocks", "issue": {"identifier": "ENG-92", "state": {"name": "Won't Do", "type": "canceled"},
+                                                                                     "labels": {"nodes": []}}})
+            return got
+        with mock.patch.object(fc.fc_linear, "linear_gql", gql):
+            data = fc.fc_linear.linear_sync_payload(self.proj)
+            self.assertIn("2 task(s) synced", self.sync())
+        by_id = {i["id"]: i for i in data["issues"]}
+        self.assertEqual(by_id["ENG-6"]["status"], "Canceled")
+        self.assertEqual(by_id["ENG-5"]["blockedBy"][-1], {"id": "ENG-92", "status": "Canceled", "labels": []})
+        tasks = json.loads((self.proj / "results" / "tasks.json").read_text())["tasks"]
+        self.assertEqual([(t["id"], t["waits_on"]) for t in tasks], [("004", []), ("005", [])])  # the canceled blocker holds nothing
+        self.assertTrue(any("state { name type }" in q for q in self.queries))
+
     def test_stories_scope_skips_other_stories_children(self):
         (self.proj / "linear.json").write_text(json.dumps({"feature": "ENG-1", "stories": ["ENG-3"]}))
         self.assertEqual([i["id"] for i in fc.fc_linear.linear_sync_payload(self.proj)["issues"]], ["ENG-3"])
