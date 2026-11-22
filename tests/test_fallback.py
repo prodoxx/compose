@@ -426,6 +426,17 @@ class FixScope(unittest.TestCase):
         self.assertEqual((code, fix_tasks(res)), (1, ["absent"]))  # the fixer changed nothing
         self.assertEqual(sorted(res), ["cost", "head", "passed", "rejected_fixes", "rounds", "seconds"])  # nothing else in verify.json changed
 
+    def test_a_fix_round_that_changes_nothing_for_a_blocking_acceptance_criterion_says_so_and_names_the_dismissal(self):
+        """#492: the fixer ran 2.8s with changed=no and verify ended "Unresolved" with nothing the team lead could act on."""
+        report = {"checks": [], "acceptance": {"criteria": [], "failed": [], "unclear": [{"id": "abcd1234", "task": "264", "criterion": "c", "choice": "UNCLEAR"}]}}
+        code, _, _ = self.verify({}, cfg={"acceptance_gate": True}, report=report)
+        self.assertEqual(code, 1)
+        [note] = [s for s in self.said if s.startswith("fix    nothing")]
+        self.assertIn("compose review --project", note)
+        self.assertIn("--dismiss <id>", note)
+        self.verify({}, report=report)  # the criteria only gate with acceptance_gate: nothing is said otherwise
+        self.assertEqual([s for s in self.said if s.startswith("fix    nothing")], [])
+
     def test_fix_tests_cover_every_changed_file_or_fall_back_to_the_full_checks(self):
         tasks = [{"id": "001", "files": ["a.go"], "protected": ["a_test.go"], "test": "ta"},
                  {"id": "002", "files": ["b.go", "c.go"], "protected": ["b_test.go"], "test": "tb"}]

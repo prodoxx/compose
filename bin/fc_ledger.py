@@ -205,7 +205,7 @@ def verify_record(proj, repo, report):
         for row in (rows or []):
             if row["task"] != t["id"] or row.get("reused"):
                 continue
-            r = "error" if row.get("judge_error") or row["choice"] is None else "pass" if row["choice"] == "MET" or row.get("proven_by") else "fail" if row.get("confirmed") else "unclear"
+            r = "error" if row.get("judge_error") or row["choice"] is None else "pass" if row["choice"] == "MET" or row.get("proven_by") else "dismissed" if row.get("dismissed") else "fail" if row.get("confirmed") else "unclear"
             acceptance.append(tev([ids[texts.index(row["criterion"])]], "acceptance", r, f"{row['choice']}: p_met {row['p_met']}, p_not_met {row['p_not_met']}" + (f", proven by test event {row['proven_by']}" if row.get("proven_by") else "")))
         oks.append(record_task(repo, proj, t, scoped + acceptance))
     return all(oks)

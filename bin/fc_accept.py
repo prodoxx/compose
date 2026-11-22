@@ -1,6 +1,6 @@
 import hashlib, json, os, re, threading
 from concurrent.futures import ThreadPoolExecutor
-import fc_core, fc_config, fc_tasks, fc_evidence, fc_ledger, fc_models, fc_worktree
+import fc_core, fc_config, fc_tasks, fc_evidence, fc_ledger, fc_models, fc_worktree, fc_review
 
 
 # TypeSafe answers HTTP 400 max_tokens_exceeded for a state of about 35k characters of dense text (30k passes, 40k fails); the old 150k cap never fit.
@@ -24,7 +24,9 @@ CONFIRM = ("You are verifying whether code VIOLATES one acceptance criterion. Fi
            "that break the criterion, copied verbatim, nothing else (\"\" when no line does). \"violated\": true only if the lines you quoted contradict the criterion's words. "
            "If every part of the criterion is satisfied, including a criterion that says something is absent and it is absent, or an error path the code "
            "handles as the criterion says, or you cannot quote a concrete line that breaks it, violated is false. "
-           "The CODE is one task's own change (a line starting with + was added, - was removed) or its files as they are; code outside what the criterion is about never violates it. "
+           "The CODE is one task's own change (a line starting with + was added, - was removed) and, when a criterion names what that change does not hold, its files as they are "
+           "at the verified tip, which later tasks may have changed: a criterion about this task's change is judged on the change, one about what a file contains on the file; "
+           "code outside what the criterion is about never violates it. "
            'Return JSON {"evidence": str, "violated": bool}.')
 
 def quotes_code(evidence, code):
@@ -36,15 +38,38 @@ def quotes_code(evidence, code):
     spans = [m for g in re.findall(r"`([^`]+)`|\"([^\"]+)\"|'([^']+)'", said) for m in g]
     return any(len(f := flat(piece)) >= 4 and f in shown for piece in [*spans, *said.splitlines(), said])
 
-def task_code(hunks, files, repo):
-    """(the code a task's criteria are judged on, whether it is its files as they are): its own hunks of the diff, else, when
-    none of its files changed (a check-only task, or a verify on the base itself), those files as they are in the repo. Never
-    another task's code; "" when there is none. A lockfile or other generated file is noise, not code, and is left out."""
+def needs_files(crits, code):
+    """Whether a criterion names (in backticks) something the change does not hold: a line the task left alone, which only the file shows."""
+    flat = lambda t: " ".join(str(t).split())
+    shown = flat(code)
+    return any(len(f := flat(span)) >= 3 and f not in shown for c in crits for span in re.findall(r"`([^`]+)`", c))
+
+def own_changes(repo, proj, cfg, metas):
+    """{task id: its own change} for each task whose branch is a layer of the stack: the diff of the branch against the layer below it
+    (the review base for the lowest), limited to the task's files, so a later task's change to the same file is never its own. A task
+    without a layer is left out, and is judged on its hunks of the project's diff."""
+    main = cfg.get("main_repo") or repo  # the stack's branches are listed from the checkout that is not at the stack top
+    order, prefix, base, out = fc_worktree.stack_order(main, proj), fc_worktree.task_prefix(main, proj), fc_worktree.review_base(main, cfg), {}
+    for below, branch in zip([base, *order], order):
+        meta = metas.get(branch.removeprefix(prefix))
+        files = [f for f in (meta["files"] + meta["protected"] if meta else []) if not fc_worktree.GENERATED_RE.search(f)]
+        if files and below and (p := fc_core.sh(["git", "diff", f"{below}...{branch}", "--", *files], main, check=False)).returncode == 0:
+            out[meta["id"]] = p.stdout
+    return out
+
+def task_code(hunks, files, repo, own=None, crits=()):
+    """(the code a task's criteria are judged on, whether it is its files as they are): its own change (`own`, else its hunks of the
+    project's diff), then, when a criterion names something that change does not hold, its files whole as they are at the tip; else,
+    when nothing of its files changed (a check-only task, or a verify on the base itself), those files as they are in the repo.
+    Never another task's change; "" when there is none. A lockfile or other generated file is noise, not code, and is left out."""
     files = [f for f in files if not fc_worktree.GENERATED_RE.search(f)]
-    code = "\n".join("\n".join(lines) for path, lines in hunks if path in files)
-    if code.strip() or not repo:
+    code = own if own is not None else "\n".join("\n".join(lines) for path, lines in hunks if path in files)
+    present = [f for f in files if repo and (repo / f).is_file()]
+    if code.strip():
+        if needs_files(crits, code):
+            code += "".join(f"\n\n==== {f} as it is at the verified tip (a later task may have changed it; what the task changed is above) ====\n{(repo / f).read_text(errors='replace')}" for f in present)
         return code, False
-    return "\n\n".join(f"==== {f} (no change in this diff) ====\n{(repo / f).read_text(errors='replace')}" for f in files if (repo / f).is_file()), True
+    return "\n\n".join(f"==== {f} (no change in this diff) ====\n{(repo / f).read_text(errors='replace')}" for f in present), True
 
 def verdict_file(proj, tid):
     """Where the task's last acceptance verdict is kept (results/acceptance/<id>.json), with the key of what jev judged."""
@@ -92,6 +117,37 @@ def mark_sufficiency(proj, tid):
     if kept and not kept.get("sufficiency"):
         fc_core.atomic_write(verdict_file(proj, tid), json.dumps({**kept, "sufficiency": True}, indent=2))
 
+def dismiss(rows, dismissed):
+    """Mark each row that is not MET and whose id (fc_review.acceptance_id) the team lead dismissed with `dismissed` (its reason)."""
+    for r in rows:
+        if r["choice"] != "MET" and (reason := dismissed.get(fc_review.acceptance_id(r))):
+            r["dismissed"] = reason
+
+def report_lines(acc, name):
+    """What verify prints for the criteria that are not MET: each with its verdict, probabilities, task, id and note, then, when one blocks, how to clear it."""
+    lines = []
+    for r in acc.get("criteria", []):
+        if r["choice"] != "MET":
+            flag = "dismissed" if r.get("dismissed") else "NOT MET " if r in acc.get("failed", []) else ("unproven" if r in acc.get("suspects", []) else "unclear ")
+            lines.append(f"           {flag} p_met={r['p_met']:.2f} p_not={r['p_not_met']:.2f} [{r['task']}] {r['criterion'][:110]}" + (f"  id {r['id']}" if r.get("id") else "")
+                         + (f"  (note: the task's test passed, ledger event {r['proven_by']})" if r.get("proven_by") else f"  (dismissed by the team lead: {r['dismissed']})" if r.get("dismissed")
+                            else f"  (note: {r['note']})" if r.get("note") else ""))
+    if blocking(acc):
+        lines += [f"           clear a row by its id: `compose review --project {name} --dismiss <id> --reason \"<why the criterion is met>\"` (kept in dismissed.json and on the ledger),",
+                  "           or change the code it names, or have a passing test of the task cover the criterion"]
+    return lines
+
+def blocking(acc):
+    """The rows of the acceptance report that keep it from passing."""
+    return [r for r in [*(acc or {}).get("failed", []), *(acc or {}).get("unclear", [])] if r.get("id")]
+
+def no_change_note(acc, name):
+    """What verify says when its fix round changed nothing for judged criteria: a model's doubt about a criterion is not a line a fixer can edit."""
+    if not blocking(acc):
+        return ""
+    return ("fix    nothing  the fixer changed no file for the acceptance criteria above: a judge's doubt or misreading is not a line to edit. "
+            f"Dismiss each criterion that is met by its id (`compose review --project {name} --dismiss <id> --reason \"...\"`), or fix what it names")
+
 def jev_acceptance(cfg, proj, diff, repo=None, fresh=False):
     """Ask Jev (TypeSafe) one choice question per acceptance criterion: MET, NOT_MET, or UNCLEAR, with probabilities.
     One request per task, whose state is that task's own files plus its test (task_code), so the judge sees exactly the code the
@@ -115,12 +171,15 @@ def jev_acceptance(cfg, proj, diff, repo=None, fresh=False):
             hunks.append([cur, [line]])
         elif cur is not None:
             hunks[-1][1].append(line)
-    for meta in fc_tasks.code_tasks(fc_tasks.load_tasks(proj)):
+    metas = fc_tasks.code_tasks(fc_tasks.load_tasks(proj))
+    own = own_changes(repo, proj, cfg, {m["id"]: m for m in metas}) if repo else {}
+    dismissed = {d["id"]: d["reason"] for d in fc_review.read_dismissed(proj)}
+    for meta in metas:
         crits = fc_tasks.parse_criteria(meta["body"])
         if not crits:
             continue
         files = meta["files"] + meta["protected"]
-        code, as_is = task_code(hunks, files, repo)
+        code, as_is = task_code(hunks, files, repo, own.get(meta["id"]), crits)
         if not code.strip():
             rows += [{"task": meta["id"], "criterion": text, "choice": "UNCLEAR", "p_met": 0, "p_not_met": 0, "confidence": None, "note": NO_CODE}
                      for text in crits]
@@ -130,7 +189,9 @@ def jev_acceptance(cfg, proj, diff, repo=None, fresh=False):
         key = verdict_key(meta, crits, code)
         kept = same_verdict(proj, repo, meta, key) if repo and not fresh else None
         if kept is not None:
-            rows += [{**r, "reused": True} for r in kept]
+            old = [{**r, "reused": True} for r in kept]
+            dismiss(old, dismissed)
+            rows += old
             reused.append(meta["id"])
             continue
         keys[meta["id"]] = key
@@ -153,8 +214,9 @@ def jev_acceptance(cfg, proj, diff, repo=None, fresh=False):
         fc_core.say(f"jev    acceptance {len(nocode)} task(s) have no code to judge (none of their files in the diff or the repo): {', '.join(nocode)}")
     if not rows:
         return {"pass": False, "criteria": [], "failed": [], "unclear": [], "note": "no acceptance criteria to judge"}
+    dismiss(rows, dismissed)  # a row the team lead dismissed is no suspect: no confirm call, no re-ask
     judged = [r for r in rows if not r.get("reused") and r["task"] in states]  # a reused row was confirmed, re-asked, and matched to its test last time
-    suspects = [r for r in rows if r["p_not_met"] >= threshold]
+    suspects = [r for r in rows if r["p_not_met"] >= threshold and not r.get("dismissed")]
     # Jev is a fast classifier; long compound criteria produce false NOT_MET. A second model must quote the violation, in the code the judge read:
     # the task's own hunks (task_code), never its files as a later task has grown them.
     def confirm(r):
@@ -172,15 +234,20 @@ def jev_acceptance(cfg, proj, diff, repo=None, fresh=False):
         list(ex.map(confirm, [r for r in suspects if not r.get("reused")]))
     failed = [r for r in suspects if r.get("confirmed")]
     for r in judged:
-        fc_models.reask_criterion(env, cfg, states[r["task"]], choices, rules, r, "Jev acceptance")
-    # MET passes, and so does a criterion its task's passing test proves; UNCLEAR and a NOT_MET the confirm call did not confirm block as unproven.
-    unclear = [r for r in rows if r["choice"] != "MET" and not r.get("confirmed")]
+        if not r.get("dismissed"):
+            fc_models.reask_criterion(env, cfg, states[r["task"]], choices, rules, r, "Jev acceptance")
+    # MET passes, and so does a criterion its task's passing test proves or the team lead dismissed; UNCLEAR and a NOT_MET the confirm call did not confirm block as unproven.
+    unclear = [r for r in rows if r["choice"] != "MET" and not r.get("confirmed") and not r.get("dismissed")]
     proven_by_test(repo, proj, [r for r in unclear if not r.get("judge_error") and not r.get("reused")])
     unclear = [r for r in unclear if not r.get("proven_by")]
+    for r in rows:  # every row that is not MET names itself, so `review --dismiss <id>` can reach a NOT_MET too
+        r.pop("id", None)
+        if r["choice"] != "MET":
+            r["id"] = fc_review.acceptance_id(r)
     errors = [r for r in suspects if r.get("judge_error")]
     for tid, key in keys.items() if repo else ():
-        keep_verdict(proj, repo, tid, key, [r for r in judged if r["task"] == tid])
-    return {"pass": all(r["choice"] == "MET" or r.get("proven_by") for r in rows), "unclear": unclear, "criteria": rows, "failed": failed, "suspects": suspects, "model": model,
+        keep_verdict(proj, repo, tid, key, [{k: v for k, v in r.items() if k != "dismissed"} for r in judged if r["task"] == tid])
+    return {"pass": all(r["choice"] == "MET" or r.get("proven_by") or r.get("dismissed") for r in rows), "unclear": unclear, "criteria": rows, "failed": failed, "suspects": suspects, "model": model,
             **({"error": f"{len(errors)} confirm call(s) failed: {errors[0]['evidence']}"} if errors else {})}
 
 def proven_by_test(repo, proj, rows):
@@ -205,7 +272,6 @@ def proven_by_test(repo, proj, rows):
         covering = [e for e in events[meta["id"]] if not e["criterion_id"] or cid in e["criterion_id"]]
         if covering and covering[-1]["result"] == "pass":
             r["proven_by"] = covering[-1]["event_id"]
-
 VERDICTS = ("proven", "unproven", "contradicted")
 NEEDS = ("test", "prove", "check", "e2e", "review", "acceptance", "manual", "none")
 DETERMINISTIC = ("attempt", "final", "checks", "scoped", "e2e")

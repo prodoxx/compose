@@ -26,6 +26,15 @@ def finding_id(i):
     words = " ".join(str(i.get("note", "")).lower().split())
     return hashlib.sha256(f"{str(i.get('file', '')).removeprefix('./')}\n{words}".encode()).hexdigest()[:8]
 
+def acceptance_finding(row):
+    """The dismissable finding of an acceptance row that is not MET (a NOT_MET, an UNCLEAR): its file names the task and its note is the
+    criterion, so its id (finding_id) follows the task and the words of the criterion and a reworded criterion is a new row."""
+    return {"file": f"acceptance of task {row['task']}", "line": None, "severity": "high", "note": row["criterion"], "task": row["task"]}
+
+def acceptance_id(row):
+    """The id of an acceptance row, what `review --dismiss` takes."""
+    return finding_id(acceptance_finding(row))
+
 def dismissed_file(proj):
     """Where the findings the team lead dismissed are kept: the project's dismissed.json, a list of {id, file, note, severity, reason, at}."""
     return Path(proj) / "dismissed.json"
@@ -46,8 +55,8 @@ def keep_dismissal(proj, finding, reason):
     return record
 
 def last_confirmed(proj):
-    """{id: finding} for every confirmed or held finding of the project's last verify and reviews (results/verify.json, smoke.json, review.json,
-    review-*.json), the ones a dismissal may name."""
+    """{id: finding} for every confirmed or held finding, and every acceptance criterion left neither MET nor proven by a test nor dismissed, of the
+    project's last verify and reviews (results/verify.json, smoke.json, review.json, review-*.json), the ones a dismissal may name."""
     found = {}
     results = Path(proj) / "results"
     for f in [results / "verify.json", results / "smoke.json", results / "review.json", *sorted(results.glob("review-*.json"))]:
@@ -55,7 +64,11 @@ def last_confirmed(proj):
             data = json.loads(f.read_text())
         except (OSError, ValueError):
             continue
-        reviews = [r.get("review") for r in data.get("rounds", [])[-1:]] if "rounds" in data else [data.get("review")]
+        last = data.get("rounds", [])[-1:] if "rounds" in data else []
+        for r in ((last[0].get("acceptance") or {}).get("criteria") or []) if last else []:
+            if r.get("choice") != "MET" and not r.get("proven_by") and not r.get("dismissed"):
+                found[acceptance_id(r)] = acceptance_finding(r)
+        reviews = [r.get("review") for r in last] if "rounds" in data else [data.get("review")]
         for rv in reviews:
             for i in (rv or {}).get("confirmed", []) + (rv or {}).get("held", []):
                 found[finding_id(i)] = i

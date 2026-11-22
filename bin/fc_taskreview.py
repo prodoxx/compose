@@ -39,7 +39,8 @@ def review_event(proj, meta, sha, rv):
                            f"{len(rv['confirmed'])} confirmed of {len(rv['issues'])} raised" + (f", {len(rv['dismissed'])} dismissed by the team lead" if rv.get("dismissed") else ""))
 
 def cmd_dismiss(a, proj, repo):
-    """`review --dismiss <id>[,<id>] --reason "<why>"`: the team lead's word that a confirmed finding is false. It is kept in the
+    """`review --dismiss <id>[,<id>] --reason "<why>"`: the team lead's word that a confirmed finding is false, or that an acceptance
+    criterion verify left neither MET nor proven by a test (its row prints an id) is met. It is kept in the
     project's dismissed.json with its reason, written on the feature issue's evidence ledger, and left out of every later review and
     verify (fc_review.llm_review), so it stops failing the stack and no fix round chases it."""
     reason = " ".join((a.reason or "").split())
@@ -60,7 +61,8 @@ def cmd_dismiss(a, proj, repo):
         finding = known[found[i][0]]
         record = fc_review.keep_dismissal(proj, finding, reason)
         fc_core.say(f"review dismissed {record['id']} {finding.get('file')}{':' + str(finding['line']) if finding.get('line') else ''} [{finding.get('severity')}]: {reason}")
-        events.append(fc_ledger.event("", sha, [], [], "review", "dismiss", "dismissed", None, f"{record['id']} {finding.get('file')}: {reason}"))
+        task = [finding["task"]] if finding.get("task") else []  # an acceptance criterion's dismissal names its task
+        events.append(fc_ledger.event("", sha, task, [], "acceptance" if task else "review", "dismiss", "dismissed", None, f"{record['id']} {finding.get('file')}: {reason}"))
     if feature and fc_ledger.record(feature, events) is False:
         fc_core.say("review FAIL  the dismissal is kept in dismissed.json but not saved on Linear: " + ", ".join(e["event_id"] for e in events))
         sys.exit(1)

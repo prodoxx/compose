@@ -79,17 +79,24 @@ A start stops while a target differs from the record or an env file sets one the
    The confirmation call is also told what was dismissed and why, so the same claim in other words is rejected.
    Remove the entry from `dismissed.json` to bring the finding back.
 3. **jev** asks one MET / NOT_MET / UNCLEAR question per acceptance criterion.
-   Each task is judged on its own hunks of the project's whole diff, never the reviewers' pack, which is cut at 150,000 characters.
+   Each task is judged on its own change: the diff of its branch against the layer below it (the review base for the lowest), limited to its `files` and `protected`, so a later task's change to the same file is never counted against it.
+   A task with no branch in the stack is judged on its hunks of the project's whole diff, never the reviewers' pack, which is cut at 150,000 characters.
+   When a criterion names in backticks something the change does not hold (a class on a line the task left alone), the task's files follow the change whole, as they are at the verified tip, so a criterion about what a file contains is judged on the file.
+   A criterion about built output no source file holds stays `unclear`: a passing test of the task proves it, else the team lead dismisses it.
    A task that changed none of its files is judged on those files as they are; lockfiles and other generated files are left out.
    A task with no code at all is not asked: its criteria are `unclear` with the note `none of its files is in the diff or the repo`, and only its passing test proves them.
    It is never judged on another task's code.
    Code over 30,000 characters is cut at a whole line and ends with a mark that says the tool cut it.
    A busy provider (HTTP 429, 502, 503 or 504) is asked again after 2, 5, 10 and 20 seconds, or after its `Retry-After` up to 60, before the call counts as an error.
-   A NOT_MET above the threshold is checked by a second call that reads the same hunks (never the file as a later task has grown it) and answers `{"evidence": str, "violated": bool}`: the lines that break the criterion, then whether they do.
+   A NOT_MET above the threshold is checked by a second call that reads the same code and answers `{"evidence": str, "violated": bool}`: the lines that break the criterion, then whether they do.
    A criterion the code satisfies, an absent thing that should be absent included, is `violated: false`, and a `violated: true` whose evidence quotes no line of that code is not a violation: the criterion stays `unproven`.
    Failures above the threshold that the second call confirms become findings.
    Each task's verdict is kept in `results/acceptance/<id>.json` with the commit it judged, keyed by the task's title, criteria, the hunks of its files, and the question the second call is asked, so a verdict kept from another question is judged again.
    The next verify reuses it, and asks jev nothing for that task, while the key matches and `git diff` shows the task's `files` and `protected` unchanged since that commit; it prints `jev    acceptance N of M tasks unchanged since their last verify, not rejudged`.
+   Every criterion that is not MET, a NOT_MET included, is printed with an `id` (a hash of its task and its words).
+   `compose review --project <name> --dismiss <id>[,<id>] --reason "<why the criterion is met>"` dismisses it like a review finding: the reason is kept in `dismissed.json` and written on the feature issue's ledger as an `acceptance` row with source `dismiss`, and every later verify shows the row as `dismissed`, with the reason, and passes it.
+   A criterion reworded on Linear is a new row with a new id.
+   When a fix round changes nothing for criteria that block (`acceptance_gate`), verify says so and names the dismissal, before it ends with "Unresolved after the fix budget".
    A verdict that judged nothing (a judge error, an unusable reply) is never kept, and `--fresh` rejudges every task.
    Then jev judges whether each task's evidence proves each criterion ([Evidence](#evidence)); that never changes the verdict.
 4. **e2e** has jev drive a real browser to each case's goal.
@@ -179,7 +186,7 @@ If that read fails too, it writes anyway, and the reader still keeps one row per
 | `criterion_id` | `<task id>.<order>:<first 8 hex of the sha256 of the criterion text>` for each criterion covered; empty means all of the task's criteria |
 | `phase` | `red`, `attempt`, `final`, `case`, `checks`, `scoped`, `e2e`, `review`, `acceptance`, `sufficiency`, `done`, or `cost` |
 | `source` | `run`, `prove`, `verify`, or `done` |
-| `result` | `pass`, `fail`, `fail_expected`, `error`, `skipped`, `unclear`, `proven`, `unproven`, or `contradicted` |
+| `result` | `pass`, `fail`, `fail_expected`, `error`, `skipped`, `unclear`, `dismissed`, `proven`, `unproven`, or `contradicted` |
 | `fails_on_base` | `true` for a test that must fail before the change, `false` for one that passes, else `null` |
 | `detail` | One line, scrubbed of secrets, at most 160 characters |
 

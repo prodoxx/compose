@@ -290,11 +290,8 @@ def run_stages(repo, proj, cfg, a, tests=None):
             f"{len(acc.get('unclear', []))} unproven"
             + (f", {n_test} proven by their task's test" if (n_test := sum(bool(r.get("proven_by")) for r in acc.get("criteria", []))) else "")
             + (f"  error={acc['error'][:120]}" if acc.get("error") else ""))
-        for r in acc.get("criteria", []):
-            if r["choice"] != "MET":
-                flag = "NOT MET " if r in acc.get("failed", []) else ("unproven" if r in acc.get("suspects", []) else "unclear ")
-                print(f"           {flag} p_met={r['p_met']:.2f} p_not={r['p_not_met']:.2f} [{r['task']}] {r['criterion'][:110]}"
-                      + (f"  (note: the task's test passed, ledger event {r['proven_by']})" if r.get("proven_by") else f"  (note: {r['note']})" if r.get("note") else ""))
+        for line in fc_accept.report_lines(acc, proj.name):
+            print(line)
         for r in acc.get("failed", []):
             if gate:
                 findings.append(f"[high] acceptance criterion not met (task {r['task']}, p={r['p_not_met']}): {r['criterion']}")
@@ -539,6 +536,8 @@ def verify_rounds(repo, proj, cfg, a, rounds, t0, left_out=()):
             if unrouted:
                 break
         else:
+            if note := fc_accept.no_change_note(report.get("acceptance"), proj.name) if cfg.get("acceptance_gate") else "":
+                fc_core.say(note)
             break
     sha = fc_core.sh(["git", "rev-parse", "HEAD"], repo, check=False).stdout.strip()  # the verified top, read before the layers are stood: that moves the worktree
     layered = fc_layergate.layer_pass(cfg["main_repo"], proj, a) if ok and cfg.get("main_repo") and not left_out and not getattr(a, "review_only", False) and cfg.get("layer_checks", True) else []
