@@ -314,15 +314,17 @@ def code_nodes(proj, wt, meta):
     A failed fetch raises RuntimeError: the task never starts."""
     if not meta.get("figma_nodes"):
         return []
-    key = meta.get("figma") or (json.loads((proj / "linear.json").read_text()) if (proj / "linear.json").exists() else {}).get("figma")
+    key, where = fc_framelink.node_file(proj, meta)
     if not key:
-        raise RuntimeError("figma_nodes needs a Figma file: compose figma check --figma <url or key>")
+        raise RuntimeError("figma_nodes needs a Figma file: a figma: line on the task, or compose figma check --figma <url or key>")
     docs = []
     for node in meta["figma_nodes"]:
         try:
             docs.append(json.loads(fc_framelink.framelink_fetch(key, node=node.replace("-", ":"))))
         except ValueError:
-            raise RuntimeError(f"framelink fetch of node {node} is not JSON")
+            raise RuntimeError(f"framelink fetch of node {node} in file {key} (from {where}) is not JSON")
+        except RuntimeError as e:
+            raise RuntimeError(f"figma file {key} is {where}: {e}")
     fc_figmanodes.self_contained(docs)
     (wt / ".figma").mkdir()
     (wt / ".git" / "info").mkdir(exist_ok=True)

@@ -125,7 +125,13 @@ So a criterion may name what a screen shows (no label cut off, the total aligned
 A code task names the Figma nodes it builds on a `figma_nodes:` line, like `figma_nodes: 7-21, 9-144`, and its brief never carries their JSON.
 `run` fetches each node through Framelink as the task starts, from the `figma:` file or the project's stored one.
 It writes them into the task's clone as `.figma/<node>.json`, kept out of git, and the implementer may read them.
+A task's file is its own `figma:` line or the project's stored file, and nothing else.
+A `figma:` line on a story or a feature is not inherited by its tasks: a task is its own brief and compose block, so what it reads never depends on an issue above it that the task does not show.
+A story whose code tasks build from a second file puts `figma:` on each of those tasks.
+A task with `figma_nodes:` and no `figma:` line reads the project's stored file, and `run` says so in its first lines, one line a task, naming the file key.
 A fetch that fails stops the task before its first turn.
+The stop names the node, the file key it asked, and whether the key came from the task's `figma:` line or from the project's stored file, then gives Framelink's whole error from its start with its `[INFO]` log lines left out.
+It says `Figma refused the token (authentication)` only for a 401 or 403 or an invalid token; Framelink's own `Node ... was not found` means Figma answered 404 for that node in that file, so check the file key first.
 
 ## Toolchain tasks
 
