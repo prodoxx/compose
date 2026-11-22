@@ -74,6 +74,6 @@ def wait_ready(proj, tid, since=0, poll=5):
         if "closed" in record:
             return None
         listed = fc_fleet.agent_list()
-        if fc_crew.tab_closed(record, listed["agents"] if listed is not None else None):
+        if fc_fleet.tab_closed(record, listed["agents"] if listed is not None else None):
             return None
         time.sleep(poll)

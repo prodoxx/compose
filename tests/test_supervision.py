@@ -214,6 +214,25 @@ class WatchTimeout(unittest.TestCase):
                 mock.patch.object(fc.fc_status, "board", return_value={"rows": []}):
             self.assertEqual(fc.fc_watch.watch_snapshot(Path("."), proj)["closed"], ["hw-tests-002"])
 
+    def test_a_teammate_whose_start_has_made_no_tab_yet_is_open_while_the_start_lives(self):
+        """#486: `crew start` writes the record before it makes the tab, so for seconds a booting record has no `tab`; herdr answers
+        `tab_not_found` for an empty id, which read as a closed tab and fired stall=ended for a teammate starting normally."""
+        proj = Path(tempfile.mkdtemp()) / "hw"; (proj / "results" / "crew").mkdir(parents=True)
+        dead = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"], capture_output=True, text=True).stdout.strip()  # a start that was killed
+        for n, pid in (("hw-design-001", os.getpid()), ("hw-design-002", dead), ("hw-design-003", None)):
+            (proj / "results" / "crew" / f"{n}.json").write_text(json.dumps({"name": n, "space": "w9", "booting": True, **({"start_pid": int(pid)} if pid else {})}))
+        asked = []
+        tabs = lambda *a, **k: asked.append(a) or (None, "tab_not_found")
+        with mock.patch.object(fc.fc_herdr, "herdr", return_value={"agents": []}), mock.patch.object(fc.fc_herdr, "herdr_error", tabs), \
+                mock.patch.object(fc.fc_status, "board", return_value={"rows": []}):
+            self.assertEqual(fc.fc_watch.watch_snapshot(Path("."), proj)["closed"], ["hw-design-002", "hw-design-003"])  # only a start that is gone leaves it closed
+        self.assertEqual(asked, [])  # there is no tab to ask the host about
+
+    def test_an_empty_tab_is_never_gone(self):
+        with mock.patch.object(fc.fc_herdr, "herdr_error", return_value=(None, "tab_not_found")):
+            self.assertFalse(fc.fc_fleet.tab_gone(None))
+            self.assertTrue(fc.fc_fleet.tab_gone("w9:t3"))
+
     def test_a_teammate_just_up_is_not_judged_by_a_list_from_before(self):
         """A watch loop keeps herdr's agent list for seconds; crew_up in that time must not make a running teammate look closed."""
         proj = Path(tempfile.mkdtemp()) / "hw"; (proj / "results" / "crew").mkdir(parents=True)

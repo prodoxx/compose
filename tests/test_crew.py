@@ -218,6 +218,7 @@ class Crew(unittest.TestCase):
         def herdr(*args, **kw):
             if args[:2] == ("agent", "start"):  # a fast teammate finishes before start returns
                 booting.append(fc.fc_crew.crew_record(self.proj, "shop-eol").get("booting"))
+                booting.append(fc.fc_crew.crew_record(self.proj, "shop-eol").get("start_pid") == os.getpid())  # no tab yet: the live start is what says it is opening (#486)
                 fc.fc_crew.write_report(self.proj, "shop-eol", "done", "one commit")
             if args[:2] == ("agent", "list"):
                 return {"agents": []}
@@ -230,7 +231,8 @@ class Crew(unittest.TestCase):
                 mock.patch.object(fc.fc_claude, "claude_trusted", return_value=True), mock.patch("builtins.print"):
             fc.fc_crew.cmd_crew(a)
         self.assertEqual([r["state"] for r in fc.fc_crew.crew_reports(self.proj, "shop-eol")], ["working", "done"])
-        self.assertEqual(booting, [True])  # herdr does not list it yet: watch must not take it for a closed tab
+        self.assertEqual(booting, [True, True])  # herdr does not list it yet: watch must not take it for a closed tab
+        self.assertNotIn("start_pid", fc.fc_crew.crew_record(self.proj, "shop-eol"))
         self.assertNotIn("booting", fc.fc_crew.crew_record(self.proj, "shop-eol"))  # up: from now on a missing agent means it ended
 
     def start_with_timeout(self, appears_after, pane_busy=False, finishes=False):

@@ -55,7 +55,7 @@ def watch_snapshot(repo, proj, agents=None):
         n = ag.get("name") or ""
         if fc_herdr.agent_id(proj.name, n):
             snap["agents"][n] = ag.get("agent_status")
-    snap["closed"] = [c["name"] for c in records if fc_crew.tab_closed(c, agents)]  # whatever their last report says, not working
+    snap["closed"] = [c["name"] for c in records if fc_fleet.tab_closed(c, agents)]  # whatever their last report says, not working
     snap["owner"] = crew_owners(records, agents)  # which engineering manager session each teammate is: watch_scope
     pis = [c for c in records if "skill" in c and c.get("agent", c["name"]) in snap["agents"]]
     try:

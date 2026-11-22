@@ -1,6 +1,6 @@
 import json, os, re, shlex, shutil, signal, subprocess, sys, threading, time
 from pathlib import Path
-import fc_core, fc_harness, fc_proc, fc_compactlog, fc_models, fc_host, fc_hc, fc_rex, fc_herdr
+import fc_core, fc_tasks, fc_harness, fc_proc, fc_compactlog, fc_models, fc_host, fc_hc, fc_rex, fc_herdr
 
 # ---------- the fleet, whichever terminal host shows it ----------
 # Every command that starts, steers, reads or closes an agent goes through here. Inside herdr (fc_herdr) the calls are the herdr CLI's;
@@ -278,7 +278,24 @@ def tab_gone(tab):
     """Whether the host says the tab is no longer there. A host that cannot say leaves it open."""
     if (b := backend()):
         return bool(tab) and b.tab_gone(tab)
-    return fc_herdr.herdr_error("tab", "get", tab or "", timeout=10)[1] == "tab_not_found"
+    return bool(tab) and fc_herdr.herdr_error("tab", "get", tab, timeout=10)[1] == "tab_not_found"
+
+def tab_closed(c, agents):
+    """A teammate's tab is closed when the host's agent list (`agents`; None when the host cannot say) has no agent of its name in
+    its space. Whatever its last report says, a teammate with a closed tab is not working. A teammate `crew start` is still bringing
+    up (`booting`) is not listed until the host registers it, so only the host saying its tab is gone closes it. Until the start has
+    made the tab and stored it in the record there is no tab to ask about: it is opening for as long as the start process lives, and
+    a start killed outright (a dead `start_pid`, or none recorded) leaves a record that is closed as any other."""
+    if agents is None or any(ag.get("name") == c.get("agent", c["name"]) and ag.get("workspace_id") == c.get("space") for ag in agents):
+        return False
+    if not c.get("booting"):
+        return True
+    if not c.get("tab"):
+        return not fc_tasks.pid_alive(c.get("start_pid"))
+    try:
+        return tab_gone(c.get("tab"))
+    except (OSError, subprocess.TimeoutExpired):
+        return False
 
 def close_tabs(space, label_):
     """Closes the tabs `label_` names: its own and the older `<label> HH:MM` ones."""

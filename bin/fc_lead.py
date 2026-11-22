@@ -70,7 +70,7 @@ def gaps(proj, agents):
         if t["name"] == name or t.get("closed"):
             continue
         done = (fc_crew.crew_reports(proj, t["name"]) or [{}])[-1].get("state") == "done"
-        if not done and not fc_crew.tab_closed(t, agents):
+        if not done and not fc_fleet.tab_closed(t, agents):
             live.append(t["name"])
     if live:
         why.append(f"teammates are live: {', '.join(live)}")
@@ -85,7 +85,7 @@ def verdict(proj):
     listed = fc_fleet.agent_list()
     c = fc_crew.crew_record(proj, lead_name(proj))
     agents = listed.get("agents") or [] if isinstance(listed, dict) else None
-    if agents is None or not c or fc_crew.tab_closed(c, agents):
+    if agents is None or not c or fc_fleet.tab_closed(c, agents):
         return "keep", ""
     midturn, why = gaps(proj, agents)
     if midturn:
@@ -118,7 +118,7 @@ def restart(a):
     if listed is None:
         sys.exit("the terminal host did not answer its agent list; nothing was restarted")
     agents = listed.get("agents") or []
-    if not c or fc_crew.tab_closed(c, agents):
+    if not c or fc_fleet.tab_closed(c, agents):
         sys.exit(f"no live team lead {name}; start one with: compose crew start --project {proj.name} --role orchestrator --title orchestrator --brief -")
     midturn, why = gaps(proj, agents)
     if midturn:

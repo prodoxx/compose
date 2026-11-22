@@ -86,7 +86,7 @@ def live_crew(proj):
     for f in sorted(fc_crew.crew_dir(proj).glob("*.json")):
         c = json.loads(f.read_text())
         last = (fc_crew.crew_reports(proj, c["name"]) or [{}])[-1]
-        if c["name"] != lead and not c.get("closed") and last.get("state") != "done" and not fc_crew.tab_closed(c, agents):
+        if c["name"] != lead and not c.get("closed") and last.get("state") != "done" and not fc_fleet.tab_closed(c, agents):
             why.append(f"{c['name']} last reported {last.get('state', 'nothing')}")
     space = fc_fleet.project_space(proj) if fc_fleet.inside() else None
     tabs = {t["tab_id"] for t in fc_fleet.project_tabs(proj, space)} if space else set()  # a space of several projects holds other projects' agents too: only agents named for this project count
@@ -122,7 +122,7 @@ def standing_in(wt, proj, force=False):
     c = fc_crew.crew_record(proj, lead)
     last = (fc_crew.crew_reports(proj, lead) or [{}])[-1]
     if lead_working(c, last, force) \
-            and not fc_crew.tab_closed(c, (fc_fleet.agent_list() or {}).get("agents") if fc_fleet.inside() else None):
+            and not fc_fleet.tab_closed(c, (fc_fleet.agent_list() or {}).get("agents") if fc_fleet.inside() else None):
         why.append(f"{lead} last reported {last.get('state', 'nothing')}")
     return why
 

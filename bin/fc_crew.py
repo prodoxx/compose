@@ -18,19 +18,6 @@ def crew_reports(proj, name):
     f = crew_dir(proj) / f"{name}.status"
     return [json.loads(l) for l in f.read_text().splitlines() if l.strip()] if f.exists() else []
 
-def tab_closed(c, agents):
-    """A teammate's tab is closed when the host's agent list (`agents`; None when the host cannot say) has no agent of its name in
-    its space. Whatever its last report says, a teammate with a closed tab is not working. A teammate `crew start` is still bringing
-    up (`booting`) is not listed until the host registers it, so only the host saying its tab is gone closes it."""
-    if agents is None or any(ag.get("name") == c.get("agent", c["name"]) and ag.get("workspace_id") == c.get("space") for ag in agents):
-        return False
-    if not c.get("booting"):
-        return True
-    try:
-        return fc_fleet.tab_gone(c.get("tab"))
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-
 def scratch_dir(proj, name=None):
     return proj / "scratch" / name if name else proj / "scratch"
 
@@ -151,7 +138,7 @@ def release_ended_slots(proj, agents):
         c = json.loads(f.read_text())
         slot = c.get("worktree") or (c["cwd"] if c.get("branch") else None)
         theirs = fc_worktree.common_dir(slot) if slot else None
-        if not theirs or not tab_closed(c, agents):
+        if not theirs or not fc_fleet.tab_closed(c, agents):
             continue
         if theirs not in held:
             held[theirs] = {Path(e["path"]).resolve(): e.get("lease_holder") for e in json.loads(fc_worktree.treehouse(theirs.parent, "status", "--json", check=False).stdout or "[]")}
@@ -189,7 +176,7 @@ def cmd_crew(a):
             c = json.loads(f.read_text())
             last = (crew_reports(proj, c["name"]) or [{}])[-1]
             live = next((ag for ag in agents or [] if ag.get("name") == c.get("agent", c["name"]) and ag.get("workspace_id") == c.get("space")), {})
-            state = "ended" if last.get("state") not in (None, "done") and tab_closed(c, agents) else last.get("state", "-")
+            state = "ended" if last.get("state") not in (None, "done") and fc_fleet.tab_closed(c, agents) else last.get("state", "-")
             status = "SUSPENDED" if live.get("pane_id") and fc_fleet.pane_suspended(live["pane_id"]) else live.get("agent_status", "closed")
             print(f"  {c['name']:32} {state:10} {status:8} {(c.get('model', 'claude') + (' ' + c['effort'] if c.get('effort') else '')):32} {c['title'][:30]:30} {last.get('message', '')[:70]}")
             if status == "blocked":  # name the prompt it waits at, so the lead can answer it with `crew keys`
@@ -280,7 +267,7 @@ def cmd_crew(a):
         skill = {}
     fc_pin.pin(proj)  # the first teammate pins the compose version the project runs on
     record = {"name": name, "agent": agent, "role": a.role, "title": title, "model": model, "effort": effort, "model_from": why_model, "cwd": str(cwd), "branch": branch, **({"worktree": str(work)} if work else {}), "space": space,
-              "reports_to": reports_to, **({"started_by": started_by} if started_by else {}), "started_at": time.strftime("%Y-%m-%d %H:%M:%S"), "booting": True, **skill}
+              "reports_to": reports_to, **({"started_by": started_by} if started_by else {}), "started_at": time.strftime("%Y-%m-%d %H:%M:%S"), "booting": True, "start_pid": os.getpid(), **skill}
     fc_core.atomic_write(rec, json.dumps(record, indent=2))
     seen = len(crew_reports(proj, name)) + 1  # with the `started` below: any report past these is the teammate's own
     write_report(proj, name, "working", "started")  # before the agent starts: a fast teammate's own report must come after it
@@ -376,6 +363,7 @@ def crew_up(proj, name):
     """herdr lists the teammate now: from here on a missing agent means its session ended, so its record is no longer `booting`."""
     if c := crew_record(proj, name):
         c.pop("booting", None)
+        c.pop("start_pid", None)
         fc_core.atomic_write(crew_dir(proj) / f"{name}.json", json.dumps(c, indent=2))
 
 def crew_reporting_to(proj, key):
