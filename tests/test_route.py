@@ -117,7 +117,7 @@ class Record(unittest.TestCase):
         fc.fc_tasks.sync_tasks(self.proj, {"feature": {"id": "ENG-1", "title": "F", "description": ""}, "issues": [task("ENG-3", "001"), task("ENG-4", "002")]})
         self.tasks, self.hash, self.calls, self.cache = fc.fc_tasks.load_tasks(self.proj), "h1", [], self.proj / "results" / "tasks.json"
         self.gql = lambda q, v: (self.calls.append((q, v)), {"issue": {"id": "U-" + v["id"], "description": "live" if v["id"] == "ENG-3" else None}} if "issue(id" in q else {})[1]
-        for target, name, kw in [(fc.fc_config, "LINEAR_KEY", {"new": "lin_test"}), (fc.fc_linear, "linear_gql", {"side_effect": self.gql}), (fc_routectx, "route_context", {"return_value": {}}),
+        for target, name, kw in [(fc.fc_config, "LINEAR_KEY", {"new": "lin_test"}), (fc.fc_linear, "linear_gql", {"side_effect": self.gql}), (fc.fc_linear_cmd, "await_write", {}), (fc_routectx, "route_context", {"return_value": {}}),
                                  (fc_routectx, "context_hash", {"side_effect": lambda repo, m, pols: self.hash}), (fc_policy, "read_policies", {"return_value": ([], "")}), (fc_policy, "glob_matches", {"return_value": []}), (fc_routerec, "route_reason", {"return_value": "why"}),
                                  (fc_routerec, "parse_route", {"side_effect": lambda d: dict(zip(("workflow", "depth", "context hash", "reason"), d.split("\n")[0][2:].split(" ", 3))) if d.startswith("R ") else None}),
                                  (fc_routerec, "route_section", {"side_effect": lambda r: f"R {r['workflow']} {r['depth']} {r['hash']} {r['reason']}"}), (fc_routerec, "with_route", {"side_effect": lambda desc, sec: sec + "\n" + desc}),
@@ -225,3 +225,48 @@ class RunRoutes(unittest.TestCase):
         with self.assertRaises(fc.fc_models.PaymentRequired):
             fc.fc_run.cmd_run(self.a)
         self.assertFalse(self.run_tasks.called)
+
+
+class RecordAgainstLinear(unittest.TestCase):
+    """record_route against a fake Linear that keeps the description it was given, as `reroute` meets it (#485: a task ended with 2 or 3
+    compose blocks after a reroute). Linear can serve the body from before a write for a few reads; `stale` is how many."""
+    BLOCK = "```compose\nid: 001\nfiles: a.py\nprotected: test_a.py\ntest: t\nroute: check-only\n```"
+    BODY = "## Goal\n\ng\n\n## Constraints\n\nc\n\n## Interfaces\n\nNone.\n\n" + BLOCK + "\n"
+
+    def setUp(self):
+        self.repo, self.proj = (r := Path(tempfile.mkdtemp()).resolve()), r / ".compose" / "p"
+        self.proj.mkdir(parents=True)
+        (self.proj / "linear.json").write_text('{"feature": "ENG-1"}')
+        fc.fc_tasks.sync_tasks(self.proj, {"feature": {"id": "ENG-1", "title": "F", "description": ""}, "issues": [{**task("ENG-3", "001"), "description": self.BODY}]})
+        self.meta, self.now, self.old, self.stale, self.pending = fc.fc_tasks.load_tasks(self.proj)[0], self.BODY, self.BODY, 0, 0
+        self.addCleanup(mock.patch.stopall)
+        for target, name, kw in [(fc.fc_config, "LINEAR_KEY", {"new": "lin_test"}), (fc.fc_linear, "linear_gql", {"side_effect": self.gql}),
+                                 (fc.fc_linear, "linear_comment", {}), (fc.fc_linear_cmd.time, "sleep", {})]:
+            mock.patch.object(target, name, **kw).start()
+
+    def gql(self, query, variables):
+        if "issueUpdate" in query:
+            self.old, self.now, self.pending = self.now, variables["in"]["description"], self.stale  # the old body is served for `stale` more reads
+            return {"issueUpdate": {"success": True}}
+        if self.pending:
+            self.pending -= 1
+            return {"issue": {"id": "U", "description": self.old}}
+        return {"issue": {"id": "U", "description": self.now}}
+
+    def read(self):
+        return fc.fc_linear.linear_gql("query { issue(id: $id) { id description } }", {"id": "ENG-3"})["issue"]["description"]
+
+    def reroute(self, n):
+        fc.fc_route.record_route(self.proj, self.meta, f"## Route\n\n* workflow: test-first\n* depth: DEEP\n* context hash: h{n}\n* rerouted: diff (run r{n})")
+
+    def test_reroutes_replace_the_route_and_leave_the_one_block_alone(self):
+        for n in (1, 2, 3):
+            self.reroute(n)
+        self.assertEqual((self.now.count("```compose"), self.now.count("## Route")), (1, 1))
+        self.assertTrue(self.now.endswith("* rerouted: diff (run r3)\n\n" + self.BLOCK + "\n"), self.now)
+
+    def test_a_write_is_read_back_before_record_route_returns(self):
+        # the next writer reads the body and writes all of it: from the old text it would put the whole body, block included, back as it was
+        self.stale = 3
+        self.reroute(1)
+        self.assertIn("rerouted: diff (run r1)", self.read())

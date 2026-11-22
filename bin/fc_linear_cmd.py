@@ -161,9 +161,18 @@ def new_body(a, old):
     body = read_body(a)
     if a.section:
         return section_body(a, old, body)
-    if a.append:
-        return old.rstrip("\n") + "\n\n" + body.strip() + "\n"
-    return body
+    new = old.rstrip("\n") + "\n\n" + body.strip() + "\n" if a.append else body
+    return one_block(old, new, "--append adds the text after the block the issue has: put the corrected block in the whole body" if a.append else "")
+
+def one_block(old, new, how=""):
+    """`new`, the body about to be written over `old`, unless it holds more compose blocks than a task has: a body write that adds one to an
+    issue that has one ends with two, and `compose tasks` reads the first (#454, #485). A write that leaves the issue with no more blocks
+    than it had goes through, so a body that already holds two can be written down to one."""
+    n = len(fc_tasks.task_blocks(new))
+    if n > max(1, len(fc_tasks.task_blocks(old))):
+        sys.exit(f"the body would hold {n} compose blocks and the issue has {len(fc_tasks.task_blocks(old))}: a task has one, and `compose tasks` reads only the first: nothing written; "
+                 + (how + "; " if how else "") + "write the whole body with --description, keeping exactly one block (the new one in place of the old)")
+    return new
 
 def block_kept(a, old):
     """The line that says a section write left the task's compose block where it sat inside the section, else None."""
@@ -327,7 +336,7 @@ def verb_create(a):
     p = linear_project(a.repo)
     team = fc_linear.linear_gql("query($id: String!) { team(id: $id) { name states { nodes { id name } } labels(first: 250) { nodes { id name } } } }",
                                 {"id": p["team"]["id"]})["team"]
-    inp = {"teamId": p["team"]["id"], "projectId": p["id"], "title": a.title, "description": fc_layout.laid_out(read_body(a), ids(a.label))}
+    inp = {"teamId": p["team"]["id"], "projectId": p["id"], "title": a.title, "description": fc_layout.laid_out(one_block("", read_body(a)), ids(a.label))}
     inp.update(state_and_labels(team, a))
     inp.update(priority(a))
     if a.parent:

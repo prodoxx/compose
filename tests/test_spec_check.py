@@ -104,8 +104,27 @@ class SpecCheck(unittest.TestCase):
         twice = {**t, "description": t["description"] + "\n" + t["description"].split("\n\n", 1)[1].replace("001", "001b")}
         ok, _, gaps = check([twice])["ENG-3"]
         self.assertFalse(ok)
-        self.assertTrue(has(gaps, "2 `compose` blocks (ids 001, 001b)"), gaps)
+        self.assertTrue(has(gaps, "2 `compose` blocks (ids 001, 001b): a task has one, and only the first (id 001) is read by `compose tasks`, `run` and `spec-check`"), gaps)
         self.assertEqual(check([t])["ENG-3"][2], [])
+
+    def test_compose_tasks_reads_the_block_spec_check_names_and_says_when_there_are_more(self):
+        # #485: three tasks ended with 2 or 3 blocks; the list showed the first and said nothing, spec-check said "the first" without naming it
+        t = task("ENG-3", "001", test="first test")
+        twice = {**t, "description": t["description"] + "\n" + t["description"].replace("001", "001b").replace("first test", "second test")}
+        gaps = check([twice])["ENG-3"][2]
+        repo = Path(tempfile.mkdtemp())
+        proj = repo / ".compose" / "p"
+        (proj / "results").mkdir(parents=True)
+        (proj / "linear.json").write_text('{"feature": "ENG-1"}')
+        fc.fc_tasks.sync_tasks(proj, data([twice]))
+        out = io.StringIO()
+        with mock.patch.object(fc.fc_core, "project_dir", return_value=proj), mock.patch("sys.stdout", out), branches():
+            fc.fc_spec.cmd_tasks(SimpleNamespace(repo=str(repo), project="p"))
+        printed = out.getvalue()
+        self.assertEqual((fc.fc_tasks.load_tasks(proj)[0]["id"], "first test" in printed, "second test" in printed), ("001", True, False))
+        self.assertIn("WARNING an issue holds more than one compose block", printed)
+        self.assertIn("    ENG-3: " + fc.fc_tasks.extra_blocks(twice["description"]) + "\n", printed)
+        self.assertTrue(any(g.startswith(fc.fc_tasks.extra_blocks(twice["description"])) for g in gaps), gaps)
 
     def test_none_in_not_yet_specified_ignores_case_period_and_whitespace(self):
         for none in ("None.", "none", "NONE.", "  None  ", "None ."):

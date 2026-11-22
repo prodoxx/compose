@@ -120,6 +120,16 @@ class Section(unittest.TestCase):
         self.assertEqual(fc_routerec.with_route(before + OLD + after, SECTION), before + SECTION + after)
         self.assertEqual(fc_routerec.with_route(f"{before}{OLD}\n\n{FENCE}", SECTION), f"{before}{SECTION}\n\n{FENCE}")
 
+    def test_the_section_is_replaced_where_it_sits_and_the_compose_blocks_are_never_touched(self):
+        # a heading-only Route section was found by its text, which an earlier line holds too (#485: a reroute must never move or add a block)
+        earlier = "## Goal\nAdd a `## Route` section.\n\n## Route map\n\nx\n\n"
+        for desc in (earlier + "## Route\n\n" + FENCE, earlier + "## Route\n\n* depth: FAST\n\n" + FENCE + "\n" + FENCE.replace("001", "002"), "## Route\n"):
+            got = fc_routerec.with_route(desc, SECTION)
+            self.assertEqual((got.count("```compose"), got.startswith(earlier) or got == SECTION + "\n"), (desc.count("```compose"), True), desc)
+            self.assertEqual(fc_routerec.parse_route(got), FIELDS)
+            self.assertEqual(fc_routerec.with_route(got, SECTION), got)
+        self.assertEqual(fc.fc_tasks.route_span("## Goal\n\n## Route\n\n* a\n\n```compose\n"), (9, 22))
+
     def test_without_one_it_goes_right_above_the_compose_block_else_at_the_end(self):
         code = "## Goal\n```python\nx = 1\n```\n"
         self.assertEqual(fc_routerec.with_route(f"{code}\n\n\n{FENCE}after\n", SECTION), f"{code.rstrip()}\n\n{SECTION}\n\n{FENCE}after\n")

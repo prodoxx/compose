@@ -352,6 +352,11 @@ class LinearCreate(unittest.TestCase):
         self.assertEqual([v for q, v in self.calls if self.TEAM in q], [{"id": "t1"}])
         return [v["in"] for q, v in self.calls if self.CREATE in q], issue, blocked
 
+    def test_a_body_with_two_compose_blocks_is_refused_and_creates_nothing(self):
+        (self.repo / "two.md").write_text("## Goal\n\ng\n\n```compose\nid: 1\ntest: t\n```\n\n```compose\nid: 1\ntest: u\n```\n")
+        code, said = self.fails(fc.fc_linear_cmd.cmd_linear, self.args("create", title="Fix it", file=str(self.repo / "two.md")))
+        self.assertEqual((code, "the body would hold 2 compose blocks and the issue has 0" in said, [q for q, _ in self.calls if self.CREATE in q]), (1, True, []))
+
     def test_add_label_or_drop_label_on_create_is_refused_and_creates_nothing(self):
         for kw in ({"add_label": ["Bug"]}, {"drop_label": ["Bug"]}):
             self.assertEqual(self.fails(fc.fc_linear_cmd.cmd_linear, self.args("create", title="Fix it", **kw)),
@@ -538,6 +543,25 @@ class LinearUpdate(unittest.TestCase):
         self.assertEqual(sent, self.TASK.replace("old", "new"))
         code, said, _ = self.write("## Route\n\nroute 2\n", section="## Route")  # the block is not inside Route: no line about it
         self.assertEqual(said, "updated ENG-7")
+
+    def test_a_body_write_never_leaves_an_issue_with_more_compose_blocks_than_it_had(self):
+        # a second block next to the old one: `compose tasks` reads the first, spec-check fails the task (#485)
+        block, twice = "```compose\nid: t1\nfiles: b.py\ntest: t\nfigma_nodes: 1-2\n```\n", self.TASK + "\n```compose\nid: t1\nfiles: b.py\ntest: t\n```\n"
+        self.issue["description"] = self.TASK
+        code, said, sent = self.write(block, append=True)
+        self.assertEqual((code, sent), (1, None))
+        self.assertIn("the body would hold 2 compose blocks and the issue has 1", said)
+        self.assertIn("--append adds the text after the block the issue has", said)
+        self.assertEqual(self.write(twice, description=True)[::2], (1, None))
+        replaced = self.TASK.replace("files: a.py", "files: b.py\nfigma_nodes: 1-2")
+        self.assertEqual(self.write(replaced, description=True)[::2], (0, replaced))  # the whole body with one block, the new one in place of the old
+        self.assertEqual(self.write("## Notes\n\nn\n", append=True)[0], 0)  # an append without a block is as before
+        self.issue["description"] = "## Goal\n\ng\n"  # an issue with none takes one, appended or written
+        self.assertEqual((self.write(block, append=True)[0], self.write(self.TASK, description=True)[0]), (0, 0))
+        self.issue["description"] = twice  # one that already holds two can be written down to one, and written to elsewhere without a third
+        self.assertEqual(self.write(self.TASK, description=True)[::2], (0, self.TASK))
+        self.assertEqual(self.write("## Constraints\n\nnew\n", section="## Constraints")[0], 0)
+        self.assertEqual(self.write(twice + "\n" + block, description=True)[0], 1)
 
     def test_an_unchanged_body_write_says_so_instead_of_updated(self):
         code, said, sent = self.write("## Plan\n\nold\n", section="## Plan")

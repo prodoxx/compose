@@ -22,19 +22,40 @@ SYNC_SHAPE = ('{"feature": {"id", "title", "description"}, "issues": [{"id", "ti
 WORKFLOWS = ("test-first", "implement-then-test", "fix-then-regression-test", "check-only")
 DEPTHS = ("FAST", "STANDARD", "DEEP")
 
+def task_blocks(desc):
+    """The text inside each `compose` block of an issue description, in the order they sit. A task has one: the first is the one every
+    reader takes (`task_from_issue`, `compose tasks`, `run`, `spec-check`) and the rest are ignored."""
+    return [m.group(1) for m in TASK_BLOCK.finditer(desc or "")]
+
+def extra_blocks(desc):
+    """The sentence that says an issue holds more than one `compose` block, the ids they carry and which one is read; "" for none or one."""
+    blocks = task_blocks(desc)
+    if len(blocks) < 2:
+        return ""
+    ids = [m.group(1) if (m := re.search(r"(?m)^id:[ \t]*(\S+)", b)) else "-" for b in blocks]
+    return f"{len(blocks)} `compose` blocks (ids {', '.join(ids)}): a task has one, and only the first (id {ids[0]}) is read by `compose tasks`, `run` and `spec-check`; the others are ignored"
+
+def route_span(desc):
+    """Where the `## Route` section of an issue description sits, as (start, end) character offsets from its heading to the end of its last
+    non-blank line before the next `## ` heading or the compose fence; None when there is none. Offsets, not text, so a write splices the
+    section where it is and never finds the same words earlier in the body."""
+    lines, at, start, end = desc.splitlines(keepends=True), 0, None, None
+    for line in lines:
+        text = line.rstrip("\r\n")
+        if start is None:
+            if text == "## Route":
+                start, end = at, at + len(text)
+        elif text.startswith("## ") or text.startswith("```compose"):
+            break
+        elif text.strip():
+            end = at + len(text)
+        at += len(line)
+    return None if start is None else (start, end)
+
 def route_text(desc):
     """The `## Route` section of an issue description, from its heading to the next `## ` heading or the compose fence; "" when there is none."""
-    lines = desc.splitlines()
-    if "## Route" not in lines:
-        return ""
-    start = lines.index("## Route")
-    end = start + 1
-    for i in range(start + 1, len(lines)):
-        if lines[i].startswith("## ") or lines[i].startswith("```compose"):
-            break
-        if lines[i].strip():
-            end = i + 1
-    return "\n".join(lines[start:end])
+    span = route_span(desc)
+    return desc[span[0]:span[1]] if span else ""
 
 def task_from_issue(issue):
     """A task meta (with its brief under "body") from a Linear issue whose description carries the compose block, else None."""
@@ -42,8 +63,8 @@ def task_from_issue(issue):
     m = TASK_BLOCK.search(desc)
     if not m:
         return None
-    route = route_text(desc)
-    body_desc = re.sub(re.escape(route) + r"\s*", "", desc, 1) if route else desc
+    span = route_span(desc)
+    body_desc = desc[:span[0]] + re.sub(r"^\s+", "", desc[span[1]:]) if span else desc
     meta = {k.strip(): v.strip() for k, v in (l.split(":", 1) for l in m.group(1).splitlines() if ":" in l)}
     if "id" not in meta or "test" not in meta:
         sys.exit(f"{issue['id']}: its compose block needs id and test")

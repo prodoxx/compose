@@ -3,7 +3,7 @@ when the workspace has a Linear key, printed only without one or with COMPOSE_NO
 import json, os, sys
 from pathlib import Path
 
-import fc_config, fc_core, fc_linear, fc_policy, fc_routejev, fc_routectx, fc_routerec, fc_tasks
+import fc_config, fc_core, fc_linear, fc_linear_cmd, fc_policy, fc_routejev, fc_routectx, fc_routerec, fc_tasks
 
 
 def route_tasks(repo, proj, tasks, recalculate=False):
@@ -42,11 +42,15 @@ def route_tasks(repo, proj, tasks, recalculate=False):
 
 
 def record_route(proj, meta, section):
-    """Write the section into the task issue's description, post it as a comment, and update the sync cache."""
-    issue = fc_linear.linear_gql("query($id: String!) { issue(id: $id) { id description } }", {"id": meta["linear"]})["issue"]
+    """Write the section into the task issue's description, post it as a comment, and update the sync cache.
+    The description is read and written whole, so the write waits until Linear serves it back: the next writer (a planner's section write, the
+    Evidence refresh, the next reroute) reads the body and writes all of it, and from the text before this write it would put the old body back."""
+    read = lambda: fc_linear.linear_gql("query($id: String!) { issue(id: $id) { id description } }", {"id": meta["linear"]})["issue"]
+    issue = read()
     new = fc_routerec.with_route(issue.get("description") or "", section)
     fc_linear.linear_gql("mutation($id: String!, $in: IssueUpdateInput!) { issueUpdate(id: $id, input: $in) { success } }",
                          {"id": meta["linear"], "in": {"description": new}})
+    fc_linear_cmd.await_write(lambda: read().get("description"), issue.get("description"), new)
     fc_linear.linear_comment({"id": issue["id"]}, section)
     path = proj / "results" / "tasks.json"
     cache = json.loads(path.read_text())

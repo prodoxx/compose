@@ -34,6 +34,7 @@ Write bodies come from `--file <path>` or stdin, never from the command line.
 `update` writes the body only with `--section "<heading>"`, `--append`, or `--description`; `--file` alone exits and writes nothing.
 `get --body` ends with each section's hash: a `--section` write from that read passes `--expect <hash>` and writes nothing if another writer changed the section since.
 A `--section` write replaces the section's subsections too and refuses text that drops one (`--subsections keep` writes only its own text), and it never changes a task's `compose` block: `--description` writes the whole body.
+A body write (`--append`, `--description`) that would leave an issue with more `compose` blocks than it has exits and writes nothing: a task has one, and `compose tasks` reads only the first.
 `list` and `create` default to the file's project and team; `get`, `update`, and `comment` refuse an issue in another project unless `--any-project`.
 Confirm the file points at a real project before any other Linear call: `compose linear project` must print a project on its team.
 Scope every Linear read, search, and write to that project and team; with a project in play, its feature comes from `.compose/<slug>/linear.json`.

@@ -112,9 +112,9 @@ def parse_route(desc):
 def with_route(desc, section):
     """`desc` with its Route section replaced in place, else inserted right above the compose block."""
     import fc_tasks
-    route = fc_tasks.route_text(desc)
-    if route:
-        return desc.replace(route, section, 1)
+    span = fc_tasks.route_span(desc)
+    if span:
+        return desc[:span[0]] + section + desc[span[1]:]
     m = re.search(r"^```compose", desc, re.M)
     if m:
         return desc[:m.start()].rstrip("\n") + "\n\n" + section + "\n\n" + desc[m.start():]

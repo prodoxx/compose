@@ -223,6 +223,11 @@ def cmd_tasks(a):
         print("\n  WARNING TASK TOO BIG: split it before `run`; a task is one tiny change a fast model finishes in one short turn:")
         for tid, why in big:
             print(f"    {tid}: {why}")
+    many = [(k, more) for k, v in issues.items() if (v.get("status") or "").lower() not in fc_tasks.CANCELED and (more := fc_tasks.extra_blocks(v.get("description")))]
+    if many:  # the list above shows the first block of each: say so, the way `spec-check` does
+        print("\n  WARNING an issue holds more than one compose block (the list shows the first; `spec-check` fails it):")
+        for k, more in many:
+            print(f"    {k}: {more}")
     big_stories = [(k, len(fc_tasks.parse_criteria(v.get("description") or "")))
                    for k, v in issues.items()
                    if (v.get("status") or "").lower() not in fc_tasks.CANCELED and not fc_tasks.task_from_issue(dict(v, id=k))
@@ -309,9 +314,8 @@ def spec_check(data, checks=(), defined=None, scripts=None):
         bullets = fc_tasks.parse_criteria(desc)
         if meta:
             gaps = []
-            if len(blocks := fc_tasks.TASK_BLOCK.findall(desc)) > 1:  # `compose tasks` reads the first; a section write that held a block once added another
-                ids = ", ".join(re.findall(r"(?m)^id:[ \t]*(\S+)", "\n".join(blocks)))
-                gaps.append(f"{len(blocks)} `compose` blocks (ids {ids}): a task has one, and only the first is read; keep one and write the whole body with `compose linear update <id> --description`")
+            if more := fc_tasks.extra_blocks(desc):  # a write that held a block once added another (#454); a reroute does not (#485)
+                gaps.append(more + "; keep the one you mean and write the whole body with `compose linear update <id> --description`")
             if too_big(meta):
                 gaps.append(f"too big: {too_big(meta)}")
             if len(bullets) > 5:
