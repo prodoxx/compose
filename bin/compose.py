@@ -185,6 +185,7 @@ def main():
                 s.add_argument(flag, action="append", help=text)
             for flag in ("--parent", "--search", "--state", "--priority", "--title", "--file", "--section", "--expect", "--create", "--into"):
                 s.add_argument(flag)
+            s.add_argument("--quote", help="cancel only: the product owner's words, verbatim; the cancel goes ahead under away or yolo, with them logged on the issue")
             s.add_argument("--subsections", choices=("keep", "drop"), help="with --section: keep the section's subsections and replace only its own text, or drop them; "
                            "without it a write that drops a subsection exits")
         if name == "delivery":

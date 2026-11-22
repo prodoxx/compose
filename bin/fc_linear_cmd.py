@@ -446,6 +446,8 @@ def lineage(issue):
         issue = issue.get("parent")
     return out
 
+CANCEL_GO = '(canceled on the go of the product owner, {date}; said: "{quote}")'  # fc_decide.CONFIRMED's shape, for a cancel
+
 def verb_cancel(a):
     if not a.target:
         sys.exit("cancel needs an issue id")
@@ -455,12 +457,16 @@ def verb_cancel(a):
     scope = "query($id: String!) { issue(id: $id) { id identifier title project { id name } } }"
     issue = fc_linear.linear_gql(scope.replace("project {", "parent { identifier parent { identifier parent { identifier } } } project {"),
                                  {"id": a.target[0]})["issue"]
-    if posture := under_posture(a.repo, lineage(issue), getattr(a, "project", None)):
-        sys.exit(f"{posture[0]} is under {posture[1]}: a cancel changes Linear only on the product owner's own go; cancel it once {posture[1]} is off")
+    quote = " ".join((getattr(a, "quote", None) or "").split())
+    if (posture := under_posture(a.repo, lineage(issue), getattr(a, "project", None))) and not quote:
+        sys.exit(f"{posture[0]} is under {posture[1]}: a cancel changes Linear only on the product owner's own go; pass their words "
+                 f'(`--quote "<their message, verbatim>"`), or cancel it once {posture[1]} is off')
     in_scope(issue, a)
     reason = read_body(a).strip()
     if not reason:
         sys.exit("cancel needs a reason: --file <path>, or stdin")
+    if quote:  # the product owner's go, logged on the issue as `decide` logs a confirmed line: their words, verbatim
+        reason += "\n\n" + CANCEL_GO.format(date=time.strftime("%Y-%m-%d"), quote=quote.replace('"', "'"))
     if a.into:
         other = fc_linear.linear_gql(scope, {"id": a.into})["issue"]
         in_scope(other, a)
@@ -533,6 +539,8 @@ def cmd_linear(a):
         sys.exit("--add-label and --drop-label change an existing issue: compose linear update <id> takes them, and create takes --label")
     if a.action != "update" and (getattr(a, "add_blocked_by", None) or getattr(a, "drop_blocked_by", None)):
         sys.exit("--add-blocked-by and --drop-blocked-by change an existing issue: compose linear update <id> takes them, and create takes --blocked-by")
+    if a.action != "cancel" and getattr(a, "quote", None):
+        sys.exit("--quote is the product owner's go for a cancel: compose linear cancel <id> --quote \"<their words>\" --file <reason> takes it")
     try:
         globals()[f"verb_{a.action.replace('-', '_')}"](a)
     except (RuntimeError, OSError) as e:

@@ -35,7 +35,7 @@ class LinearProject(unittest.TestCase):
     def args(self, action, *target, **kw):
         return SimpleNamespace(**{**dict(repo=str(self.repo), project=None, action=action, target=list(target), body=False, comments=False, json=False,
                                          append=False, description=False, any_project=False, fresh=False, label=None, parent=None, search=None, state=None,
-                                         title=None, priority=None, blocked_by=None, file=None, section=None, expect=None, create=None, into=None, add_label=None, drop_label=None, add_blocked_by=None, drop_blocked_by=None, subsections=None), **kw})
+                                         title=None, priority=None, blocked_by=None, file=None, section=None, expect=None, create=None, into=None, add_label=None, drop_label=None, add_blocked_by=None, drop_blocked_by=None, subsections=None, quote=None), **kw})
 
     def fails(self, fn, *args):
         err = io.StringIO()
@@ -961,8 +961,31 @@ class LinearCancel(unittest.TestCase):
             d = self.repo / ".compose" / "shop" / "results"; d.mkdir(parents=True, exist_ok=True)
             (d.parent / "verify.json").write_text("{}"); (d / "yolo.json").write_text(json.dumps({"mode": mode}))
             self.assertEqual(self.fails(fc.fc_linear_cmd.cmd_linear, self.a("cancel", "ENG-7", body="x")),
-                             (1, f"shop is under {mode}: a cancel changes Linear only on the product owner's own go; cancel it once {mode} is off"))
+                             (1, f"shop is under {mode}: a cancel changes Linear only on the product owner's own go; pass their words (`--quote \"<their message, verbatim>\"`), or cancel it once {mode} is off"))
         self.assertEqual(self.writes(), [])
+
+    def under(self, mode):
+        d = self.repo / ".compose" / "shop" / "results"; d.mkdir(parents=True, exist_ok=True)
+        (d.parent / "verify.json").write_text("{}"); (d / "yolo.json").write_text(json.dumps({"mode": mode}))
+
+    def test_cancel_under_away_or_yolo_goes_ahead_on_the_product_owners_words_logged_on_the_issue(self):
+        # #489: the owner said "cancel it" in the conversation; the refusal left only turning yolo off or cancelling in Linear by hand
+        for mode in ("away", "yolo"):
+            self.calls.clear(); self.under(mode)
+            self.assertEqual(self.run_verb("cancel", "ENG-7", body="Same slice.", quote='  yes,\n cancel "ENG-7"  '), ["canceled ENG-7"])
+            self.assertEqual(self.order(), ["commentCreate", "issueUpdate"])
+            self.assertEqual(self.comment_body(), "Same slice.\n\n" + fc.fc_linear_cmd.CANCEL_GO.format(date=time.strftime("%Y-%m-%d"), quote="yes, cancel 'ENG-7'"))
+            self.assertEqual(self.moved_to(), "s-canceled")
+
+    def test_cancel_under_yolo_without_words_still_refuses_and_says_how_to_pass_them(self):
+        self.under("yolo")
+        code, text = self.fails(fc.fc_linear_cmd.cmd_linear, self.a("cancel", "ENG-7", body="x", quote="  "))
+        self.assertEqual(code, 1); self.assertIn('--quote "<their message, verbatim>"', text); self.assertEqual(self.writes(), [])
+
+    def test_a_quote_outside_a_posture_is_still_logged_and_on_no_other_verb_it_is_refused(self):
+        self.run_verb("cancel", "ENG-7", body="x", quote="drop it")
+        self.assertIn('said: "drop it")', self.comment_body())
+        self.assertEqual(self.fails(fc.fc_linear_cmd.cmd_linear, self.a("comment", "ENG-7", body="x", quote="drop it"))[0], 1)
 
     def test_cancel_minds_only_the_posture_of_the_project_the_issue_belongs_to(self):
         def project(name, feature, mode=None):
@@ -978,7 +1001,7 @@ class LinearCancel(unittest.TestCase):
         self.calls.clear()
         self.issue["parent"] = {"identifier": "ENG-1", "parent": None}  # a story of redesign's feature, whoever cancels it
         self.assertEqual(self.fails(fc.fc_linear_cmd.cmd_linear, self.a("cancel", "ENG-7", body="x", project="qa")),
-                         (1, "redesign is under yolo: a cancel changes Linear only on the product owner's own go; cancel it once yolo is off"))
+                         (1, "redesign is under yolo: a cancel changes Linear only on the product owner's own go; pass their words (`--quote \"<their message, verbatim>\"`), or cancel it once yolo is off"))
         self.assertEqual(self.writes(), [])
         self.issue["parent"] = None  # an issue no project is built on: the project the command names decides
         self.assertEqual(self.fails(fc.fc_linear_cmd.cmd_linear, self.a("cancel", "ENG-7", body="x", project="redesign"))[0], 1)
