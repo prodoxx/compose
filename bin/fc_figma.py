@@ -1,7 +1,7 @@
 import argparse, json, os, re, sys, time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-import fc_core, fc_config, fc_tasks, fc_linear, fc_models, fc_textmodel, fc_herdr, fc_fleet, fc_crew, fc_init, fc_figmaplan, fc_figmanodes, fc_figmashots, fc_figmascope, fc_framelink, fc_figmatree
+import fc_core, fc_config, fc_tasks, fc_linear, fc_models, fc_textmodel, fc_herdr, fc_fleet, fc_crew, fc_init, fc_figmaplan, fc_figmanodes, fc_figmashots, fc_figmascope, fc_framelink, fc_figmatree, fc_figmaauth
 
 
 FIGMA_CONNECTOR = ("Figma tools: the authenticated Figma connector, `mcp__claude_ai_Figma__*` or the Figma plugin's `mcp__plugin_figma_figma__*` (the same server; use whichever ToolSearch finds), is for WRITES ONLY: `use_figma` (and the `create_session` it needs), never a read-only script, and never `whoami`, `get_libraries`, `search_design_system`, or `create_new_file`. Load it in one ToolSearch select call.\n"
@@ -161,6 +161,8 @@ def cmd_designcrews(a):
     # designcrews exits once the builders start, so nothing can start the rest later: the queued ids are printed with the command.
     metas, queued = metas[:cap], metas[cap:]
     fc_fleet.space(proj)  # once, before the parallel starts
+    if metas and (why := fc_figmaauth.check(f"design-{metas[0]['id']}", fc_herdr.project_worktree(proj))[1]):  # once for all: each start would ask the same, and refuse the same (#493)
+        sys.exit(f"no builder started: {why}")
     def start(m):
         old = proj / "results" / f"{m['id']}.json"
         aside = old.with_name(old.name + ".before-redo")

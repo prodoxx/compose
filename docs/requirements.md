@@ -98,7 +98,7 @@ You need the `gpt-oss-120b-cerebras` preset (model `openai/gpt-oss-120b`, provid
 | `~/.compose/src/` | the checkout the installer makes, unless `COMPOSE_INSTALL_DIR` or an existing skill link names another |
 | `~/.compose/skill-seen/` | the skill files each session last saw |
 | `~/.compose/.env` | verify's `TEXT_MODEL*` and `TYPESAFE_MODEL` lines, no keys |
-| `~/.compose/model-probe.json` | the day's model availability probes |
+| `~/.compose/model-probe.json` | the day's model availability probes, and the Figma sign-in check pass |
 | `~/.compose/tool-bugs.jsonl`, `~/.compose/history.jsonl` | every project's tool-bug reports with the issue URL once filed, and one line per run start, run end, task result and verify round (time, task, model, attempts, duration, cost, outcome; no prompts or secrets) |
 | `~/.claude.json` | read for folder trust and the user-scope `framelink-figma` MCP server; compose writes nothing here, and no session gets a `frame0` MCP server: `compose frame0` commands reach the app directly |
 | `~/.config/figma-context-mcp/.env` | Framelink's Figma token (mode 600); it never goes on a command line |

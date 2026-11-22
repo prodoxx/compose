@@ -239,8 +239,8 @@ def cmd_crew(a):
         sys.exit(fc_harness.login_message(key))
     release_ended_slots(proj, live)  # a full pool is mostly the slots of teammates that ended
     cwd, branch = (wt, None) if repo else crew_workdir(getattr(a, "cwd", None), wt, name, getattr(a, "leased", False))
-    if not (model.startswith("pi:") or h) and fc_claude.claude_trusted(Path(cwd).resolve()) is False:
-        sys.exit(fc_claude.untrusted(Path(cwd).resolve()))
+    if not (model.startswith("pi:") or h) and (stop := fc_claude.start_refusal(a.role, Path(cwd).resolve())):
+        sys.exit(stop)
     work = None  # with --work-repo the session starts in the project worktree, which Claude Code trusts; only its work is in the repo
     if repo:
         work, branch = fc_worktree.repo_worktree(repo, name)

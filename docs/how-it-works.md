@@ -132,6 +132,11 @@ Every open design decision reaches you as a question with a recommendation, aske
 The designer and its crew are Claude sessions, because Figma serves writes only to its allowlisted clients.
 Writes go through the official Figma connector, and every read goes through Framelink, which keeps reads off the connector's daily cap.
 The plugin's `compose guard` hook enforces it in every teammate's session: a connector call other than `use_figma` and its `create_session` is denied and pointed at Framelink.
+Before the designer or a `design-NNN` builder starts, `crew start` runs `claude mcp list` once (a pass is cached for ten minutes).
+When the Figma plugin's server `plugin:figma:figma` says `Needs authentication`, its session would have no `use_figma`, and the sign-in a running session makes with `/mcp` does not reach new sessions.
+`crew start` then asks again with that server denied: a signed-in claude.ai Figma connector shows, and the session starts on the connector (the plugin's skills stay on); otherwise the start stops, starts nothing, and says the plugin needs a sign-in and how to get one.
+`designcrews` asks once for all its builders and starts none when it refuses.
+A check that cannot run never blocks a start.
 The designer requires Framelink; [requirements.md](requirements.md#for-the-designer) shows how to set it up, and the designer's start stops with the install steps when it is missing.
 `compose figma check --project <name> --figma <file url or key>` stores the target file and prints the Framelink setup when it cannot read the file.
 With no file stored, the designer asks you for one.

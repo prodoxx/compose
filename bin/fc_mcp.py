@@ -23,6 +23,11 @@ def reads_figma(role):
     return bool(re.fullmatch(r"design-\d+", role)) or role in ("designer", "design-review", "figma")
 
 
+def writes_figma(role):
+    """A role that writes to Figma through the official connector: the designer and its `design-NNN` builders (the reviewer and a `figma` helper read through Framelink)."""
+    return bool(re.fullmatch(r"design-\d+", role)) or role == "designer"
+
+
 def servers_for(role):
     return DESIGNER if reads_figma(role) else ROLE_MCP.get(role, ())
 
@@ -37,13 +42,15 @@ def keeps_commands(role):
     return keeps_skills(role) or role == "orchestrator"
 
 
-def installed_servers(cwd):
+def server_lines(cwd, settings=None):
+    """The server lines `claude mcp list` prints in `cwd` (under `claude --settings <settings>` when given), or None when it cannot run
+    (no claude, a failure, a hang): a caller treats that as not knowing, never as no servers."""
     try:
-        p = subprocess.run(["claude", "mcp", "list"], cwd=str(cwd), capture_output=True, text=True, check=False)
-    except OSError:
-        return []
+        p = subprocess.run(["claude", *(["--settings", settings] if settings else []), "mcp", "list"], cwd=str(cwd), capture_output=True, text=True, check=False, timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return None
     if p.returncode != 0:
-        return []
+        return None
     out = []
     for line in p.stdout.splitlines():
         line = line.strip()
@@ -51,12 +58,23 @@ def installed_servers(cwd):
             if out:
                 break
             continue
-        if ":" not in line:
-            continue
-        name = line.split(": ", 1)[0]
-        out.append(re.sub(r"[^A-Za-z0-9_-]", "_", name))
+        if ":" in line:
+            out.append(line)
     return out
 
+
+def installed_servers(cwd):
+    return [re.sub(r"[^A-Za-z0-9_-]", "_", line.split(": ", 1)[0]) for line in server_lines(cwd) or []]
+
+
+def server_states(lines):
+    """{server name: `connected`, `needs authentication`, or `other`} from `server_lines`."""
+    states = {}
+    for line in lines:
+        name, _, rest = line.partition(": ")
+        status = rest.rsplit(" - ", 1)[-1].lower()
+        states[name] = "needs authentication" if "needs authentication" in status else "connected" if "connected" in status and "failed" not in status else "other"
+    return states
 
 
 def disallowed(role, servers):

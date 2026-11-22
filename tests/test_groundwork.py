@@ -13,13 +13,16 @@ _spec.loader.exec_module(fc)
 
 
 _mcp = mock.patch.object(fc.fc_mcp, "installed_servers", side_effect=lambda cwd: [])  # no test runs the real `claude mcp list`
+_signin = mock.patch.object(fc.fc_mcp, "server_lines", side_effect=lambda cwd, settings=None: None)  # nor the Figma sign-in check of designcrews: one that cannot run never blocks
 
 
 def setUpModule():
     _mcp.start()
+    _signin.start()
 
 
 def tearDownModule():
+    _signin.stop()
     _mcp.stop()
 
 ENV = {"HERDR_ENV": ""}
@@ -494,6 +497,15 @@ class DesignCrews(unittest.TestCase):
                 mock.patch.object(fc.fc_crew, "cmd_crew", side_effect=crew), mock.patch.object(fc.fc_linear, "linear_event") as self.ev, mock.patch("sys.stdout", out):
             fc.fc_figma.cmd_designcrews(SimpleNamespace(repo=".", project="p", only=only, print_=print_, max=max, redo=redo, force=force))
         return started, out.getvalue(), space
+
+    def test_no_builder_starts_when_the_figma_plugin_needs_a_sign_in_and_no_connector_is_signed_in(self):
+        """#493: one check for all the builders, ahead of the parallel starts, instead of one refusal per builder."""
+        plain = ["plugin:figma:figma: https://mcp.figma.com/mcp (HTTP) - ! Needs authentication", "framelink-figma: npx x - ✔ Connected"]
+        with mock.patch.object(fc.fc_mcp, "server_lines", side_effect=lambda cwd, settings=None: plain[1:] if settings else plain), \
+                mock.patch.object(fc.fc_config, "PROBE_CACHE", self.proj / "model-probe.json"), mock.patch.object(fc.fc_figma.fc_figmaauth, "_ROUTE", {}):
+            with self.assertRaises(SystemExit) as e:
+                self.run_crews()
+        self.assertIn("no builder started: plugin:figma:figma needs a sign-in", str(e.exception))
 
     def test_print_shows_one_brief_per_open_design_task(self):
         started, out, space = self.run_crews(print_=True)

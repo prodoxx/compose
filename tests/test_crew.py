@@ -22,6 +22,7 @@ def snap(proj):
 
 _patches = [mock.patch.object(time, "sleep"),  # crew start waits for the agent to be working; a fake herdr answering {} never is, so do not sleep through the wait
             mock.patch.object(fc.fc_mcp, "installed_servers", side_effect=lambda cwd: []),  # no test runs the real `claude mcp list`
+            mock.patch.object(fc.fc_mcp, "server_lines", side_effect=lambda cwd, settings=None: None),  # nor the Figma sign-in check's: a check that cannot run never blocks
             mock.patch.object(fc.fc_pin, "cli_commit", return_value="abc1234"),  # the CLI's own checkout is never asked for its commit
             mock.patch.dict(os.environ, {"COMPOSE_ROLE": "orchestrator"}),  # every start and watch here is the team lead's unless the test clears it: the caller's own role never decides who a teammate reports to
             mock.patch.dict(os.environ)]  # restores the herdr variables setUpModule drops
@@ -1189,6 +1190,15 @@ class AtomicState(unittest.TestCase):
             self.assertEqual(fc.fc_watch.watch_snapshot(proj.parent, proj)["tasks"], {})
 
 
+NEEDS = """claude.ai Linear: https://mcp.linear.app/mcp - ✔ Connected
+plugin:figma:figma: https://mcp.figma.com/mcp (HTTP) - ! Needs authentication
+framelink-figma: npx -y figma-developer-mcp --stdio - ✔ Connected
+"""
+SIGNED_IN = NEEDS.replace("! Needs authentication", "✔ Connected")
+CONNECTOR = NEEDS.replace("plugin:figma:figma: https://mcp.figma.com/mcp (HTTP) - ! Needs authentication", "claude.ai Figma: https://mcp.figma.com/mcp - ✔ Connected")
+NO_PLUGIN = "\n".join(l for l in NEEDS.splitlines() if "plugin:figma" not in l)
+
+
 class RestrictedStart(unittest.TestCase):
     """A Claude teammate starts with only its role's MCP servers and skills, never a Frame0 server, and the briefs name their files."""
     SETTINGS = {"model": "opus", "enabledPlugins": {"compose@fc": True, "figma@claude-plugins-official": True, "superpowers@sp": True, "ponytail@p": False,
@@ -1248,6 +1258,39 @@ class RestrictedStart(unittest.TestCase):
         self.assertEqual(self.patterns(args), {f"mcp__{p}__*" for p in self.P})
         self.assertLess(args.index("--disallowedTools"), args.index("--allowedTools"))
         self.assertEqual(args[-3:-2], ["--allowedTools"])  # it swallows what follows, so it stays last
+
+    def figma_lists(self, plain, denied):
+        """`claude mcp list` as the Figma sign-in check sees it: `plain`, and `denied` under `--settings` (the plugin server denied)."""
+        lines = lambda out: [l for l in out.splitlines() if ": " in l]
+        return [mock.patch.object(fc.fc_mcp, "server_lines", side_effect=lambda cwd, settings=None: lines(denied if settings else plain)),
+                mock.patch.object(fc.fc_claude.fc_figmaauth, "_ROUTE", {}), mock.patch.object(fc.fc_config, "PROBE_CACHE", Path(tempfile.mkdtemp()) / "model-probe.json")]
+
+    def test_a_design_builder_whose_figma_plugin_lost_its_sign_in_does_not_start_without_a_write_tool(self):
+        """#493: it came up with only `authenticate`, no `use_figma`, and reported blocked; now the start says why and starts nothing."""
+        with contextlib.ExitStack() as st:
+            for p in self.figma_lists(NEEDS, NO_PLUGIN):
+                st.enter_context(p)
+            for role in ("design-003", "designer"):
+                with self.assertRaises(SystemExit) as e:
+                    self.start(role)
+                self.assertIn("plugin:figma:figma needs a sign-in", str(e.exception))
+            self.assertEqual(self.start("design-review")[:2], ["--model", "claude-opus-5-5"])  # it reads through Framelink: no check
+
+    def test_a_design_builder_goes_on_the_claude_ai_connector_when_the_plugin_server_is_signed_out(self):
+        with contextlib.ExitStack() as st:
+            for p in self.figma_lists(NEEDS, CONNECTOR):
+                st.enter_context(p)
+            args = self.start("design-003")
+        settings = json.loads(args[args.index("--settings") + 1])
+        self.assertEqual(settings["deniedMcpServers"], [{"serverName": "plugin:figma:figma"}])
+        self.assertNotIn("figma@claude-plugins-official", settings["enabledPlugins"])  # its skills stay on
+
+    def test_a_design_builder_with_the_plugin_signed_in_starts_as_before(self):
+        with contextlib.ExitStack() as st:
+            for p in self.figma_lists(SIGNED_IN, SIGNED_IN):
+                st.enter_context(p)
+            args = self.start("design-003")
+        self.assertNotIn("deniedMcpServers", json.loads(args[args.index("--settings") + 1]))
 
     def test_the_team_lead_gets_no_window_and_other_roles_150k(self):
         env = lambda role: json.loads(fc.fc_claude.crew_settings(role, "/x"))["env"]

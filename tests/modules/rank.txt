@@ -36,6 +36,7 @@ fc_tierpin
 fc_retro
 fc_costevent
 fc_fast
+fc_figmaauth
 fc_claude
 fc_prd
 fc_delivery

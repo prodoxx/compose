@@ -1,6 +1,6 @@
 import json, os, tempfile
 from pathlib import Path
-import fc_mcp, fc_core, fc_proc, fc_readguard
+import fc_mcp, fc_core, fc_proc, fc_readguard, fc_figmaauth
 
 
 def is_claude(model):
@@ -33,8 +33,14 @@ def crew_settings(role, cwd):
         pass
     keep = fc_mcp.keeps_skills(role)
     env = {"ENABLE_TOOL_SEARCH": "true", **({} if role == "orchestrator" else {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": AUTOCOMPACT_WINDOW})}
+    deny = fc_figmaauth.check(role, cwd)[0]  # a Figma writer whose plugin server lost its sign-in goes on the claude.ai connector (#493)
     return json.dumps({"attribution": {"commit": "", "pr": ""}, "env": env,
-                       "enabledPlugins": {k: False for k in enabled if not k.startswith("compose@") and not (keep and k.startswith("figma@"))}})
+                       "enabledPlugins": {k: False for k in enabled if not k.startswith("compose@") and not (keep and k.startswith("figma@"))},
+                       **({"deniedMcpServers": [{"serverName": s} for s in deny]} if deny else {})})
+
+def start_refusal(role, cwd):
+    """Why a Claude teammate in `cwd` must not start, or None: its folder is not trusted, or it is a Figma writer with no Figma write tool to get (#493)."""
+    return untrusted(cwd) if claude_trusted(cwd) is False else fc_figmaauth.check(role, cwd)[1]
 
 def spill_settings(argv, path):
     """`argv` of a Claude teammate with its `--settings` JSON and its `--disallowedTools` patterns moved into the file `path`, so the

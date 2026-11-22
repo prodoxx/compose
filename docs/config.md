@@ -320,7 +320,7 @@ All of these live in `~/.compose/` (the folder of `config.json`).
 | `config.json` | This page. | Yes. |
 | `auth.json` | Every key, at mode 600 in a directory of mode 700: `{"workspaces": {"<name>": {"openrouter": ..., "linear": ..., "provider:<name>": ...}}, "typesafe": ...}`. | Through `compose workspace key`, never by hand. |
 | `.env` | `TEXT_MODEL*` and `TYPESAFE_MODEL` settings for the fast model (the review when `models.review` is unset) and jev's text helper. The process environment wins over it. | Yes, for those settings. |
-| `model-probe.json` | The day's cached crew model probes. | No. `compose models --probe` clears it. |
+| `model-probe.json` | The day's cached crew model probes, and the ten-minute pass of the Figma sign-in check a design role's start makes. | No. `compose models --probe` clears it. |
 | `pi-providers.js` | The pi extension generated from `providers`. | No. It is rewritten when `providers` changes. |
 | `<name>.key` | A 0600 key file for OpenCode: `openrouter.key`, or `<provider>.key` for a keyed local provider. | No. `compose` writes it. |
 
