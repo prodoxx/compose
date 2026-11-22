@@ -384,6 +384,13 @@ def writer_blockers(starting, ids, written, queued, is_open):
             out[m] = by
     return out
 
+READY_REPORTS = ("test ready", "design ready")  # the `working` reports that say a builder's work is finished: the team lead acts on them at once
+
+def ready_message(message):
+    """Whether a `working` report's message says the builder's work is ready (`test ready: ...`, `design ready: ...`). Such a report
+    wakes a watcher alone: it is not a progress ping to hold for INFO_HOLD (fc_watch.is_info), and a new kind of ready report is named here."""
+    return any(k in message.lower() for k in READY_REPORTS)
+
 def test_ready(report):
     return report.get("state") == "done" or (report.get("state") == "working" and "test ready" in report.get("message", "").lower())
 

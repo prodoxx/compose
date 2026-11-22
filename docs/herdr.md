@@ -143,7 +143,7 @@ The manager's pane is labelled `manager: <slug>, ...` as soon as it claims a pro
 Under each project it prints `manager  herdr pane <id> (this session|live|gone)`, or `none yet`.
 Every run, resume and verify alive on a project is listed as `in flight  verify since 10:02  12m / ~31m  now: e2e login (3m), review (5m)  fix round 2`: its time so far against the last comparable one that finished (`results/verify.json` for a verify, the history's last `run-end` for a run), the verify stages working now, and the fix round.
 It reads the hold file each such process keeps in `~/.compose/live/`, which records when it started and which stages are working, so it needs no state of its own.
-The watch spends few wake-ups: a task starting is not an event, a teammate's plain `working` report travels with the next wake (or alone after 5 minutes), a burst of non-urgent events is one wake after a 10 s settle, and the watch never times out.
+The watch spends few wake-ups: a task starting is not an event, a teammate's plain `working` report travels with the next wake (or alone after 5 minutes; a `working` report that says its work is ready, `test ready` or `design ready`, wakes at once), a burst of non-urgent events is one wake after a 10 s settle, and the watch never times out.
 For the product owner it adds `event tell='<line>'` on a state change only: verify failed and why, fix loop started, run ended or crashed, verify passed, done.
 A teammate idle for a minute whose last report is `working` and whose pane ends on an API or network error raises `event stall=network` once, with the nudge to send when the network is back.
 A run left silent with work pending raises a stall event after 240 s.

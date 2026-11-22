@@ -1380,6 +1380,7 @@ class OwnerDigest(unittest.TestCase):
         self.assertTrue(is_info("event crew=hw-designer state=working message=drawing page 2"))
         self.assertFalse(is_info("event crew=hw-tests-001 state=working message=Test ready: abc"))
         self.assertFalse(is_info("event crew=hw-designer state=done message=x"))
+        self.assertFalse(is_info("event crew=hw-design-532 state=working message='design ready: 148:222 (Job card set)'"))  # #491: the lead acts on it at once
         for e in ("event stall=quiet x", "event halt=payment", "event crew=a state=needs-user message=q", "event crew=a state=tool-bug message=q"):
             self.assertTrue(urgent.search(e), e)
         self.assertFalse(urgent.search("event task=001 state=passed"))
@@ -1417,6 +1418,20 @@ class QuietWatch(unittest.TestCase):
         out = self.watch(base, [ping, ping, ping, done])
         self.assertEqual(len([l for l in out if "event crew=" in l]), 2, out)  # one wake carries both lines
         self.assertTrue(any("drawing page 2" in l for l in out) and any("state=done" in l for l in out), out)
+
+    def test_a_builders_design_ready_wakes_alone_though_it_is_a_working_report(self):
+        """#491: a design builder reports `working "design ready: ..."` (done closes its tab before the designer's gate); held as a ping, the lead slept up to INFO_HOLD with finished work."""
+        base = self.snap(("working", "started"))
+        ready = self.snap(("working", "started"), ("working", "design ready: 148:222 (Job card set)"))
+        out = self.watch(base, [ready], timeout=0.5)
+        self.assertTrue(any("design ready: 148:222" in l for l in out), out)
+
+    def test_the_ready_reports_are_named_once(self):
+        ready = fc.fc_briefs.ready_message
+        for m in ("test ready: abc123; holdouts: none", "Test ready: abc", "design ready: 148:222", "Design ready: 1:2 (Job card)"):
+            self.assertTrue(ready(m), m)
+        for m in ("started", "drawing page 2", "waiting for the designer", "550 pre-write plan"):
+            self.assertFalse(ready(m), m)
 
     def test_a_held_ping_wakes_after_info_hold(self):
         base = self.snap(("working", "started"))

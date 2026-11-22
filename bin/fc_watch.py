@@ -353,10 +353,10 @@ def owner_lines(slug, before, after, push=None):
     return [f"event tell={line!r}" for line in out]
 
 def is_info(e):
-    """A progress ping that wakes nobody alone: a teammate's `working` report (but a test writer's `test ready`, which the team lead
-    collects). It travels with the next wake, or alone after INFO_HOLD."""
+    """A progress ping that wakes nobody alone: a teammate's `working` report, but not a ready one (fc_briefs.ready_message: a test writer's
+    `test ready`, which the team lead collects, a design builder's `design ready`, which it reviews). It travels with the next wake, or alone after INFO_HOLD."""
     m = re.match(r"event crew=\S+ state=working message=(.*)$", e)
-    return bool(m) and "test ready" not in m.group(1).lower()
+    return bool(m) and not fc_briefs.ready_message(m.group(1))
 
 URGENT = re.compile(r"event (?:stall=|halt=|owner=taken |sleep=(?:resumed|run-lost)|agent=\S+ status=blocked|crew=\S+ (?:state=(?:needs-user|blocked|contradiction|tool-bug|fallback)|report=refused) )|CRASHED")
 
