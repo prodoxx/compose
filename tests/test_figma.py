@@ -1149,6 +1149,61 @@ class FigmaJudgeScreens(unittest.TestCase):
         self.assertEqual(res["status"], "blocked")
         self.assertIn("which a screen can decide", res["judge_errors"][0]["evidence"])
 
+    def add_screen(self, name, data, label="9:9"):
+        shots = self.proj / "results" / "001.screens"
+        (shots / name).write_bytes(data)
+        saved = json.loads((shots / "screens.json").read_text())
+        saved["screens"].append([label, name])
+        (shots / "screens.json").write_text(json.dumps(saved))
+        return shots / name
+
+    def test_a_screen_under_280_a_side_is_padded_before_jev_sees_it_and_the_file_is_left_alone(self):
+        """#490: a hand-added 720 x 124 render failed the whole judge with HTTP 400 Invalid image dimensions, naming no file."""
+        shots = fc.fc_figma.fc_figmashots
+        small = self.add_screen("autofill.png", png(720, 124))
+        def tile(src, out_dir, stem, tiles_max):
+            (out_dir / f"{stem}.png").write_bytes(png(768, 280))  # what jev's tiles tool makes of it: a margin, then white to 280
+            return [out_dir / f"{stem}.png"]
+        with mock.patch.object(shots, "tile", side_effect=tile) as cut:
+            res = self.judge(("MET", 0.0), [("MET", 0.0)])
+        self.assertEqual(res["status"], "passed")
+        sent = self.screen_states[0][0]["screens"]
+        self.assertEqual(list(sent), ["1:2", "9:9"])
+        sizes = [shots.image_size(image.path) for image in sent.values()]
+        self.assertTrue(all(280 <= side <= 1568 for size in sizes for side in size), sizes)
+        self.assertEqual((cut.call_count, cut.call_args.args[0], cut.call_args.args[3]), (1, small, 1))  # only the small one is cut, as one tile
+        self.assertEqual(small.read_bytes(), png(720, 124))
+        self.assertEqual(sent["1:2"].path, self.proj / "results" / "001.screens" / "1-2.png")
+
+    def test_a_screen_over_1568_a_side_is_cut_down_too_since_jev_never_resizes(self):
+        shots = fc.fc_figma.fc_figmashots
+        self.add_screen("wide.png", png(1700, 400))
+        with mock.patch.object(shots, "tile", side_effect=lambda src, out, stem, n: [(out / f"{stem}.png").write_bytes(png(1568, 300)) and out / f"{stem}.png"] ) as cut:
+            self.judge(("MET", 0.0), [("MET", 0.0)])
+        self.assertEqual(cut.call_count, 1)
+
+    def test_a_screen_listed_but_missing_or_no_image_is_refused_by_name_before_any_request(self):
+        for name, data in (("gone.png", None), ("notes.png", b"not an image")):
+            with self.subTest(name=name):
+                self.add_screen(name, data or b"x")
+                if data is None:
+                    (self.proj / "results" / "001.screens" / name).unlink()
+                res = self.judge(("MET", 0.0), [("MET", 0.0)])
+                self.assertEqual(res["status"], "blocked")
+                evidence = res["judge_errors"][0]["evidence"]
+                self.assertIn(name, evidence)
+                self.assertEqual(self.screen_states, [])
+                (self.proj / "results" / "001.screens" / "screens.json").write_text(json.dumps({"screens": [["1:2", "1-2.png"]], "missing": []}))
+
+    def test_image_size_reads_a_png_or_a_jpeg_header_and_nothing_else(self):
+        shots = fc.fc_figma.fc_figmashots
+        d = Path(tempfile.mkdtemp())
+        (d / "a.png").write_bytes(png(720, 124))
+        jpeg = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00" + b"\xff\xc0\x00\x11\x08" + (300).to_bytes(2, "big") + (500).to_bytes(2, "big") + b"\x03" * 10
+        (d / "b.jpg").write_bytes(jpeg)
+        (d / "c.png").write_bytes(b"GIF89a")
+        self.assertEqual((shots.image_size(d / "a.png"), shots.image_size(d / "b.jpg"), shots.image_size(d / "c.png")), ((720, 124), (500, 300), None))
+
     def test_a_node_with_no_screen_is_never_missing_from_the_screens(self):
         (self.proj / "results" / "001.screens" / "screens.json").write_text(json.dumps({"screens": [["1:2", "1-2.png"]], "missing": ["3:4"]}))
         self.judge(("MET", 0.0), [("MET", 0.0)])

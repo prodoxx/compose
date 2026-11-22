@@ -1,6 +1,6 @@
 """Screens for the figma judge: each node of a design task rendered through Figma's REST image endpoint, then cut to Jev's image
 limits (280 to 1568 pixels a side), and Jev's verdict on them: the tree shows what the nodes say, the screens how the design looks."""
-import json, shutil, subprocess, urllib.request
+import json, shutil, struct, subprocess, urllib.request
 from pathlib import Path
 import fc_config, fc_figmaplan, fc_models
 
@@ -70,6 +70,50 @@ def screens(out_dir):
     saved = json.loads(path.read_text())
     return [(label, Path(out_dir) / name) for label, name in saved["screens"]], saved["missing"]
 
+JEV_EDGES = (280, 1568)  # pixels a side Jev takes: an image outside them is rejected, never resized (HTTP 400 Invalid image dimensions)
+
+def image_size(path):
+    """(width, height) of the PNG or JPEG at `path`, read from its header, or None when it is neither."""
+    head = Path(path).read_bytes()
+    if head[:8] == b"\x89PNG\r\n\x1a\n" and head[12:16] == b"IHDR":
+        return struct.unpack(">II", head[16:24])
+    if head[:2] != b"\xff\xd8":
+        return None
+    i = 2
+    while i + 9 <= len(head):
+        if head[i] != 0xFF:
+            return None
+        marker = head[i + 1]
+        if marker == 0xFF:  # fill byte
+            i += 1
+        elif 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):  # a start-of-frame segment: precision, height, width
+            height, width = struct.unpack(">HH", head[i + 5:i + 9])
+            return width, height
+        else:
+            i += 2 + struct.unpack(">H", head[i + 2:i + 4])[0]
+    return None
+
+def fit_screens(shots):
+    """`shots` ([(label, path)]) with each image Jev would reject (a side outside JEV_EDGES: one a designer added to screens.json by
+    hand) replaced by a copy the tiles tool made of it, one tile with its white margin and padding, in a `fit` folder beside it; the
+    file itself is not touched. A file that is missing or no PNG or JPEG raises RuntimeError naming it, before any request."""
+    fit, out = None, []
+    for label, path in shots:
+        try:
+            size = image_size(path)
+        except OSError:
+            raise RuntimeError(f"screen {path.name} ({label}) is listed in {MANIFEST} but cannot be read")
+        if not size:
+            raise RuntimeError(f"screen {path.name} ({label}) is not a PNG or JPEG: Jev takes only those")
+        if not all(JEV_EDGES[0] <= side <= JEV_EDGES[1] for side in size):
+            if fit is None:
+                fit = path.parent / "fit"
+                shutil.rmtree(fit, ignore_errors=True)
+                fit.mkdir()
+            path = tile(path, fit, path.stem, 1)[0]
+        out.append((label, path))
+    return out
+
 LOOK_SURE = 0.9  # a criterion goes to the screens only this sure a picture decides it: a named style scores 0.6 to 0.7
 LOOK_CHOICES = {"LOOK": "A picture of the design can decide it: it is about what is shown and how it looks (presence, text, layout, "
                          "alignment, clipping, overlap, color as seen, contrast).",
@@ -106,13 +150,15 @@ def look_criteria(env, cfg, criteria):
 
 def judge_screens(env, cfg, title, criteria, shots, missing, threshold):
     """Jev's verdict on each criterion a picture can decide (`look_criteria`) from the screens alone: one request with all of them,
-    then a NOT_MET at the threshold asked once more on its own, as a check that has to point at the element; a violation is one Jev gives both times, at the threshold both times. [{choice, p_met, p_not_met,
-    violated}] in criterion order, None for a criterion only the tree can decide. Raises RuntimeError when Jev cannot be asked or
-    leaves a criterion unanswered: an unjudged screen is never a pass."""
+    then a NOT_MET at the threshold asked once more on its own, as a check that has to point at the element; a violation is one Jev
+    gives both times, at the threshold both times.
+    [{choice, p_met, p_not_met, violated}] in criterion order, None for a criterion only the tree can decide. Raises
+    RuntimeError when Jev cannot be asked or leaves a criterion unanswered, or a screen is no image Jev takes: an unjudged screen is never a pass."""
     looks = look_criteria(env, cfg, criteria)
     asked = [c for c, look in zip(criteria, looks) if look]
     if not asked:
         return [None] * len(criteria)
+    shots = fit_screens(shots)
     rules = SCREEN_RULES + (MISSING_RULES.format(", ".join(missing)) if missing else "")
     state = {"task": title, "screens": {label: fc_models.Image(path) for label, path in shots}}
     ask = lambda texts, extra="": fc_models.jev_ask(env, cfg, state, {f"c{i}": {"type": "choice", "criteria": SCREEN_CHOICES,
