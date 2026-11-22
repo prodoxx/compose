@@ -1035,6 +1035,62 @@ class JevImages(unittest.TestCase):
         self.assertNotIn("Typesafe-danger-zone-images", sent["headers"])
 
 
+class VisionJson(unittest.TestCase):
+    """fc_vision.look_json: the fast model asked about images (#466), its network call stubbed at http_json."""
+    def setUp(self):
+        d = Path(tempfile.mkdtemp())
+        (d / "a.png").write_bytes(png(300, 300))
+        (d / "b.png").write_bytes(png(300, 300, (0, 0, 0)))
+        self.images = [("1:2 (1 of 2)", d / "a.png"), ("1:2 (2 of 2)", d / "b.png")]
+        self.env = {"TEXT_MODEL": "anthropic/claude-sonnet-5.5", "TEXT_MODEL_API_KEY": "k"}
+        self.vision = fc.fc_figma.fc_figmashots.fc_vision
+
+    def ask(self, replies, env=None):
+        sent = []
+        def http(req, provider, timeout=90):
+            sent.append((json.loads(req.data), dict(req.header_items()), provider))
+            reply = replies.pop(0)
+            return {"choices": [{"message": {"content": reply}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 5, "completion_tokens": 2}}
+        with mock.patch.object(fc.fc_models, "http_json", side_effect=http):
+            try:
+                out = self.vision.look_json(env or self.env, "SYS", "USER", self.images, "violated")
+            except RuntimeError as e:
+                out = e
+        return out, sent
+
+    def test_every_image_goes_in_the_message_after_its_label_as_a_data_url(self):
+        out, sent = self.ask(['{"violated": true, "element": "Total", "evidence": "cut"}'])
+        self.assertEqual(out, {"violated": True, "element": "Total", "evidence": "cut"})
+        body, headers, _ = sent[0]
+        self.assertEqual((body["model"], body["messages"][0]), ("anthropic/claude-sonnet-5.5", {"role": "system", "content": "SYS"}))
+        parts = body["messages"][1]["content"]
+        self.assertEqual([p.get("text") for p in parts if p["type"] == "text"], ["USER", "Screen 1:2 (1 of 2):", "Screen 1:2 (2 of 2):"])
+        urls = [p["image_url"]["url"] for p in parts if p["type"] == "image_url"]
+        self.assertEqual(len(urls), 2)
+        self.assertTrue(all(u.startswith("data:image/png;base64,") for u in urls))
+        self.assertEqual(headers["Authorization"], "Bearer k")
+
+    def test_a_reply_that_is_not_the_object_is_asked_once_more_with_more_room_then_raises(self):
+        out, sent = self.ask(["no json here", '{"violated": false, "element": ""}'])
+        self.assertEqual((out["violated"], len(sent)), (False, 2))
+        self.assertEqual(sent[1][0]["max_tokens"], sent[0][0]["max_tokens"] * fc.fc_models.CUT_RETRY)
+        out, sent = self.ask(["no json here", "still none"])
+        self.assertIsInstance(out, RuntimeError)
+        self.assertIn("did not answer about the screens", str(out))
+
+    def test_a_model_that_refuses_images_raises_and_a_claude_model_reads_the_files(self):
+        with mock.patch.object(fc.fc_models, "http_json", side_effect=RuntimeError("HTTP 400: model does not support image input")), self.assertRaises(RuntimeError) as e:
+            self.vision.look_json(self.env, "S", "U", self.images, "violated")
+        self.assertIn("image input", str(e.exception))
+        reply = (None, '{"violated": true, "element": "Total", "evidence": "cut"}', 3, {})
+        with mock.patch.object(self.vision.fc_claude, "claude_once", return_value=reply) as once:
+            out = self.vision.look_json({"TEXT_MODEL": "claude:claude-sonnet-5-5"}, "S", "U", self.images, "violated")
+        self.assertEqual(out["element"], "Total")
+        cwd, prompt = once.call_args.args[:2]
+        self.assertEqual((cwd, once.call_args.kwargs["tools"], once.call_args.kwargs["keep"]), (self.images[0][1].parent, "Read", None))
+        self.assertIn("a.png is 1:2 (1 of 2)", prompt)
+
+
 class FigmaJudgeScreens(unittest.TestCase):
     def setUp(self):
         self.proj = Path(tempfile.mkdtemp()).resolve() / ".compose" / "p"
@@ -1049,11 +1105,18 @@ class FigmaJudgeScreens(unittest.TestCase):
         for mod, name, value in ((fc.fc_config, "ENV_FILE", self.proj / "none.env"), (fc.fc_core, "say", lambda m: None)):
             p = mock.patch.object(mod, name, value); p.start(); self.addCleanup(p.stop)
 
-    def judge(self, tree, screens, confirm=None, tree_reask="UNCLEAR", look="LOOK"):
+    def judge(self, tree, screens, confirm=None, tree_reask="UNCLEAR", look="LOOK", named=None):
         """tree: the tree verdict (choice, p); screens: the screen verdicts in order (first ask, then the re-ask), or an exception;
-        look: whether a picture can decide the criterion (LOOK or STRUCTURE), or an exception."""
+        look: whether a picture can decide the criterion (LOOK or STRUCTURE), or an exception; named: the vision model's answer when
+        asked to name the element a twice-given NOT_MET is about (default: it names the Total label)."""
         screens = list(screens) if isinstance(screens, list) else screens
-        self.screen_states, self.look_asks = [], []
+        self.screen_states, self.look_asks, self.named_asks = [], [], []
+        named = named or {"violated": True, "element": "the Total label, cut off at its right end", "evidence": "the text ends mid-word"}
+        def vision(env, system, user, images, key, **kw):
+            self.named_asks.append((system, user, images, key))
+            if isinstance(named, Exception):
+                raise named
+            return named
         def jev(env, cfg, state, q, label):
             if label == "figma judge looks":
                 self.look_asks.append((state, q))
@@ -1072,7 +1135,8 @@ class FigmaJudgeScreens(unittest.TestCase):
             return {"model": "jev-test", "answers": {"c0": {"choice": tree[0], "probabilities": {tree[0]: 0.9, "NOT_MET": tree[1]}}}}
         self.out = io.StringIO()
         with mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), mock.patch.object(fc.fc_models, "jev_ask", side_effect=jev), \
-                mock.patch.object(fc.fc_models, "fast_json", return_value=confirm), mock.patch.object(fc.fc_linear, "linear_event"), mock.patch("sys.stdout", self.out):
+                mock.patch.object(fc.fc_models, "fast_json", return_value=confirm), mock.patch.object(fc.fc_figma.fc_figmashots.fc_vision, "look_json", side_effect=vision), \
+                mock.patch.object(fc.fc_linear, "linear_event"), mock.patch("sys.stdout", self.out):
             try:
                 fc.fc_figma.cmd_figma(SimpleNamespace(repo=".", project="p", action="judge", figma=None, only="001", force=False))
             except SystemExit as e:
@@ -1093,6 +1157,39 @@ class FigmaJudgeScreens(unittest.TestCase):
         self.assertEqual((res["status"], row["choice"], row["by"], len(res["failed"])), ("failed", "NOT_MET", "screens", 1))
         self.assertIn("001.screens", row["evidence"])
 
+    def test_a_screens_violation_is_recorded_with_the_element_the_vision_model_names(self):
+        """#466: Jev's choice answers carry no reason, so a model that can see the same images is asked to name the element."""
+        res = self.judge(("MET", 0.0), [("NOT_MET", 0.9), ("NOT_MET", 0.8)])
+        row = res["criteria"][0]
+        self.assertIn("the Total label, cut off at its right end", row["evidence"])
+        self.assertEqual(row["screen"]["element"], "the Total label, cut off at its right end")
+        system, user, images, key = self.named_asks[0]
+        self.assertEqual((key, [label for label, _ in images]), ("violated", ["1:2"]))
+        self.assertIn("Shows the total", user)
+        self.assertIn(fc.fc_figma.fc_figmashots.SCREEN_RULES, system)
+
+    def test_a_screens_not_met_that_names_no_element_stays_unclear(self):
+        """#466: a NOT_MET nobody can point at is not a finding: the tree's UNCLEAR stands, and the task fails as UNCLEAR, not as a violation."""
+        for named in ({"violated": False, "element": "", "evidence": "every row is whole"}, {"violated": True, "element": "  ", "evidence": "looks cut"},
+                      {"violated": True, "evidence": "looks cut"}):
+            with self.subTest(named=named):
+                res = self.judge(("UNCLEAR", 0.0), [("NOT_MET", 0.9), ("NOT_MET", 0.8)], named=named)
+                row = res["criteria"][0]
+                self.assertEqual((res["status"], row["choice"], row["screen"]["violated"], row["screen"]["element"]), ("failed", "UNCLEAR", False, None))
+                self.assertNotEqual(row.get("by"), "screens")
+        res = self.judge(("MET", 0.0), [("NOT_MET", 0.9), ("NOT_MET", 0.8)], named={"violated": False, "element": "", "evidence": "fine"})
+        self.assertEqual((res["status"], res["criteria"][0]["choice"]), ("passed", "MET"))
+
+    def test_the_vision_model_is_asked_only_of_a_violation_jev_gave_twice(self):
+        self.judge(("MET", 0.0), [("NOT_MET", 0.9), ("MET", 0.1)])
+        self.judge(("MET", 0.0), [("MET", 0.0)])
+        self.assertEqual(self.named_asks, [])
+
+    def test_a_vision_model_that_cannot_answer_blocks_the_screens_and_is_never_a_pass(self):
+        res = self.judge(("MET", 0.0), [("NOT_MET", 0.9), ("NOT_MET", 0.8)], named=RuntimeError("model has no image input"))
+        self.assertEqual(res["status"], "blocked")
+        self.assertIn("model has no image input", res["judge_errors"][0]["evidence"])
+
     def test_a_screen_violation_jev_does_not_repeat_or_below_the_threshold_passes(self):
         for screens in ([("NOT_MET", 0.9), ("MET", 0.1)], [("NOT_MET", 0.5)]):
             with self.subTest(screens=screens):
@@ -1109,7 +1206,6 @@ class FigmaJudgeScreens(unittest.TestCase):
         row = res["criteria"][0]
         self.assertEqual((row["screen"]["again"], row["screen"]["again_p_not_met"]), ("NOT_MET", 0.8))
         self.assertIn("p_not_met 0.9, then 0.8 when asked to point at the element", row["evidence"])
-        self.assertIn("part's cut edge or the white margin", row["evidence"])
         res = self.judge(("MET", 0.0), [("NOT_MET", 0.9), ("NOT_MET", 0.5)])  # a weak second NOT_MET is no second opinion
         self.assertEqual((res["status"], res["criteria"][0]["choice"], res["criteria"][0]["screen"]["violated"]), ("passed", "MET", False))
 

@@ -2,7 +2,7 @@
 limits (280 to 1568 pixels a side), and Jev's verdict on them: the tree shows what the nodes say, the screens how the design looks."""
 import json, shutil, struct, subprocess, urllib.request
 from pathlib import Path
-import fc_config, fc_figmaplan, fc_models
+import fc_config, fc_figmaplan, fc_models, fc_vision
 
 
 SCREEN_BUDGET = 6  # images in one Jev request: the screens of a task go in one request, and its context is 64k tokens
@@ -148,11 +148,23 @@ def look_criteria(env, cfg, criteria):
         raise RuntimeError("the criteria came back without saying which a screen can decide")
     return [look["choice"] == "LOOK" and (look.get("probabilities") or {}).get("LOOK", 0) >= LOOK_SURE for look in looks]
 
+NAME_RULES = (" Jev called this criterion violated in these screens twice but gave no reason. Name the one element inside a frame that violates it: "
+              "its text or role as it appears, and the screen it is on. Answer violated=true only when you can point at such an element and it is cut, "
+              "overlapped or wrong inside the frame itself, not at a part's top or bottom edge and not at the white margin. Otherwise answer violated=false "
+              'with an empty element. Return JSON {"violated": bool, "element": str, "evidence": str}: evidence is one sentence on what is wrong with it.')
+
+def name_element(env, criterion, rules, shots):
+    """(violated, element, evidence) from the fast model, which sees the same screens and, unlike Jev's choice answers, says what it saw: a
+    violation stands only when it names an element, so a NOT_MET nobody can point at is no finding. Raises RuntimeError when it cannot answer."""
+    a = fc_vision.look_json(env, rules + NAME_RULES, f"CRITERION: {criterion}", shots, "violated")
+    element = str(a.get("element") or "").strip()
+    return bool(a.get("violated")) and bool(element), element or None, str(a.get("evidence") or "").strip()[:300]
+
 def judge_screens(env, cfg, title, criteria, shots, missing, threshold):
     """Jev's verdict on each criterion a picture can decide (`look_criteria`) from the screens alone: one request with all of them,
     then a NOT_MET at the threshold asked once more on its own, as a check that has to point at the element; a violation is one Jev
-    gives both times, at the threshold both times.
-    [{choice, p_met, p_not_met, violated}] in criterion order, None for a criterion only the tree can decide. Raises
+    gives both times, at the threshold both times, and that the fast model, shown the same screens, names an element of (`name_element`).
+    [{choice, p_met, p_not_met, violated, element}] in criterion order, None for a criterion only the tree can decide. Raises
     RuntimeError when Jev cannot be asked or leaves a criterion unanswered, or a screen is no image Jev takes: an unjudged screen is never a pass."""
     looks = look_criteria(env, cfg, criteria)
     asked = [c for c, look in zip(criteria, looks) if look]
@@ -178,6 +190,8 @@ def judge_screens(env, cfg, title, criteria, shots, missing, threshold):
             row["again"] = again.get("choice")
             row["again_p_not_met"] = round((again.get("probabilities") or {}).get("NOT_MET", 0), 3)
             row["violated"] = again.get("choice") == "NOT_MET" and row["again_p_not_met"] >= threshold
+            if row["violated"]:  # Jev's choices carry no reason: the fast model names the element, and no element means no violation
+                row["violated"], row["element"], row["named"] = name_element(env, c, rules, shots)
         seen[c] = row
     return [seen[c] if look else None for c, look in zip(criteria, looks)]
 
@@ -196,7 +210,7 @@ def apply_screens(row, seen, error, where):
     if seen["violated"] and not row.get("confirmed"):
         row.update(choice="NOT_MET", confirmed=True, by="screens",
                    evidence=f"Jev saw it violated in the screens twice (p_not_met {seen['p_not_met']}, then {seen['again_p_not_met']} when asked to point at the element); "
-                            f"look at the screens in {where}: Jev names no element, so check that it is not a part's cut edge or the white margin")
+                            f"element: {seen['element']} ({seen['named']}); look at the screens in {where}")
     elif seen["choice"] == "MET" and row["choice"] == "UNCLEAR":
         row.update(choice="MET", by="screens")
     return row

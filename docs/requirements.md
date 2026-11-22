@@ -40,7 +40,7 @@ Setup installs these unless you skip them.
 | herdr integrations | herdr shows pi and Claude Code agents' state (the Claude one needs Claude Code) | `herdr integration install pi`, `herdr integration install claude` |
 | Codex | a harness for the team lead, implementers, fix rounds and the test reader as well as teammate sessions; you sign in with `codex login`, and setup links its skill, commands and hooks | `codex login` (setup never installs Codex and never signs in for you; its rows only link, copy and write) |
 | herdr config | herdr's own toasts and sounds stay off | setup writes it ([new-machine.md](new-machine.md#herdr-settings)) |
-| `TEXT_MODEL` lines | the fast model (the review when `models.review` is unset) and jev's text helper | setup adds them to `~/.compose/.env` when absent |
+| `TEXT_MODEL` lines | the fast model (the review when `models.review` is unset; and the figma judge, which shows it the screens of a violation to name the element) and jev's text helper | setup adds them to `~/.compose/.env` when absent |
 | git rerere | stacks that rebase cleanly | `git config --global rerere.enabled true`, set only when unset |
 
 If you skip gh-stack, you can still use `run --no-stack`.

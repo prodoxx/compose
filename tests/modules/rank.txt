@@ -42,6 +42,7 @@ fc_delivery
 fc_notify
 fc_textmodel
 fc_models
+fc_vision
 fc_compact
 fc_credit
 fc_routejev
