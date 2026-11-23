@@ -6,7 +6,7 @@ This page says what each piece is for, and which pieces setup treats as required
 ## Required
 
 `compose doctor` exits 1 while one of these is missing.
-Claude Code is optional when another harness is set up: the claude, herdr skill and compose skill link rows become optional then ([harnesses.md](harnesses.md)).
+Claude Code is optional when another harness is set up: the claude, herdr skill, superpowers and compose skill link rows become optional then ([harnesses.md](harnesses.md)).
 
 | Tool | Needed for | Install |
 |---|---|---|
@@ -17,6 +17,7 @@ Claude Code is optional when another harness is set up: the claude, herdr skill 
 | herdr | the visible fleet, and the session `compose` opens ([herdr.md](herdr.md)) | setup runs herdr's installer, installs the herdr skill file, and sets the notification lines |
 | pi | the default implementer harness | setup runs `npm install -g --ignore-scripts @earendil-works/pi-coding-agent` and declares its `openrouter-fast` provider |
 | Claude Code | the team lead, every teammate session, model probes | [claude.com/claude-code](https://claude.com/claude-code); setup does not install it |
+| superpowers plugin | shaping a feature with you: compose runs its brainstorming skill as written (sections/0b.md) | setup runs `claude plugin install superpowers@claude-plugins-official` (needs Claude Code) |
 | OpenRouter key | implementers, fixers, the review unless `models.review` is a `claude:` id | see [Keys](#keys) |
 | TypeSafe key | Jev acceptance checks, every jev e2e step, and the decision screen (`reflect`) | see [Keys](#keys) |
 | Linear | the plan, stories, tasks, and decisions | a Linear API key per [workspace](workspaces.md); required |

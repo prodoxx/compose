@@ -12,7 +12,8 @@ import fc_steps, fc_auth, fc_checks, fc_textmodel
 
 CLI = str(Path(__file__).resolve().parents[1] / "bin" / "compose.py")
 TOOLS = {"herdr": "0.9.3", "treehouse": "v3.1.2", "trail": "0.23.0", "gh": "gh version 2.94.0", "pi": "1.0.3", "claude": "2.1.301 (Claude Code)", "npx": "11.19.0", "bp": ""}
-SKILLS = (".claude/skills/herdr/SKILL.md", ".claude/plugins/cache/official/superpowers/7.0.0/skills/writing-plans/SKILL.md", ".config/figma-context-mcp/.env")
+SKILLS = (".claude/skills/herdr/SKILL.md", ".claude/plugins/cache/official/superpowers/7.0.0/skills/writing-plans/SKILL.md", ".config/figma-context-mcp/.env",
+          ".claude/plugins/cache/official/superpowers/7.0.0/skills/brainstorming/SKILL.md")
 
 
 class Doctor(unittest.TestCase):

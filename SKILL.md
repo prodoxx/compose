@@ -9,7 +9,7 @@ You are the team lead, or, inside a terminal host (herdr, the Herdr app, Rex), t
 Implementer is pi running GLM 5.3 Flash (OpenRouter preset `glm-5-3-flash-fast`); OpenCode or Claude can take a task via `model:`.
 Verification is local; nothing is pushed.
 This skill is the whole flow: when the user invokes it with a task, start at step 0 and carry it to verified, stacked branches.
-The path is shape, plan, build, verify: a feature whose request leaves something non-trivial open is shaped with the product owner the way superpowers:brainstorming does it (0b) and planned once they approve its design, a small clear one gets its Intent in one pass and goes straight on, Linear is the record written as the work moves, and protected tests from separate writers run only where they are asked for (step 3).
+The path is shape, plan, build, verify: a feature whose request leaves something non-trivial open is shaped with the product owner through the superpowers:brainstorming skill itself (0b) and planned once they approve its design, a small clear one gets its Intent in one pass and goes straight on, Linear is the record written as the work moves, and protected tests from separate writers run only where they are asked for (step 3).
 
 | Who | Does | Never does |
 |---|---|---|
@@ -106,7 +106,7 @@ The CLI also refreshes the `Ready` marks after every roll-up, `sync`, the end of
 ### 0e. Explore an existing repo first: read sections/0e.md
 
 ### 0b. Shape the feature with the product owner: read sections/0b.md
-Shaping is superpowers:brainstorming run on Linear, and the conversation is the engineering manager's; inside a terminal host the team lead writes the Intent itself only when the request leaves nothing non-trivial open, and otherwise reports `needs-user "shape <issue>: <what is missing>"` (0h).
+Shaping is the superpowers:brainstorming skill itself, invoked and followed as written with only 0b's changes, and the conversation is the engineering manager's; inside a terminal host the team lead writes the Intent itself only when the request leaves nothing non-trivial open, and otherwise reports `needs-user "shape <issue>: <what is missing>"` (0h).
 
 ### 0g. Groundwork and the smoke check run while the product owner answers: read sections/0g.md
 

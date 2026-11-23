@@ -1,47 +1,37 @@
-"""Shaping (sections/0b.md) is superpowers:brainstorming run on Linear: the moves that make it a conversation stay in the section."""
+"""Shaping (sections/0b.md) is the superpowers:brainstorming skill itself: compose invokes it and lists only what it changes,
+never a paraphrase of the skill that could drift from it."""
 import hermetic  # first: no test sees the real home
 import os
+import sys
 import unittest
 from pathlib import Path
 os.environ["HERDR_ENV"] = ""
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "bin"))
+import fc_steps  # noqa: E402
 SHAPING = (ROOT / "sections" / "0b.md").read_text()
 
 
-class ShapingFollowsBrainstorming(unittest.TestCase):
-    def test_it_runs_whenever_something_non_trivial_is_open_not_only_on_request(self):
-        self.assertIn("**First: what do you actually know?**", SHAPING)
-        self.assertIn("Something non-trivial is missing", SHAPING)
-        self.assertNotIn("shape only when asked", SHAPING.lower())
+class ShapingIsTheBrainstormingSkill(unittest.TestCase):
+    def test_it_invokes_the_skill_and_follows_it_as_written(self):
+        self.assertIn("Shaping is the superpowers:brainstorming skill itself: invoke it", SHAPING)
+        self.assertIn("Never paraphrase it here or anywhere in compose", SHAPING)
+        self.assertIn("**What compose changes.**", SHAPING)
 
-    def test_the_first_message_plays_the_request_back_with_what_was_found(self):
-        self.assertIn("Echo the request back in your own words", SHAPING)
-        self.assertIn("Add what you found that bears on it", SHAPING)
-        self.assertIn("Or if you'd rather I just write it up and start, say so.", SHAPING)
+    def test_it_holds_no_paraphrase_of_the_skill(self):
+        for heading in ("**Your first message.**", "**The conversation.**", "**Lay out the approaches.**", "**Play it back.**",
+                        "**Size it.**", "**Red flags.**", "**Do recon.**", "Get them describing", "Sort what the builder check asks"):
+            with self.subTest(heading):
+                self.assertNotIn(heading, SHAPING)
 
-    def test_it_looks_things_up_itself_instead_of_asking_leave_to(self):
-        self.assertIn("**Do recon.**", SHAPING)
-        self.assertNotIn("go only when they say yes", SHAPING)
+    def test_after_approval_the_planner_starts_not_writing_plans(self):
+        self.assertIn("never superpowers:writing-plans", SHAPING)
 
-    def test_what_do_you_know_is_asked_of_yourself_and_a_guess_is_the_conversation(self):
-        self.assertIn("ask yourself, never them, what you know", SHAPING)
-        self.assertIn("a guess about what they want is the conversation, and when in doubt, shape", SHAPING)
-        self.assertIn("People often have not finished working out what they want", SHAPING)
-
-    def test_a_product_owner_who_does_not_know_gets_findings_and_a_proposal(self):
-        self.assertIn("**When they do not know**, never hand the question back", SHAPING)
-        self.assertIn("come back with what you found and a concrete proposal", SHAPING)
-        self.assertIn("the product owner does not know, is unsure", SHAPING)
-
-    def test_approaches_get_a_message_of_their_own_and_a_section_on_the_issue(self):
-        self.assertIn("**Lay out the approaches.**", SHAPING)
-        self.assertIn("put the ways of building it in a message of its own", SHAPING)
-        self.assertIn("Constraints, Approaches, Decided by the product owner", SHAPING)
-
-    def test_it_offers_a_spike_and_keeps_the_red_flags(self):
-        self.assertIn("**Spike to feel things out.**", SHAPING)
-        self.assertIn("**Red flags.**", SHAPING)
+    def test_setup_requires_the_skill_for_claude_code(self):
+        row = next(r for r in fc_steps.STEPS if r[0] == "superpowers")
+        self.assertEqual((row[1], row[3]), (".claude/plugins/cache/*/superpowers/*/skills/brainstorming/SKILL.md", "required"))
+        self.assertIn("superpowers", fc_steps.CLAUDE_ONLY)
 
     def test_skill_and_docs_no_longer_say_shaping_runs_only_on_request(self):
         for f in ("SKILL.md", "README.md", "docs/how-it-works.md", "sections/0h.md", "commands/planner.md"):

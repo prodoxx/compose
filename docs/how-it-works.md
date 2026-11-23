@@ -63,9 +63,9 @@ An epic, feature or story has two parts on Linear.
 The top is what a product manager, designer or tester reads: what it is for, why, and the acceptance criteria, in plain words.
 Below a rule, under "Planning and decision log", sits what the planning wrote and the build reads: My calls, Decisions so far, constraints, notes, the plan and the evidence.
 A note there says the log is for compose and its agents and is not edited by hand; the CLI keeps each section on its side of the rule on every write.
-The shaping conversation follows superpowers:brainstorming: it runs whenever your request leaves something non-trivial open, and always when the ticket carries the `needs-shaping` label, when a verification policy names the files the feature touches, or when the Intent would need a guess that is not easily reversible.
+The shaping conversation is the superpowers:brainstorming skill itself, which compose invokes and follows as written (it only swaps where the design and decisions are kept: on the Linear issue): it runs whenever your request leaves something non-trivial open, and always when the ticket carries the `needs-shaping` label, when a verification policy names the files the feature touches, or when the Intent would need a guess that is not easily reversible.
 A small, clear change gets its Intent written in one pass instead, and you can always say "just go" to skip the questions.
-Then the engineering manager shapes the feature with you in one conversation: its first message plays your request back with what it found in the code, then it asks one question at a time, goes and looks things up itself, lays out two or three ways to build it for you to pick, offers a throwaway spike when that is the faster way to learn, and plays each part back with its guesses marked; a builder check reads the design before you do, and the plan starts once you approve it.
+Then the engineering manager runs that brainstorm with you, a builder check reads the design before you do, and the plan starts once you approve it.
 
 A story or epic that needs a technical deep dive carries the Linear label `deep-dive`, which you can add or remove.
 The engineering manager runs that deep dive with you the same way, and writes it as a Linear document titled `<issue id>: tech doc`, which a builder check reads like any design.

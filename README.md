@@ -29,7 +29,7 @@ you, the product owner
 
 The engineering manager takes your request and hands each feature to its own team lead, so the features of one epic move forward at the same time.
 Each team lead takes its own teammates through the full software development life cycle, from discovery to pull requests you can review in minutes.
-Inside each team, the engineering manager shapes each feature with you the way superpowers:brainstorming does whenever your request leaves something open (a small, clear change just gets its Intent written from your brief), a planner writes the plan and cuts the tickets, and a designer carries the design into Figma with its own builders and reviewer.
+Inside each team, the engineering manager shapes each feature with you through the superpowers:brainstorming skill whenever your request leaves something open (a small, clear change just gets its Intent written from your brief), a planner writes the plan and cuts the tickets, and a designer carries the design into Figma with its own builders and reviewer.
 Hand the engineering manager a ticket that already exists, and it starts a planner or a designer for it directly; a designer goes through the feature's team lead when one is running.
 The strongest models do the planning and bring every product decision to you.
 Fast, cheap agents write the code and verify it.
@@ -43,7 +43,7 @@ Run `/compose <what you want>` and each feature moves through the same life cycl
    An explore teammate maps your codebase through trail, so no question, ticket, or plan rests on a guess about the code.
 2. **Product decisions.**
    You are the product owner.
-   When your request leaves something open, the engineering manager shapes the feature with you the way superpowers:brainstorming does: it plays your request back with what it found in the code, asks one question at a time, lays out two or three ways to build it for you to pick, a builder check reads the design before you do, and the plan starts after you approve it.
+   When your request leaves something open, the engineering manager shapes the feature with you through the superpowers:brainstorming skill itself, a builder check reads the design before you do, and the plan starts after you approve it.
    A small, clear change skips the conversation: the team lead writes its Intent and its own calls to the feature issue and starts planning at once, and "just go" skips the questions any time.
    A question that is easier to see (a wireframe, a layout comparison, a diagram) is shown, not described.
 3. **Design.**

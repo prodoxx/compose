@@ -8,7 +8,7 @@ for _m in [m for m in sys.modules if m.startswith("fc_") and m not in ("fc_cost"
 import fc_config, fc_steps, fc_pi, fc_worktree
 R, D, G, c = "required", "default", "designer", True
 ROWS = [("Homebrew", D, "interactive"), ("git", R, "manual"), ("npx", R, "run"), ("gh", R, "run"), ("gh auth", R, "interactive"), ("gh stack", R, "run"),
-        ("claude", R, "manual"), ("herdr", R, "run"), ("herdr skill", R, "run"), ("pi", R, "run"),
+        ("claude", R, "manual"), ("herdr", R, "run"), ("herdr skill", R, "run"), ("superpowers", R, "run", True), ("pi", R, "run"),
         ("pi openrouter-fast provider", R, "write"), ("compose CLI link", R, "write"), ("compose skill link", R, "write"),
         ("Codex skill link", D, "write"), ("Codex commands", D, "write"), ("Codex hooks", D, "write"), ("~/.local/bin on PATH", R, "manual"),
         ("OpenRouter key", R, "key"), ("TypeSafe key", R, "key"), ("Linear key", R, "key"), ("uv", D, "run"), ("jev", D, "run"),
