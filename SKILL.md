@@ -9,11 +9,11 @@ You are the team lead, or, inside a terminal host (herdr, the Herdr app, Rex), t
 Implementer is pi running GLM 5.3 Flash (OpenRouter preset `glm-5-3-flash-fast`); OpenCode or Claude can take a task via `model:`.
 Verification is local; nothing is pushed.
 This skill is the whole flow: when the user invokes it with a task, start at step 0 and carry it to verified, stacked branches.
-The default path is brief, plan, build, verify: nothing waits for an approval, Linear is the record written as the work moves, and the shaping conversation, the builder check, and protected tests from separate writers run only where they are asked for (0b, step 3).
+The path is shape, plan, build, verify: a feature whose request leaves something non-trivial open is shaped with the product owner the way superpowers:brainstorming does it (0b) and planned once they approve its design, a small clear one gets its Intent in one pass and goes straight on, Linear is the record written as the work moves, and protected tests from separate writers run only where they are asked for (step 3).
 
 | Who | Does | Never does |
 |---|---|---|
-| You (team lead; the engineering manager likewise) | Write the feature's Intent from the brief (0b; the shaping conversation only when one of its triggers holds, and then it is the engineering manager's), start the planner teammate and review its cut at 3b (never write the plan or every task yourself), move issues through Linear states, brief teammates for protected tests and any other code, dispatch, review diffs, make a small fix yourself (Rules), run verify, re-split escalated tasks, submit the stack when told | Write more than a small fix (Rules: at most 30 changed lines): anything bigger is a task for `run` or a teammate's; merge anything: a human reviewer merges the PRs on GitHub, or `compose land --yes` on the user's word (7) |
+| You (team lead; the engineering manager likewise) | Write the feature's Intent from the brief when nothing non-trivial is open, else hand it to the engineering manager's shaping conversation (0b), start the planner teammate and review its cut at 3b (never write the plan or every task yourself), move issues through Linear states, brief teammates for protected tests and any other code, dispatch, review diffs, make a small fix yourself (Rules), run verify, re-split escalated tasks, submit the stack when told | Write more than a small fix (Rules: at most 30 changed lines): anything bigger is a task for `run` or a teammate's; merge anything: a human reviewer merges the PRs on GitHub, or `compose land --yes` on the user's word (7) |
 | Teammates (Claude sessions in the project's space, 0h) | Protected tests with the stubs and groundwork they need, escalated work, conflict fixes, docs after merge, a change of course's questions (step 8), research; a toolsmith (briefed by `compose toolsmith`) only files compose's bugs as GitHub issues, never fixes them | Plan, re-scope their brief, address the product owner except through `report` and their own pane |
 | Designer (a Claude teammate in its own pane, 0d) | Continue design work in Figma from the ticket's level: read inputs, write the design-system epic, design stories, and design tasks on Linear, start `design-NNN` builders and a `design-review` reviewer in own panes, run the gate, hand off to code | Build in Figma (builders do), write any file in the repo (Linear only), decide a product question |
 | Implementer (fast model via pi or OpenCode; inside a terminal host a named pi agent in its own pane of the `implementers` tab) | One task issue's brief, named files, until its test passes, at most 350 changed lines, no documents added | Edit protected files, plan, touch other tasks, address the product owner |
@@ -70,7 +70,7 @@ Then:
   - **Fog** (features not yet nameable): shape the epic (0b), writing a short design on it that names its features.
     Once every feature can be named, take the settled path.
   - **Settled** (features exist as sub-issues, or can be named from its design): create one project per feature and start a team lead for each (0h), all at once.
-    Each team lead writes its feature's Intent (0b) while its groundwork (0g) runs; the engineering manager shapes only a feature one of 0b's triggers names, one at a time.
+    Each team lead checks its feature (0b) while its groundwork (0g) runs, writing the Intent of one that leaves nothing non-trivial open; the engineering manager shapes the others with the product owner, one at a time.
     A feature starts from trunk unless it truly needs another feature's code (it calls, imports, or edits what that feature builds), the same rule as a task's `after:`: then `compose init --project <slug> --after <other-slug>` starts its branch from that feature's top layer (its project branch while it has none), so its stack sits on top.
 - **feature**: if it has no `## Intent`, write one (step 0b). When it has no stories, the planner teammate cuts them (one issue per story, each the thinnest slice that works end to end and unblocks the next, at most 5 criteria, in the order they should ship), creates them, and reports them; then it writes the plan (step 1) and splits (step 2) under each story.
 - **story**: its feature is the parent; use or create that project.
@@ -105,8 +105,8 @@ The CLI also refreshes the `Ready` marks after every roll-up, `sync`, the end of
 
 ### 0e. Explore an existing repo first: read sections/0e.md
 
-### 0b. Write the Intent; shape only when asked: read sections/0b.md
-The shaping conversation is the engineering manager's; inside a terminal host the team lead writes the Intent itself and reports `needs-user "shape <issue>"` only when one of 0b's triggers holds (0h).
+### 0b. Shape the feature with the product owner: read sections/0b.md
+Shaping is superpowers:brainstorming run on Linear, and the conversation is the engineering manager's; inside a terminal host the team lead writes the Intent itself only when the request leaves nothing non-trivial open, and otherwise reports `needs-user "shape <issue>: <what is missing>"` (0h).
 
 ### 0g. Groundwork and the smoke check run while the product owner answers: read sections/0g.md
 

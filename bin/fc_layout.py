@@ -10,7 +10,7 @@ DISCLAIMER = ("Everything a product manager, designer or tester needs is above t
               "that the product owner and compose wrote while planning this work. Compose and its agents read it and keep it up to date "
               "through compose's own commands, so please do not edit it by hand.")
 READER = ("Intent", "Goals", "Non-goals", "Anti-goals", "Acceptance criteria")  # written for a reader who was not in the planning
-WORKING = ("Constraints", "Decided by the product owner", "My calls", "Left to the builder", "Decisions so far", "Decisions",
+WORKING = ("Constraints", "Approaches", "Decided by the product owner", "My calls", "Left to the builder", "Decisions so far", "Decisions",
            "Not yet specified", "Open questions", "Notes", "Plan", "Tech doc", "Evidence")  # what planning wrote and the build reads
 
 

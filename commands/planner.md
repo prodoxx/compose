@@ -9,7 +9,7 @@ Accept an issue id or URL, or a project link; a loose idea becomes a new feature
 Run `compose projects --repo <path>` and use the project that already holds this feature.
 When no project exists for it, run `compose init --repo <path> --project <slug>` first (0a).
 Record the feature in `.compose/<slug>/linear.json` as `{"feature": "<id>"}`.
-When the ticket has no `## Intent` (a feature or epic), write it here as sections/0b.md says, in one pass; the shaping conversation runs only when one of 0b's triggers holds, and then the planner starts after the product owner approves.
+When the ticket has no `## Intent` (a feature or epic), shape it here as sections/0b.md says: in conversation with the product owner, the way superpowers:brainstorming does it, when the ticket leaves something non-trivial open, else the Intent in one pass; after a conversation the planner starts once the product owner approves the design.
 A story labeled `deep-dive` with no tech doc gets its deep dive here first.
 Start the planner:
 `compose planner --project <slug> --issue <id> | compose crew start --project <slug> --role planner --title planner --brief -`

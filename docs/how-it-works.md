@@ -57,14 +57,15 @@ A provider that runs out of credit halts the run, and [workspaces.md](workspaces
 In a repo that already has code, an explore teammate maps it through trail first and adds a short codebase brief to the feature.
 Questions and planning both wait for that brief.
 
-By default the team lead writes the feature's Intent, Constraints and My calls to the feature issue from your brief and the codebase brief, in one pass, and the planner starts at once; you steer from its first report.
+When your request already says everything that matters (a small, clear change), the team lead writes the feature's Intent, Constraints and My calls to the feature issue from your brief and the codebase brief, in one pass, and the planner starts at once; you steer from its first report.
 Every choice it made for you is listed under "My calls" so you can check it while reading, and every decision you make is recorded with your words through `compose decide`, as a numbered line under the feature issue's "Decisions so far".
 An epic, feature or story has two parts on Linear.
 The top is what a product manager, designer or tester reads: what it is for, why, and the acceptance criteria, in plain words.
 Below a rule, under "Planning and decision log", sits what the planning wrote and the build reads: My calls, Decisions so far, constraints, notes, the plan and the evidence.
 A note there says the log is for compose and its agents and is not edited by hand; the CLI keeps each section on its side of the rule on every write.
-The shaping conversation runs only when you ask for it, when the ticket carries the `needs-shaping` label, when a verification policy names the files the feature touches, or when the Intent would need a guess that is not easily reversible.
-Then the engineering manager shapes the feature with you in one conversation, one question at a time, playing each part back with its guesses marked, a builder check reads the design before you do, and the plan starts once you approve it.
+The shaping conversation follows superpowers:brainstorming: it runs whenever your request leaves something non-trivial open, and always when the ticket carries the `needs-shaping` label, when a verification policy names the files the feature touches, or when the Intent would need a guess that is not easily reversible.
+A small, clear change gets its Intent written in one pass instead, and you can always say "just go" to skip the questions.
+Then the engineering manager shapes the feature with you in one conversation: its first message plays your request back with what it found in the code, then it asks one question at a time, goes and looks things up itself, lays out two or three ways to build it for you to pick, offers a throwaway spike when that is the faster way to learn, and plays each part back with its guesses marked; a builder check reads the design before you do, and the plan starts once you approve it.
 
 A story or epic that needs a technical deep dive carries the Linear label `deep-dive`, which you can add or remove.
 The engineering manager runs that deep dive with you the same way, and writes it as a Linear document titled `<issue id>: tech doc`, which a builder check reads like any design.

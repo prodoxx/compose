@@ -21,6 +21,11 @@ class LaidOut(unittest.TestCase):
                          "Shoppers lose their cart when they sign in.\n\n## Intent\n\nKeep the cart.\n\n## Goals\n\n- nothing lost\n\n" + LOG
                          + "\n\n## Constraints\n\nOne table.\n\n## My calls\n\n- cookie first\n\n## Decisions so far\n\n- D1: keep it\n")
 
+    def test_the_approaches_a_shaping_weighed_go_under_the_line(self):
+        body = "## Approaches\n\n- cookie (picked)\n- server cart\n\n## Intent\n\nKeep the cart.\n"
+        self.assertEqual(fc_layout.laid_out(body, FEATURE),
+                         "## Intent\n\nKeep the cart.\n\n" + LOG + "\n\n## Approaches\n\n- cookie (picked)\n- server cart\n")
+
     def test_laying_out_twice_changes_nothing(self):
         body = "Opening.\n\n## Acceptance criteria\n\n- it works\n\n## Notes\n\n### Codebase brief\n\nfacts\n\n## Evidence\n\n| a |\n"
         once = fc_layout.laid_out(body, ["Story"])
