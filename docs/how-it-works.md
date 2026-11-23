@@ -69,6 +69,7 @@ Then the engineering manager shapes the feature with you in one conversation, on
 A story or epic that needs a technical deep dive carries the Linear label `deep-dive`, which you can add or remove.
 The engineering manager runs that deep dive with you the same way, and writes it as a Linear document titled `<issue id>: tech doc`, which a builder check reads like any design.
 A question you would understand better by seeing it (a wireframe, a layout comparison, a diagram) is shown, on a Lavish page when it is a comparison.
+That page shows only what is still open: never a question you already answered, a decision you already settled, or a recap.
 
 A question about how a screen should look comes with a low-fi wireframe, drawn in Frame0 and shown to you.
 Each project has its own Frame0 app on `.compose/<project>/design.f0`, so parallel sessions never draw into each other's window.

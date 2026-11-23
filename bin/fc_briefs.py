@@ -92,7 +92,10 @@ Screen that raised it: {reflect}
    `compose report` refuses a question without a recommendation, or one that lists lettered options: ask it open, and weigh the
    options in the recommendation. Never choose for the product owner.
    Text by default; visual only when the choices are pictures, then never asked as text. Visual questions go on one Lavish page, never the architect's earlier page: {page}
-   The page shows pictures only, with no answer controls; answers come through the engineering manager.
+   The page shows pictures only, with no answer controls; answers come through the engineering manager. It holds only the visual
+   questions still open, each under its id and one-line question: never an answered question, a settled decision, or a recap,
+   summary, plan, or context section, whatever Lavish's playbooks suggest. Each time a question opens or closes, write the page
+   again from an empty file, never by editing the last one, so nothing settled carries over.
 3. Write every question under Not yet specified on the map first, visual ones too; visual ones go on the page as well.
    Then ask once, all open questions in one line: open the page if any
    (`npx -y lavish-axi {page}`), and report one line:
@@ -109,7 +112,7 @@ Screen that raised it: {reflect}
    An answer that starts `away:` or `yolo:` is the engineering manager's recommendation, never the product owner's:
    `compose decide` ends its line `(away recommendation, unconfirmed, <date>)` or `(yolo recommendation, unconfirmed, <date>)`, the one its prefix names.
    When the team lead says a decision landed, read the map once (`compose linear get <id> --body`) and go on from it.
-6. Evidence the team lead forwards while {cid} is open becomes new questions, asked the same way; visual ones on the same page, then wait again.
+6. Evidence the team lead forwards while {cid} is open becomes new questions, asked the same way; visual ones on the same page, written again with only the questions still open, then wait again.
 7. When every question is closed: `npx -y lavish-axi end {page}` if the page was opened (never `end` or `--reopen` a session the product owner ended), then report `done` with each decision in one line.
    Do not touch tasks, stories, or the plan: the team lead re-plans from your answers.
 """

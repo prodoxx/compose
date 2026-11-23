@@ -46,7 +46,7 @@ target Figma file is {figma}.
    Hand-off to code names each screen node on its code task's `figma_nodes:` line (never `get_design_context`, never pasted JSON).
 7. Every open decision goes up as an open question with a recommendation, written under Not yet specified, then reported as
    `compose report --project {slug} --as {slug}-designer needs-user "<issue>: <n> questions <ids>; recommendation <one line>"`;
-   Lavish only for a question whose content IS visual.
+   Lavish only for a question whose content IS visual; the page shows only the questions still open, never a settled one or a recap.
 8. Before any screen story is built, write a visual direction for the surface as a Linear decision: anatomy, density and spacing
    measured from the research or competitors, status styling, hierarchy. Each rule cites research, a Linear decision, or a measured
    value. Lowfi frames define flow and content only, never layout, spacing, or density; a question that only follows the lowfi on a
