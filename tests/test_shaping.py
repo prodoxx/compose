@@ -24,6 +24,16 @@ class ShapingFollowsBrainstorming(unittest.TestCase):
         self.assertIn("**Do recon.**", SHAPING)
         self.assertNotIn("go only when they say yes", SHAPING)
 
+    def test_what_do_you_know_is_asked_of_yourself_and_a_guess_is_the_conversation(self):
+        self.assertIn("ask yourself, never them, what you know", SHAPING)
+        self.assertIn("a guess about what they want is the conversation, and when in doubt, shape", SHAPING)
+        self.assertIn("People often have not finished working out what they want", SHAPING)
+
+    def test_a_product_owner_who_does_not_know_gets_findings_and_a_proposal(self):
+        self.assertIn("**When they do not know**, never hand the question back", SHAPING)
+        self.assertIn("come back with what you found and a concrete proposal", SHAPING)
+        self.assertIn("the product owner does not know, is unsure", SHAPING)
+
     def test_approaches_get_a_message_of_their_own_and_a_section_on_the_issue(self):
         self.assertIn("**Lay out the approaches.**", SHAPING)
         self.assertIn("put the ways of building it in a message of its own", SHAPING)
