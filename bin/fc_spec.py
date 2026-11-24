@@ -304,7 +304,7 @@ def task_repo(meta, repos, made=None):
         return p in mine or (key == "delete" and any(f.startswith(p + "/") for f in mine)) or kind_at(at, p) in kinds
     return listed, [f"`{key}:` {path} is not in {listed}" for key, path, kinds in wanted if not there(key, path, kinds)]
 
-def spec_check(data, checks=(), defined=None, scripts=None, repos=None, bases=None):
+def spec_check(data, checks=(), defined=None, scripts=None, repos=None, bases=None, unnamed=True):
     """(ok, issue id, level, gaps) for the feature, then every non-canceled issue: a story or a task. `checks` are
     verify.json's: a task whose `test:` is one of them runs the whole suite after every implementer turn. `defined` says what
     the base already has (base_definitions), so a task naming only that code needs no `after:`. `scripts` (base_scripts) says
@@ -312,7 +312,9 @@ def spec_check(data, checks=(), defined=None, scripts=None, repos=None, bases=No
     that adds it is `kind: toolchain`, whose layer goes below groundwork. With `repos` (fc_repos.Known) each task names a repo of
     the project's list that is checked out here, and the rules across tasks hold within each repo, whose files, stack and waves are
     its own: a blocked-by on another repo's task holds the task and never stacks, so it is no `after:`. `bases` is {name: defined}
-    for the other repos; verify.json's checks, and so `scripts`, are this repo's, so only this repo's tasks are held to them."""
+    for the other repos; verify.json's checks, and so `scripts`, are this repo's, so only this repo's tasks are held to them. With
+    `unnamed` False a task with no `repo:` is a gap only when a task of the set names a repo: the list was not read, so nothing else says
+    the project has more than one."""
     suite = {" ".join(c.split()) for c in checks}
     issues = [i for i in data["issues"] if (i.get("status") or "").lower() not in fc_tasks.CANCELED]
     tasks = [t for t in (fc_tasks.task_from_issue(i) for i in issues) if t]
@@ -322,7 +324,8 @@ def spec_check(data, checks=(), defined=None, scripts=None, repos=None, bases=No
             made.setdefault(name.casefold(), set()).update(t["files"])
     def place(t):  # a Done task is merged, maybe before the project listed its repos: never checked for its repo, grouped with it still
         home, gaps = task_repo(t, repos, made) if repos else (None, [])
-        return home, [] if fc_tasks.linear_done(t) else gaps
+        free = not t["repo"] and not unnamed and not any(x["repo"] for x in tasks)
+        return home, [] if fc_tasks.linear_done(t) or free else gaps
     placed = {t["id"]: place(t) for t in tasks}
     out = []
     desc = (data["feature"].get("description") or "")
@@ -426,9 +429,10 @@ def cmd_spec_check(a):
     repo is listed in it first (fc_repolist.ensure, which returns the list it read), and every repo's task the sync read (the cache's issues
     hold them all) is checked against that list, each other repo's at the HEAD of its checkout here; --stdin reads no list. Without
     the key or the project, spec-check says the list went unchecked and checks this repo's tasks alone, never mixed with the ones the sync
-    set aside, each held to this repo's name (fc_repos.repo_name), none with no name at all."""
+    set aside, each held to this repo's name (fc_repos.repo_name), none with no name at all; a task naming no repo fails there only on the
+    boundary sync holds it on: some task names a repo, or the list held several repos when this checkout last read it."""
     repo = Path(a.repo).resolve()
-    repos = None
+    repos, unnamed = None, True
     if a.stdin:
         try:
             d = json.loads(sys.stdin.read())
@@ -452,6 +456,7 @@ def cmd_spec_check(a):
             aside = {t["linear"] for t in fc_tasks.elsewhere(proj)}
             own = fc_repos.repo_name(repo)
             repos = fc_repos.Known(own, [(own, "")], {}) if own else None
+            unnamed = bool(aside) or fc_repos.listed_count(repo) > 1  # the sync's boundary: a task it set aside names a repo
         fc_tasks.load_tasks(proj, required=True)
         cache = fc_tasks.linear_cache(proj)
         d = {"feature": cache.get("feature") or {},
@@ -460,7 +465,7 @@ def cmd_spec_check(a):
     defined = base_definitions(repo, base)
     bases = {n: base_definitions(p, "HEAD") for n, p in other_repos(repos).items()} if repos else {}
     bad = False
-    for ok, ident, level, gaps in spec_check(d, checks, defined, base_scripts(repo, base), repos, bases):
+    for ok, ident, level, gaps in spec_check(d, checks, defined, base_scripts(repo, base), repos, bases, unnamed):
         print(f"{'PASS' if ok else 'FAIL'} {ident} {level}" + (f": {'; '.join(gaps)}" if gaps else ""))
         bad = bad or not ok
     if bad:

@@ -38,6 +38,12 @@ def repo_name(repo):
     """The repo's name: `"repo"` in its Linear link when set (a fork or a renamed origin), else the one its origin URL gives."""
     return fc_core.recorded_repo(repo) or name_from_url(origin_url(repo))
 
+def listed_count(repo):
+    """How many repos the project's list held when compose last read it from this checkout (`"repos"` in the link, written by
+    fc_repolist.ensure); 0 when the link records no count."""
+    n = fc_core.read_link(repo).get("repos")
+    return n if isinstance(n, int) and not isinstance(n, bool) else 0
+
 def same(a, b):
     """Whether two repo names are one repo: they compare without regard to case, though the list keeps the case it first saw."""
     return a.casefold() == b.casefold()

@@ -560,7 +560,7 @@ def refresh_tasks(proj, say_stale=True):
             fc_core.say(f"no Linear key: run uses the tasks synced at {fc_tasks.linear_cache(proj).get('synced_at')}")
         return
     old = {t["id"]: t["body"] for t in fc_tasks.load_tasks(proj)} if stored.exists() else {}
-    for t in fc_tasks.sync_tasks(proj, linear_sync_payload(proj), repo=fc_repos.repo_name(proj)):
+    for t in fc_tasks.sync_tasks(proj, linear_sync_payload(proj), repo=fc_repos.repo_name(proj), several=fc_repos.listed_count(proj) > 1):
         if t["id"] in old and old[t["id"]] != t["body"]:
             fc_core.say(f"{t['id']} body changed on Linear since the last sync: refreshed")
 
@@ -575,7 +575,7 @@ def cmd_sync(a):
             sys.exit(f"sync: stdin is not JSON ({e}); expected {fc_tasks.SYNC_SHAPE}")
     else:
         data = linear_sync_payload(proj)
-    tasks = fc_tasks.sync_tasks(proj, data, repo=fc_repos.repo_name(proj))  # None for a repo with no name at all: every task, as before
+    tasks = fc_tasks.sync_tasks(proj, data, repo=fc_repos.repo_name(proj), several=fc_repos.listed_count(proj) > 1)  # no name at all: every task, as before
     f = fc_tasks.linear_cache(proj)["feature"]
     print(f"{f['id']} {f['title']}: {len(tasks)} task(s) synced")
     for m in tasks:

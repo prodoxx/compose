@@ -177,6 +177,12 @@ class RepoSync(unittest.TestCase):
         tasks = fc.fc_tasks.sync_tasks(self.proj, self.payload(self.issue("ENG-1", "001"), self.issue("ENG-2", "002", repo="acme/web")))
         self.assertEqual([t["waits_on"] for t in tasks], [[], []])
 
+    def test_a_task_with_no_repo_is_held_when_the_list_holds_several_repos_though_no_task_names_one(self):
+        data = self.payload(self.issue("ENG-1", "001"), self.issue("ENG-2", "002", status="Done"))
+        for several, held in ((True, ["its repo (no repo: on the task)"]), (False, [])):
+            tasks = fc.fc_tasks.sync_tasks(self.proj, data, repo="acme/api", several=several)
+            self.assertEqual([t["waits_on"] for t in tasks], [held, []], several)
+
     def test_an_id_used_in_two_repos_is_still_refused(self):
         data = self.payload(self.issue("ENG-1", "001", repo="acme/api"), self.issue("ENG-3", "001", repo="acme/web"))
         with self.assertRaises(SystemExit) as e:
@@ -250,6 +256,19 @@ class RefreshBeforeRun(unittest.TestCase):
                 fc.fc_linear.refresh_tasks(self.proj)
                 self.assertEqual([(t["id"], t["after"], t["waits_on"]) for t in fc.fc_tasks.load_tasks(self.proj)], kept)
                 self.assertEqual([t["linear"] for t in fc.fc_tasks.elsewhere(self.proj)], ["ENG-5"] if kept is mine else [])
+
+    def test_a_refresh_and_a_sync_hold_a_task_with_no_repo_when_the_link_records_several_listed_repos(self):
+        payload = {"feature": {"id": "ENG-1", "title": "F", "description": ""}, "issues": [issue("ENG-3", "One", block(id="001", test="t"))]}
+        link = self.proj / ".compose" / "linear.json"
+        link.parent.mkdir()
+        for count, held in ((2, ["its repo (no repo: on the task)"]), (1, []), (None, []), ("2", [])):
+            for run in (lambda: fc.fc_linear.refresh_tasks(self.proj), lambda: fc.fc_linear.cmd_sync(SimpleNamespace(stdin=False, repo=str(self.proj)))):
+                with self.subTest(count=count), mock.patch.object(fc.fc_config, "LINEAR_KEY", "lin_test"), mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), \
+                        mock.patch.object(fc.fc_linear, "linear_sync_payload", return_value=payload), mock.patch.object(fc.fc_linear, "refresh_ready"), \
+                        mock.patch.object(fc.fc_linear, "linear_feature_after"), mock.patch("sys.stdout", io.StringIO()):
+                    link.write_text(json.dumps({"project": "https://linear.app/acme/project/p", "repo": "acme/api", **({"repos": count} if count is not None else {})}))
+                    run()
+                    self.assertEqual([t["waits_on"] for t in fc.fc_tasks.load_tasks(self.proj)], [held])
 
     def test_a_project_with_no_feature_keeps_its_stored_tasks_and_reads_nothing(self):
         (self.proj / "linear.json").write_text("{}")

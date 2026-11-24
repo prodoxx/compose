@@ -109,10 +109,26 @@ class Ensure(Fake):
         self.assertEqual(self.known, fc_repos.Known("acme/api", [("acme/api", "the API")], {"acme/api": str(self.repo)}))
         self.assertEqual((self.repo / ".compose" / "linear.json").read_text(), before)
 
-    def test_a_second_repo_is_added_and_no_task_is_touched(self):
-        self.content, self.issues = "## Repos\n- acme/web: the web app\n", {"ENG-1": TASK}
-        self.assertEqual(self.ens(), ["repos: added acme/api to Shop"])
-        self.assertEqual(self.issues["ENG-1"], TASK)
+    def test_a_second_repo_is_added_and_no_task_is_touched_and_the_open_tasks_with_no_repo_are_named(self):
+        named = TASK.replace("id: 001\n", "id: 002\nrepo: acme/web\n")
+        self.content, self.issues = "## Repos\n- acme/web: the web app\n", {"ENG-1": TASK, "ENG-2": named, "ENG-3": "## A story\nNo block.", "ENG-4": TASK.replace("001", "004")}
+        self.assertEqual(self.ens(), ["repos: added acme/api to Shop",
+                                      "repos: 2 open task(s) name no repo, and the list holds more than this one, so compose names none: ENG-1, ENG-4"])
+        self.assertEqual((self.issues["ENG-1"], [q for q, _ in self.calls if "issueUpdate" in q]), (TASK, []))
+        self.calls.clear()
+        self.assertEqual(self.ens(), [])  # marked: said once, and the open issues are not read again
+        self.assertEqual([q for q, _ in self.calls if "issues(" in q], [])
+
+    def test_the_link_records_how_many_repos_the_list_holds_and_follows_it(self):
+        self.content = "## Repos\n- acme/api: the API\n"
+        self.ens()
+        self.assertEqual(self.link()["repos"], 1)
+        before = (self.repo / ".compose" / "linear.json").read_text()
+        self.ens()
+        self.assertEqual((self.repo / ".compose" / "linear.json").read_text(), before)
+        self.content += "- acme/web: the web app\n"
+        self.ens()
+        self.assertEqual({k: self.link()[k] for k in ("repos", "repo", "listed", "team")}, {"repos": 2, "repo": "acme/api", "listed": URL, "team": "Engineering"})
 
     def test_a_run_that_died_after_the_list_was_written_still_fills_the_tasks(self):
         self.content, self.issues = "## Repos\n- acme/api: the API\n", {"ENG-1": TASK}
@@ -180,7 +196,7 @@ class Ensure(Fake):
         (self.repo / ".compose" / "linear.json").write_text(json.dumps({"project": URL, "team": "Engineering", "feature": "ENG-9"}))
         self.assertEqual(self.ens(), [])
         self.assertEqual([q for q, _ in self.calls if "projectUpdate" in q], [])
-        self.assertEqual(self.link(), {"project": URL, "team": "Engineering", "feature": "ENG-9", "repo": "ACME/Api", "listed": URL})  # as the list first wrote it
+        self.assertEqual(self.link(), {"project": URL, "team": "Engineering", "feature": "ENG-9", "repo": "ACME/Api", "listed": URL, "repos": 1})  # as the list first wrote it
         self.assertEqual(fc_repos.paths(), {"ACME/Api": str(self.repo)})
 
     def test_a_null_content_gets_the_list(self):
@@ -230,7 +246,7 @@ class Ensure(Fake):
     def test_a_fresh_read_that_shows_a_second_repo_names_no_task(self):
         self.content, self.issues = "Intro.", {"ENG-1": TASK}
         self.overwrite = lambda new: new.replace("- acme/api: the API\n", "- acme/web: the web app\n- acme/api: the API\n")
-        self.assertEqual(self.ens(), ["repos: added acme/api to Shop"])
+        self.assertEqual(self.ens(), ["repos: added acme/api to Shop", "repos: 1 open task(s) name no repo, and the list holds more than this one, so compose names none: ENG-1"])
         self.assertEqual((self.issues["ENG-1"], self.link()["listed"]), (TASK, URL))
 
     def test_every_run_records_where_this_repo_is(self):
@@ -382,7 +398,7 @@ class Command(Fake):
     def test_repos_refuses_dropping_this_repo_and_a_wrong_flag_mix(self):
         self.content = "## Repos\n- acme/api: the API\n"
         self.assertEqual(self.fails(fc_repolist.cmd_linear, self.args("repos", drop="ACME/api")),
-                         f'this repo is linked to the project: to drop it, remove "project" from {self.repo / ".compose" / "linear.json"}, or run the drop from another checkout')
+                         f'this repo is linked to the project: to drop it, remove "project" from {self.repo / ".compose" / "linear.json"} here, then run the drop from another checkout of the project')
         self.assertEqual(self.fails(fc_repolist.cmd_linear, self.args("repos", add="acme/x", drop="acme/y")), "repos takes one of --add, --drop")
         self.assertEqual(self.fails(fc_repolist.cmd_linear, self.args("repos", about="words")), "--about goes with --add")
         for bad in ("engine", "a//b", "/a/b", "a/b/", "acme/my engine", "acme/\tx"):

@@ -102,11 +102,12 @@ def hand_task(issue):
     """An issue labelled Task that carries no compose block: work done by hand (a lowfi flow in Frame0), never dispatched."""
     return not TASK_BLOCK.search(issue.get("description") or "") and any(l.lower() == "task" for l in issue.get("labels") or ())
 
-def sync_tasks(proj, data, repo=None):
+def sync_tasks(proj, data, repo=None, several=False):
     """Store the feature and its tasks, as the team lead read them from Linear, in results/tasks.json. Returns the tasks. With `repo`
     (this repo's `<owner>/<name>`), a task whose block names another repo is no task here: it is kept under "elsewhere", and a task it
-    blocks waits on it instead of stacking on it. A task naming no repo stays, so spec-check can fail it, and once any task names a repo
-    one that is not Done waits on REPO_HOLD: its repo is unknown, and a task never runs in a guessed one."""
+    blocks waits on it instead of stacking on it. A task naming no repo stays, so spec-check can fail it, and once any task names a repo,
+    or `several` (the project's list held more than one repo when this checkout last read it), one that is not Done waits on REPO_HOLD:
+    its repo is unknown, and a task never runs in a guessed one."""
     link = proj / "linear.json"
     feature = json.loads(link.read_text()).get("feature") if link.exists() else None
     if not feature:
@@ -147,7 +148,7 @@ def sync_tasks(proj, data, repo=None):
         t["after"] = ",".join(sorted(by_issue[b["id"]] for b in blockers if b["id"] in by_issue))
         t["waits_on"] = [f"{b['id']} ({b['status'] or 'state unknown'})" for b in blockers
                          if b["id"] not in by_issue and not blocker_finished(b["status"], b.get("labels") or ())]
-        if repo and named and not t["repo"] and not linear_done(t):
+        if repo and (named or several) and not t["repo"] and not linear_done(t):
             t["waits_on"].append(REPO_HOLD)
     tasks.sort(key=lambda t: t["id"])
     (proj / "results").mkdir(exist_ok=True)

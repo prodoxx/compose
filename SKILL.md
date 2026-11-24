@@ -24,11 +24,12 @@ The path is shape, plan, build, verify: a feature whose request leaves something
 ### 0. Know the repo's Linear project
 Every ticket lives on Linear, never as a file in the repo: feature (with decisions), stories, tasks.
 Repo's Linear project lives in one file, `.compose/linear.json` in the repo's main checkout: `{"project": "<Linear project URL>", "team": "Engineering"}`.
-compose adds `"repo": "<owner>/<name>"` and `"listed"` to it when it lists the repo; `"listed"` only records that the project's open tasks were named from this checkout.
+compose adds `"repo": "<owner>/<name>"` and `"listed"` to it when it lists the repo; `"listed"` only records that this checkout has made its one pass over the project's open tasks, and `"repos"` how many repos the list held.
 A fork whose origin is not the canonical name keeps the canonical `"repo"` there, because the repo's name is `"repo"` when set, else its origin's `<owner>/<name>`.
 Every worktree reads that file, so run `compose linear project` from wherever you are.
 If it prints `no .compose/linear.json in <folder>`, ask the user for the Linear project link, write the file in that folder with that URL and team `Engineering` (unless the user names another), and never commit it.
 `compose linear project` (and `spec-check` and `planner`) also adds this repo to the project's `## Repos` whenever it is missing there and, the first time, when this repo is then the only one listed, writes `repo:` on the project's open tasks that have none, and it prints what it wrote, naming each ticket.
+When the list holds other repos too, it writes no `repo:` and names the open tasks that have none, for the planner to name each one's repo.
 If it exits naming `compose cannot name this repo`, ask the user for `<owner>/<name>` and write it as `"repo"` in `.compose/linear.json`.
 `compose init` ignores `.compose/`, `graft/`, and `.trail/` in every checkout before anything else.
 You create and edit issues and write judgment comments with `compose linear` (`get <id> [--body] [--comments]`, `list --parent <id> | --search "<terms>"`, `create`, `update <id>`, `comment <id>`, `labels`, `project`, `doc`), never a Linear MCP tool; the CLI moves task, story, and feature states and writes the routine run comments, all with the workspace's Linear key.

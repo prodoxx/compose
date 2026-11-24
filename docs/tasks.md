@@ -66,10 +66,10 @@ More rules apply to the block and the issue around it:
 - The `after` field comes from the issue's "blocked by" links to other tasks of the feature in the same repo.
   Each linked task becomes the layer this task stacks on.
 - The `repo:` field, on the line after `id:`, is the `<owner>/<name>` of the repo that builds the task, one of the project's `## Repos`.
-  The first `compose linear project`, `spec-check` or `planner` from a checkout writes it on the project's open tasks that have none when this repo is then the only one listed, and names each ticket it wrote; it writes none when an open task already names another repo.
+  The first `compose linear project`, `spec-check` or `planner` from a checkout writes it on the project's open tasks that have none when this repo is then the only one listed, and names each ticket it wrote; it writes none when an open task already names another repo, and when the list holds other repos too it writes none and names the open tasks that have none.
   A planner writes it on each new task.
   `spec-check` fails a task with no `repo:`, with one the project's list lacks, or with one that is not on this machine; a Done task is never checked for it.
-  Once any task of the feature names a repo, `sync` holds a task with no `repo:` that is not Done: it waits on `its repo (no repo: on the task)`, and `run` never starts it in a guessed repo.
+  Once any task of the feature names a repo, or the project's list held more than one repo when this checkout last read it, `sync` holds a task with no `repo:` that is not Done: it waits on `its repo (no repo: on the task)`, and `run` never starts it in a guessed repo.
   A "blocked by" link to a task of another repo never stacks: `run` holds the task until that task is Done or Canceled, and says `<linear id> is a task of <repo>: it holds until it is finished there`.
 - Any other "blocked by" link (a design story, another feature's issue) does not stack.
   `run` holds the task until that blocker is Done or Canceled, or In Review with the Design label, as of the last `sync`.

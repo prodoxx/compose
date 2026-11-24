@@ -96,12 +96,20 @@ def name_open_tasks(repo, p, name):
             fc_linear_cmd.drop_get_cache(argparse.Namespace(repo=repo))
             print(f"repos: wrote repo: {name} on {len(written)} open task(s): {', '.join(written)}", flush=True)
 
+def say_unnamed(p):
+    """Name the open tasks whose compose block names no repo in a project whose list holds other repos too: compose names none of them,
+    since each could be either repo's, and they stay held until a person or the planner names theirs. Nothing is written."""
+    left = [i["identifier"] for i in open_tasks(p) if fc_tasks.task_blocks(i["description"]) and not named(i)]
+    if left:
+        print(f"repos: {len(left)} open task(s) name no repo, and the list holds more than this one, so compose names none: {', '.join(left)}", flush=True)
+
 def ensure(repo):
     """Read the Linear project's list, add this repo when it is absent (a first run, a hand edit, or the write race below dropped it), and
     record where this repo is on this machine; return the fc_repos.Known it ended with, and print one line for each thing it wrote.
     Every run reads the list once, so a caller has it without asking again, and a repo the list lost comes back on the next command.
-    The link file's mark, `"listed": "<the project's URL>"`, says only that the open tasks were seen to from this checkout for that project:
-    while it is missing and the list holds this repo alone, each open task that names no repo is named this one (name_open_tasks). The mark
+    The link file's mark, `"listed": "<the project's URL>"`, says only that this checkout has made its one pass over the project's open
+    tasks: while it is missing and the list holds this repo alone, each open task that names no repo is named this one (name_open_tasks),
+    and with other repos listed those are only named in a line (say_unnamed). `"repos"` records how many repos the list held. The mark
     is written last, also when the list holds other repos too (then no task is ever named from here), so a run that died earlier names the
     rest, and a second run makes no write and reads no open issue.
     The list is read again after it is written, and the tasks are named only from that read: two repos listing themselves at once, or a
@@ -131,8 +139,10 @@ def ensure(repo):
     name = listed_as(content, name) or name
     if link.get("listed") != project and len(listed) == 1:
         name_open_tasks(repo, p, name)
-    if (link.get("repo"), link.get("listed")) != (name, project):
-        fc_core.atomic_write(path, json.dumps({**json.loads(path.read_text()), "repo": name, "listed": project}, indent=2) + "\n")
+    elif link.get("listed") != project:
+        say_unnamed(p)
+    if (link.get("repo"), link.get("listed"), link.get("repos")) != (name, project, len(listed)):  # the count lets sync hold a task naming no repo
+        fc_core.atomic_write(path, json.dumps({**json.loads(path.read_text()), "repo": name, "listed": project, "repos": len(listed)}, indent=2) + "\n")
     return found(name, listed)
 
 def unread(repo):
@@ -168,7 +178,7 @@ def verb_repos(a):
     if name and (len(name.split("/")) < 2 or not all(name.split("/")) or any(c.isspace() for c in name)):
         sys.exit(f"--{'add' if a.add else 'drop'} takes <owner>/<name>, such as acme/api, not {name!r}")
     if a.drop and (own := fc_repos.repo_name(a.repo)) and fc_repos.same(a.drop, own):
-        sys.exit(f'this repo is linked to the project: to drop it, remove "project" from {fc_core.repo_link(a.repo)}, or run the drop from another checkout')
+        sys.exit(f'this repo is linked to the project: to drop it, remove "project" from {fc_core.repo_link(a.repo)} here, then run the drop from another checkout of the project')
     p = fc_linear_cmd.linear_project(a.repo)
     if not name:
         k = known(a.repo, p)

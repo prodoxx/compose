@@ -912,6 +912,20 @@ class RepoRulesCli(unittest.TestCase):
         lines, e, calls = self.spec_check(key=None)
         self.assertIn("FAIL ENG-4 task: `repo: acme/web` is not in the project's Repos (acme/api)", lines)
 
+    def test_without_the_list_a_task_with_no_repo_fails_only_where_tasks_name_repos_or_the_list_held_several(self):
+        project = "https://linear.app/acme/project/p-1"
+        d = payload(issue("ENG-5", "003"), issue("ENG-7", "007"))
+        fc.fc_tasks.sync_tasks(self.proj, d, repo="acme/api")  # a project that never named a repo
+        for count, fails in ((None, False), (1, False), (2, True)):
+            self.link({"project": project, "team": "Eng", "repo": "acme/api", **({"repos": count} if count else {})})
+            lines, e, calls = self.spec_check(key=None)
+            self.assertEqual(("FAIL ENG-5 task: no `repo:`: name acme/api" in lines, e.code), (fails, int(fails)), (count, lines))
+        fc.fc_tasks.sync_tasks(self.proj, payload(issue("ENG-5", "003"), issue("ENG-8", "008", repo="acme/web")), repo=None)
+        self.link({"project": project, "team": "Eng", "repo": "acme/api"})
+        lines, e, calls = self.spec_check(key=None)
+        self.assertIn("FAIL ENG-8 task: `repo: acme/web` is not in the project's Repos (acme/api)", lines)  # another repo's name still fails
+        self.assertIn("FAIL ENG-5 task: no `repo:`: name acme/api", lines)  # and a named task makes the unnamed one fail
+
     def test_with_no_project_linked_or_no_recorded_name_only_the_line_and_this_repos_tasks(self):
         self.link({"team": "Eng"})
         lines, e, calls = self.spec_check()
