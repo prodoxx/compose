@@ -59,14 +59,17 @@ BULLET_LINK = re.compile(r"\[([^\]]*)\]\(<?([^()<>\s]*)>?\)")
 def plain(name):
     return "/" in name and not any(c.isspace() for c in name)
 
+URL_HOSTS = ("github.com", "gitlab.com", "bitbucket.org")
+
 def url_name(token):
-    """The name a URL-like token of a hand-written bullet gives: a URL, `<URL>`, an scp-like `git@host:owner/name`, or a host path such
-    as `github.com/acme/api`; None for anything else, a plain `owner/name` too (an owner has no dot)."""
+    """The name a token of a hand-written bullet gives when it is unmistakably a URL: it has a scheme, starts `git@`, or starts with a
+    known host (`github.com/acme/api`, `www.` allowed); None for anything else, which is a name as written: `foo.bar/group/api` is a
+    GitLab group's name, not a host path."""
     token = token.strip("<>")
-    head = token.split("/", 1)[0]
-    if "://" in token or ("@" in head and ":" in head):
+    head = token.split("/", 1)[0].casefold()
+    if "://" in token or token.startswith("git@"):
         return name_from_url(token)
-    return name_from_url("https://" + token) if "." in head and "/" in token else None
+    return name_from_url("https://" + token) if "/" in token and head.removeprefix("www.") in URL_HOSTS else None
 
 def bullet(line):
     """(name, about) of a list line `- owner/name: about` (or `*` or `+`, the name in backticks, the colon optional), None for any other

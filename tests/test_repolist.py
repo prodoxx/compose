@@ -246,6 +246,15 @@ class Ensure(Fake):
             self.ens()
             self.assertEqual(fc_repos.paths(), {"acme/api": str(self.repo)})
 
+    def test_a_name_with_a_dot_is_listed_once_over_two_runs(self):
+        for origin, name in (("git@gitlab.com:foo.bar/group/api.git", "foo.bar/group/api"), ("git@gitlab.com:foo.bar/api.git", "foo.bar/api"),
+                             ("git@github.com:acme/api.js.git", "acme/api.js")):
+            self.content, self.calls[:] = "Intro.", []
+            (self.repo / ".compose" / "linear.json").write_text(json.dumps({"project": URL, "team": "Engineering"}))
+            with mock.patch.object(fc_repos, "origin_url", return_value=origin):
+                self.ens(); self.ens()
+            self.assertEqual((self.content, len([q for q, _ in self.calls if "projectUpdate" in q])), (f"Intro.\n\n## Repos\n- {name}: the API\n", 1), name)
+
     def test_a_name_linear_serves_back_escaped_is_listed_once_and_stays_listed(self):
         self.content, self.overwrite = "Intro.", lambda new: new.replace("_", "\\_")  # as Linear stores a bullet
         with mock.patch.object(fc_repos, "origin_url", return_value="git@github.com:acme/my_repo.git"):

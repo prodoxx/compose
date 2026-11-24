@@ -137,6 +137,14 @@ class RepoList(unittest.TestCase):
         self.assertEqual(fc_repos.with_repo(text, "acme/web", "x"), text)
         self.assertNotIn("acme/engine", fc_repos.without_repo(text, "ACME/engine"))
 
+    def test_a_name_with_a_dot_is_that_name_and_only_a_known_host_reads_as_a_url(self):
+        for name in ("foo.bar/group/api", "foo.bar/api", "acme/api.js"):
+            text = fc_repos.with_repo("Intro.", name, "x")
+            self.assertEqual(fc_repos.parse_list(text), [(name, "x")], name)
+            self.assertEqual(fc_repos.with_repo(fc_repos.with_repo(text, name, "x"), name, "y"), text, name)
+        for form in ("github.com/acme/api", "WWW.GitHub.com/acme/api", "https://github.com/acme/api", "[acme/api](https://github.com/acme/api)"):
+            self.assertEqual(fc_repos.parse_list(f"## Repos\n- {form}\n"), [("acme/api", "")], form)
+
     def test_a_name_linear_escaped_reads_as_written(self):
         # Linear serves `_` in a bullet back as `\_` (fc_plan.linear_markdown): the name is the one that was written, and so is its line
         text = "## Repos\n* acme/my\\_repo: the my\\_repo app\n* `acme/other_one`\n"
