@@ -1,6 +1,6 @@
 import ast, json, re, sys
 from pathlib import Path
-import fc_core, fc_reads, fc_readguard, fc_routerec, fc_stale, fc_tasks, fc_linear, fc_worktree, fc_change, fc_status
+import fc_config, fc_core, fc_reads, fc_readguard, fc_routerec, fc_stale, fc_tasks, fc_linear, fc_worktree, fc_change, fc_status, fc_repos, fc_repolist
 
 
 def ordered(tasks, a, b):
@@ -261,15 +261,35 @@ def run_waves(tasks):
         done |= set(wave)
     return waves
 
-def spec_check(data, checks=(), defined=None, scripts=None):
+def task_repo(meta, repos):
+    """(the repo whose tasks `meta` is checked with, its gaps against the project's list `repos`, a fc_repos.Known). The repo is None, this
+    one, for this repo's task and for a task whose repo is unusable, which its gap names, so the rules across tasks still see it. Another
+    repo's task must find each file it deletes or reads at its base in that repo's checkout: this repo's tree says nothing of it."""
+    names, r = ", ".join(n for n, _ in repos.listed), meta.get("repo") or ""
+    listed = next((n for n, _ in repos.listed if fc_repos.same(n, r)), None) if r else None
+    if not r or listed is None:
+        return None, [f"no `repo:`: name one of {names}" if not r else f"`repo: {r}` is not in the project's Repos ({names})"]
+    if repos.own and fc_repos.same(listed, repos.own):
+        return None, []
+    at = next((p for n, p in repos.paths.items() if fc_repos.same(n, listed)), None)
+    if at is None:
+        return None, [f"`repo: {r}` is not on this machine: run `compose linear project` in its checkout"]
+    plain = [path for rev, path in map(fc_reads.split, meta.get("reads") or []) if rev is None and not fc_reads.invalid(path)]
+    return listed, [f"`{key}:` {path} is not in {listed}" for key, paths in (("delete", meta["delete"]), ("reads", plain)) for path in paths if not (Path(at) / path).exists()]
+
+def spec_check(data, checks=(), defined=None, scripts=None, repos=None, bases=None):
     """(ok, issue id, level, gaps) for the feature, then every non-canceled issue: a story or a task. `checks` are
     verify.json's: a task whose `test:` is one of them runs the whole suite after every implementer turn. `defined` says what
     the base already has (base_definitions), so a task naming only that code needs no `after:`. `scripts` (base_scripts) says
     which package scripts the base runs: a check that runs one a task adds fails on every layer below that task's, so the task
-    that adds it is `kind: toolchain`, whose layer goes below groundwork."""
+    that adds it is `kind: toolchain`, whose layer goes below groundwork. With `repos` (fc_repos.Known) each task names a repo of
+    the project's list that is checked out here, and the rules across tasks hold within each repo, whose files, stack and waves are
+    its own: a blocked-by on another repo's task holds the task and never stacks, so it is no `after:`. `bases` is {name: (defined,
+    scripts)} for the other repos; verify.json's checks are this repo's, so only this repo's tasks are held to them."""
     suite = {" ".join(c.split()) for c in checks}
     issues = [i for i in data["issues"] if (i.get("status") or "").lower() not in fc_tasks.CANCELED]
     tasks = [t for t in (fc_tasks.task_from_issue(i) for i in issues) if t]
+    placed = {t["id"]: task_repo(t, repos) if repos else (None, []) for t in tasks}
     out = []
     desc = (data["feature"].get("description") or "")
     gaps = []
@@ -283,28 +303,37 @@ def spec_check(data, checks=(), defined=None, scripts=None):
     if "## Plan" not in desc:
         gaps.append("no `## Plan` section")
     by_issue = {t["linear"]: t["id"] for t in tasks}
-    tasks = [dict(t, after=",".join(by_issue[b["id"]] for b in t["blocked_by"] if b["id"] in by_issue)) for t in tasks]
-    clashes = file_clashes(tasks)
-    if clashes:
-        detail = "; ".join(f"{f}: {', '.join(ids)}" for f, ids in clashes.items())
-        gaps.append(f"two tasks own the same file (they must be one task, or one must be `after:` the other): {detail}")
+    home = lambda tid: placed[tid][0]
+    tasks = [dict(t, after=",".join(by_issue[b["id"]] for b in t["blocked_by"] if b["id"] in by_issue and home(by_issue[b["id"]]) == home(t["id"])))
+             for t in tasks]
+    groups = {}
+    for t in tasks:
+        groups.setdefault(home(t["id"]), []).append(t)
+    loose, whole, chains = {}, {}, []
+    for name, mine in groups.items():
+        clashes = file_clashes(mine)
+        if clashes:
+            detail = "; ".join(f"{f}: {', '.join(ids)}" for f, ids in clashes.items())
+            gaps.append(f"two tasks{f' of {name}' if name else ''} own the same file (they must be one task, or one must be `after:` the other): {detail}")
+        loose.update(missing_after(mine, defined if name is None else (bases or {}).get(name, (None, None))[0]))
+        to_run = [t for t in mine if (t["linear_state"] or "").lower() not in ("in review", "done")]  # a passed or merged layer never runs again
+        waves = run_waves(to_run)
+        whole.update(whole_shared_tests(to_run))
+        if len(to_run) >= 3 and len(waves) > len(to_run) / 2:
+            chains.append(f"serial chain{f' in {name}' if name else ''}: {len(to_run)} tasks run in {len(waves)} waves, mostly one after another")
+    here = groups.get(None, [])
     for pkg, script in dict.fromkeys(ps for c in checks for ps in package_scripts(c)) if scripts else ():
         if scripts(pkg, script):
             continue
         c = next(c for c in checks if (pkg, script) in package_scripts(c))
-        owners = sorted(t["id"] for t in tasks if pkg in t["files"])
+        owners = sorted(t["id"] for t in here if pkg in t["files"])
         if not owners:
             gaps.append(f"verify check `{c}` runs {script}, which {pkg} does not define on the base, and no task adds it: "
                         "put it in the `kind: toolchain` task that sets its tool up, or drop the check")
-        elif not any(t["kind"] == "toolchain" for t in tasks if t["id"] in owners):
+        elif not any(t["kind"] == "toolchain" for t in here if t["id"] in owners):
             gaps.append(f"verify check `{c}` runs {script}, which {pkg} does not define on the base: make the task of {', '.join(owners)} "
                         "that sets its tool up `kind: toolchain`, so its layer goes below groundwork and every layer can run the check")
-    loose = missing_after(tasks, defined)
-    to_run = [t for t in tasks if (t["linear_state"] or "").lower() not in ("in review", "done")]  # a passed or merged layer never runs again
-    waves = run_waves(to_run)
-    whole = whole_shared_tests(to_run)
-    if len(to_run) >= 3 and len(waves) > len(to_run) / 2:
-        gaps.append(f"serial chain: {len(to_run)} tasks run in {len(waves)} waves, mostly one after another")
+    gaps += chains
     gaps += fc_stale.stale({"id": data["feature"]["id"], "description": desc})  # a sync carries no label or state of the feature: judged by what it holds
     out.append((not gaps, data["feature"]["id"], "feature", gaps))
     story_task = any("parentId" in i for i in data["issues"])
@@ -313,7 +342,7 @@ def spec_check(data, checks=(), defined=None, scripts=None):
         desc = i.get("description") or ""
         bullets = fc_tasks.parse_criteria(desc)
         if meta:
-            gaps = []
+            gaps = list(placed[meta["id"]][1])
             if more := fc_tasks.extra_blocks(desc):  # a write that held a block once added another (#454); a reroute does not (#485)
                 gaps.append(more + "; keep the one you mean and write the whole body with `compose linear update <id> --description`")
             if too_big(meta):
@@ -333,7 +362,7 @@ def spec_check(data, checks=(), defined=None, scripts=None):
             after = next((t["after"] for t in tasks if t["id"] == meta["id"]), "")
             if meta["kind"] == "toolchain" and after:
                 gaps.append(f"`kind: toolchain` sets up the tools every layer runs, so its layer is the bottom one: drop its `after:` (blocked-by {after})")
-            if " ".join(meta["test"].split()) in suite:
+            if " ".join(meta["test"].split()) in suite and home(meta["id"]) is None:
                 gaps.append(f"`test:` is the verify check `{meta['test']}`, the whole suite: run only this task's test (its file, or a name filter)")
             gaps += whole_shared_text(whole.get(meta["id"], {}))
             if re.search(r"(?i)contract\.md|\b(?:from|in|per|see) the (?:groundwork )?contract\b", desc):
@@ -359,8 +388,11 @@ def spec_check(data, checks=(), defined=None, scripts=None):
 
 def cmd_spec_check(a):
     """The feature, its stories, and its tasks against the spec: one PASS or FAIL line each, exit 1 on any FAIL.
-    The base is the project's head, or the repo's HEAD for --stdin, which names no project."""
+    The base is the project's head, or the repo's HEAD for --stdin, which names no project. With a Linear key and a linked project the
+    repo is listed in it first, so the sync below keeps this repo's tasks, and every repo's task the sync read (the cache's issues hold
+    them all) is checked against the project's list, each other repo's at the HEAD of its checkout here; --stdin reads no list."""
     repo = Path(a.repo).resolve()
+    repos = None
     if a.stdin:
         try:
             d = json.loads(sys.stdin.read())
@@ -369,14 +401,25 @@ def cmd_spec_check(a):
         checks, base = [], "HEAD"
     else:
         proj = fc_core.project_dir(a)
+        listing = bool(fc_config.LINEAR_KEY and fc_core.read_link(repo).get("project"))  # without either there is no list to read
+        def asked(fn):
+            try:
+                return fn(repo)
+            except (RuntimeError, OSError) as e:  # a Linear or link file error, as `compose linear` exits on one
+                sys.exit(f"spec-check: {e}")
+        if listing:
+            asked(fc_repolist.ensure)
         fc_linear.refresh_tasks(proj, say_stale=False)
+        repos = asked(fc_repolist.known) if listing else None
         fc_tasks.load_tasks(proj, required=True)
         cache = fc_tasks.linear_cache(proj)
         d = {"feature": cache.get("feature") or {},
              "issues": [dict(v, id=k) for k, v in (cache.get("issues") or {}).items()]}
         checks, base = fc_core.project_config(proj).get("checks", []), fc_status.project_head(repo, proj)
+    defined = base_definitions(repo, base)
+    bases = {n: (base_definitions(p, "HEAD"), base_scripts(p, "HEAD")) for n, p in repos.paths.items() if not (repos.own and fc_repos.same(n, repos.own))} if repos else {}
     bad = False
-    for ok, ident, level, gaps in spec_check(d, checks, base_definitions(repo, base), base_scripts(repo, base)):
+    for ok, ident, level, gaps in spec_check(d, checks, defined, base_scripts(repo, base), repos, bases):
         print(f"{'PASS' if ok else 'FAIL'} {ident} {level}" + (f": {'; '.join(gaps)}" if gaps else ""))
         bad = bad or not ok
     if bad:
