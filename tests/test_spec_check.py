@@ -724,6 +724,11 @@ class RepoRules(unittest.TestCase):
     def test_a_task_with_no_repo_fails_and_names_the_choices(self):
         self.assertIn("no `repo:`: name one of acme/api, acme/web, acme/engine", self.gaps_of(issue("ENG-1", "001"))["ENG-1"])
 
+    def test_an_empty_list_says_so_and_what_fills_it(self):
+        none = KNOWN._replace(listed=[], paths={})
+        for bad in ({}, {"repo": "acme/api"}):
+            self.assertEqual(self.gaps_of(issue("ENG-1", "001", **bad), repos=none)["ENG-1"], ["the project lists no repos: run compose linear project in each checkout"], bad)
+
     def test_a_repo_off_the_list_fails(self):
         self.assertIn("`repo: acme/other` is not in the project's Repos (acme/api, acme/web, acme/engine)", self.gaps_of(issue("ENG-1", "001", repo="acme/other"))["ENG-1"])
 
@@ -760,6 +765,17 @@ class RepoRules(unittest.TestCase):
             got = fc.fc_spec.spec_check(payload(t), repos=KNOWN, bases={})
         self.assertEqual(next(g for ok, i, level, g in got if level == "task"),
                          ["`delete:` gone.ts is not in acme/web", "`reads:` lib is not in acme/web", "`reads:` lib/none.ts is not in acme/web"])
+
+    def test_a_path_another_task_of_that_repo_makes_is_no_gap(self):
+        # spec-check run in acme/web passes it, so it passes here: the planner passes it in one repo for the whole story
+        maker = issue("ENG-1", "001", repo="acme/web", files="src/new.ts, lib/gen/a.ts")
+        user = issue("ENG-2", "002", ["ENG-1"], repo="acme/web", reads="src/new.ts", delete="lib/gen/, src/new.ts", files="src/use.ts")
+        self.assertEqual(self.gaps_of(maker, user)["ENG-2"], [])
+        apart = issue("ENG-3", "003", repo="acme/api", files="src/other.ts")  # a task of another repo makes nothing in acme/web
+        got = self.gaps_of(apart, issue("ENG-2", "002", repo="acme/web", reads="src/other.ts", delete="src/"))
+        self.assertEqual(got["ENG-2"], ["`delete:` src/ is not in acme/web", "`reads:` src/other.ts is not in acme/web"])
+        self.assertEqual(self.gaps_of(issue("ENG-1", "001", repo="acme/web", files="lib/genx.ts"), issue("ENG-2", "002", repo="acme/web", delete="lib/gen"))["ENG-2"],
+                         ["`delete:` lib/gen is not in acme/web"])  # a file beside the directory is not under it
 
     def test_kind_at_asks_git_what_the_path_is_at_head(self):
         answers = {"HEAD:a.py": (0, "blob\n"), "HEAD:lib": (0, "tree\n")}

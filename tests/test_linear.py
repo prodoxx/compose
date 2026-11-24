@@ -164,6 +164,19 @@ class RepoSync(unittest.TestCase):
         tasks = fc.fc_tasks.sync_tasks(self.proj, self.payload(self.issue("ENG-1", "001")), repo="acme/api")
         self.assertEqual([t["id"] for t in tasks], ["001"])
 
+    def test_a_task_with_no_repo_is_held_once_another_task_names_one(self):
+        data = self.payload(self.issue("ENG-1", "001"), self.issue("ENG-2", "002", repo="acme/web"), self.issue("ENG-4", "004", status="Done"),
+                            self.issue("ENG-5", "005", repo="acme/api"))
+        tasks = {t["id"]: t for t in fc.fc_tasks.sync_tasks(self.proj, data, repo="acme/api")}
+        self.assertEqual({tid: t["waits_on"] for tid, t in tasks.items()}, {"001": ["its repo (no repo: on the task)"], "004": [], "005": []})  # Done is left alone
+        self.assertEqual(fc.fc_tasks.waiting(list(tasks.values())), {"001": {"reason": "waits on its repo (no repo: on the task)"}})
+
+    def test_a_task_with_no_repo_is_not_held_where_no_task_names_one_or_this_repo_has_no_name(self):
+        tasks = fc.fc_tasks.sync_tasks(self.proj, self.payload(self.issue("ENG-1", "001"), self.issue("ENG-2", "002")), repo="acme/api")
+        self.assertEqual([t["waits_on"] for t in tasks], [[], []])
+        tasks = fc.fc_tasks.sync_tasks(self.proj, self.payload(self.issue("ENG-1", "001"), self.issue("ENG-2", "002", repo="acme/web")))
+        self.assertEqual([t["waits_on"] for t in tasks], [[], []])
+
     def test_an_id_used_in_two_repos_is_still_refused(self):
         data = self.payload(self.issue("ENG-1", "001", repo="acme/api"), self.issue("ENG-3", "001", repo="acme/web"))
         with self.assertRaises(SystemExit) as e:

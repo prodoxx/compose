@@ -6,7 +6,7 @@ fc_linear_cmd's own verbs never call back up into it."""
 import argparse, json, re, subprocess, sys
 from pathlib import Path
 
-import fc_config, fc_core, fc_linear, fc_linear_cmd, fc_repos
+import fc_config, fc_core, fc_linear, fc_linear_cmd, fc_repos, fc_tasks
 
 CONTENT = "query($id: String!) { project(id: $id) { content } }"
 PROJECT_UPDATE = "mutation($id: String!, $in: ProjectUpdateInput!) { projectUpdate(id: $id, input: $in) { success } }"
@@ -56,9 +56,8 @@ def listed_as(content, name):
     """How the project's list spells `name` (the case first seen), None when it does not list it."""
     return next((n for n, _ in fc_repos.parse_list(content) if fc_repos.same(n, name)), None)
 
-def name_open_tasks(repo, p, name):
-    """Write `repo: <name>` into the compose block of each open task of the project that names no repo; return how many were written.
-    Every page is read before any write, so a write never moves an issue between the pages still to read."""
+def open_tasks(p):
+    """Every open issue of the project, {id, identifier, description}, every page read."""
     tasks, after = [], None
     while True:
         page = fc_linear.linear_gql(OPEN_TASKS, {"p": p["id"], "after": after})["issues"]
@@ -66,19 +65,36 @@ def name_open_tasks(repo, p, name):
         if not page["pageInfo"]["hasNextPage"]:
             break
         after = page["pageInfo"]["endCursor"]
-    written = 0
+    return tasks
+
+def named(issue):
+    """The repo the issue's compose block names (its first block, as `compose tasks` reads it), "" for none."""
+    return fc_tasks.block_meta((fc_tasks.task_blocks(issue["description"]) or [""])[0]).get("repo", "")
+
+def name_open_tasks(repo, p, name):
+    """Write `repo: <name>` into the compose block of each open task of the project that names no repo, and say which, by Linear id in the
+    order written, also when a write fails midway (the line comes before the error), so a task that belongs to another repo can be moved.
+    Every page is read before any write, so a write never moves an issue between the pages still to read. When an open task already names
+    another repo, the project has one whatever its list reads (a section renamed or reformatted by hand reads as none): no task is written."""
+    tasks = open_tasks(p)
+    others = {}
+    for r in filter(None, map(named, tasks)):
+        if not fc_repos.same(r, name):
+            others.setdefault(r.casefold(), r)
+    if others:
+        print(f"repos: wrote no repo: on open tasks, because some already name another repo ({', '.join(sorted(others.values(), key=str.casefold))})", flush=True)
+        return
+    written = []
     try:
         for issue in tasks:
             new = fc_repos.with_task_repo(issue["description"], name)
             if new is not None:
                 write_task(issue, new)
-                written += 1
+                written.append(issue["identifier"])
     finally:
         if written:  # a cached `get` would serve the body from before the write, also when a later write failed
             fc_linear_cmd.drop_get_cache(argparse.Namespace(repo=repo))
-    if written:
-        print(f"repos: wrote repo: {name} on {written} open task(s)", flush=True)
-    return written
+            print(f"repos: wrote repo: {name} on {len(written)} open task(s): {', '.join(written)}", flush=True)
 
 def ensure(repo):
     """Read the Linear project's list, add this repo when it is absent (a first run, a hand edit, or the write race below dropped it), and
@@ -89,8 +105,13 @@ def ensure(repo):
     is written last, so a run that died earlier names the rest, and a second run makes no write and reads no open issue.
     The list is read again after it is written, and the tasks are named only from that read: two repos listing themselves at once, or a
     hand edit between the read and the write, can drop a bullet, and neither run may then believe it is the project's only repo."""
+    path = fc_core.repo_link(repo)
+    if not path.exists():  # what fc_linear_cmd.project_link says, before the name: a fresh local repo has neither, and needs the link first
+        sys.exit(f"no .compose/linear.json in {path.parent.parent}")
     link = fc_core.read_link(repo)
     project = link.get("project")
+    if not project:
+        sys.exit(f'{path} has no "project": add the Linear project URL')
     name = fc_repos.repo_name(repo)
     if not name:
         sys.exit(f'compose cannot name this repo: it has no origin remote. Ask the user for its <owner>/<name> and add "repo": "<owner>/<name>" to {fc_core.repo_link(repo)}')
@@ -110,7 +131,6 @@ def ensure(repo):
     if link.get("listed") != project and len(listed) == 1:
         name_open_tasks(repo, p, name)
     if (link.get("repo"), link.get("listed")) != (name, project):
-        path = fc_core.repo_link(repo)
         fc_core.atomic_write(path, json.dumps({**json.loads(path.read_text()), "repo": name, "listed": project}, indent=2) + "\n")
     return found(name, listed)
 

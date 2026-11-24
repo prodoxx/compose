@@ -64,7 +64,7 @@ def judge(repo, base, blocker, owners, elsewhere=()):
 def released(repo, proj, tasks, base):
     """({blocker id: proof}, {blocker id: why it still holds}) for each blocker the state still holds back from `tasks`, as of
     their last sync. Nothing is asked of git when no task waits."""
-    ids = sorted({w.split()[0] for t in tasks for w in t.get("waits_on") or [] if not w.startswith("the route (")})  # a route hold is no blocker
+    ids = sorted({w.split()[0] for t in tasks for w in t.get("waits_on") or [] if not fc_tasks.no_blocker(w)})  # a route or repo hold is no blocker
     if not ids:
         return {}, {}
     owners = {slug: p for slug, (_, p) in fc_core.all_projects(repo).items() if p != proj}

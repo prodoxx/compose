@@ -273,13 +273,22 @@ def other_repos(repos):
     """{name: path} of the listed repos other than this one that are checked out here (repos, a fc_repos.Known)."""
     return {n: p for n, p in repos.paths.items() if not (repos.own and fc_repos.same(n, repos.own))}
 
-def task_repo(meta, repos):
+def listed_repo(meta, repos):
+    """How the project's list `repos` (a fc_repos.Known) spells the repo the task names, None when it names none or one off the list."""
+    r = meta.get("repo") or ""
+    return next((n for n, _ in repos.listed if fc_repos.same(n, r)), None) if r else None
+
+def task_repo(meta, repos, made=None):
     """(the repo whose tasks `meta` is checked with, its gaps against the project's list `repos`, a fc_repos.Known). The repo is None, this
     one, for this repo's task and for a task whose repo is unusable, which its gap names, so the rules across tasks still see it. Another
     repo's task must find each path it reads, a file, and each it deletes, a file or a directory (`run` deletes with `git rm -r`), at the
-    HEAD of that repo's checkout, which its other checks read too: this repo's tree says nothing of it."""
+    HEAD of that repo's checkout, which its other checks read too: this repo's tree says nothing of it. A path a task of that repo makes
+    (`made`, {listed name casefolded: the `files:` of its tasks}) counts as there, a directory when a file it makes is under it: spec-check
+    run in that repo passes it, and the planner passes spec-check in one repo for the whole story."""
     names, r = ", ".join(n for n, _ in repos.listed), meta.get("repo") or ""
-    listed = next((n for n, _ in repos.listed if fc_repos.same(n, r)), None) if r else None
+    listed = listed_repo(meta, repos)
+    if not repos.listed:
+        return None, ["the project lists no repos: run compose linear project in each checkout"]
     if not r or listed is None:
         return None, [f"no `repo:`: name {'one of ' if len(repos.listed) > 1 else ''}{names}" if not r else f"`repo: {r}` is not in the project's Repos ({names})"]
     if repos.own and fc_repos.same(listed, repos.own):
@@ -289,7 +298,11 @@ def task_repo(meta, repos):
         return None, [f"`repo: {r}` is not on this machine: run `compose linear project` in its checkout"]
     plain = [path for rev, path in map(fc_reads.split, meta.get("reads") or []) if rev is None and not fc_reads.invalid(path)]
     wanted = [("delete", path, ("blob", "tree")) for path in meta["delete"]] + [("reads", path, ("blob",)) for path in plain]
-    return listed, [f"`{key}:` {path} is not in {listed}" for key, path, kinds in wanted if kind_at(at, path.rstrip("/")) not in kinds]
+    mine = (made or {}).get(listed.casefold(), set())
+    def there(key, path, kinds):
+        p = path.rstrip("/")
+        return p in mine or (key == "delete" and any(f.startswith(p + "/") for f in mine)) or kind_at(at, p) in kinds
+    return listed, [f"`{key}:` {path} is not in {listed}" for key, path, kinds in wanted if not there(key, path, kinds)]
 
 def spec_check(data, checks=(), defined=None, scripts=None, repos=None, bases=None):
     """(ok, issue id, level, gaps) for the feature, then every non-canceled issue: a story or a task. `checks` are
@@ -303,8 +316,12 @@ def spec_check(data, checks=(), defined=None, scripts=None, repos=None, bases=No
     suite = {" ".join(c.split()) for c in checks}
     issues = [i for i in data["issues"] if (i.get("status") or "").lower() not in fc_tasks.CANCELED]
     tasks = [t for t in (fc_tasks.task_from_issue(i) for i in issues) if t]
+    made = {}
+    for t in tasks if repos else ():
+        if name := listed_repo(t, repos):
+            made.setdefault(name.casefold(), set()).update(t["files"])
     def place(t):  # a Done task is merged, maybe before the project listed its repos: never checked for its repo, grouped with it still
-        home, gaps = task_repo(t, repos) if repos else (None, [])
+        home, gaps = task_repo(t, repos, made) if repos else (None, [])
         return home, [] if fc_tasks.linear_done(t) else gaps
     placed = {t["id"]: place(t) for t in tasks}
     out = []

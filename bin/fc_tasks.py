@@ -15,6 +15,13 @@ import fc_core, fc_config, fc_tiers
 #   ```
 # Everything above the block is the implementer's brief. `after` is Linear's own "blocked by" between the feature's tasks;
 # any other blocker is `waits_on` while it is not finished, and holds the task back without stacking it.
+REPO_HOLD = "its repo (no repo: on the task)"  # a `waits_on` entry that holds a task naming no repo in a project whose tasks name repos
+
+def no_blocker(entry):
+    """Whether a `waits_on` entry holds the task without naming a blocker: the route hold `run` adds, or REPO_HOLD. Every reader that
+    takes an entry's first word for a blocker id skips these."""
+    return entry.startswith(("the route (", REPO_HOLD))
+
 TASK_BLOCK = re.compile(r"\n*```compose[ \t]*\n(.*?)\n```[ \t]*\n*", re.S)
 SYNC_SHAPE = ('{"feature": {"id", "title", "description"}, "issues": [{"id", "title", "description", "status", "parentId", "labels", '
               '"blockedBy": ["<issue id>" or {"id", "status", "labels"}]}]}'
@@ -26,6 +33,11 @@ def task_blocks(desc):
     """The text inside each `compose` block of an issue description, in the order they sit. A task has one: the first is the one every
     reader takes (`task_from_issue`, `compose tasks`, `run`, `spec-check`) and the rest are ignored."""
     return [m.group(1) for m in TASK_BLOCK.finditer(desc or "")]
+
+def block_meta(block):
+    """The `key: value` lines of a compose block's text as {key: value}, each stripped; a line with no colon is no key. The one parse of
+    a block every reader shares: `task_from_issue`, which then checks it, and the readers that must not stop on a malformed task."""
+    return {k.strip(): v.strip() for k, v in (l.split(":", 1) for l in (block or "").splitlines() if ":" in l)}
 
 def extra_blocks(desc):
     """The sentence that says an issue holds more than one `compose` block, the ids they carry and which one is read; "" for none or one."""
@@ -93,7 +105,8 @@ def hand_task(issue):
 def sync_tasks(proj, data, repo=None):
     """Store the feature and its tasks, as the team lead read them from Linear, in results/tasks.json. Returns the tasks. With `repo`
     (this repo's `<owner>/<name>`), a task whose block names another repo is no task here: it is kept under "elsewhere", and a task it
-    blocks waits on it instead of stacking on it. A task naming no repo stays, so spec-check can fail it."""
+    blocks waits on it instead of stacking on it. A task naming no repo stays, so spec-check can fail it, and once any task names a repo
+    one that is not Done waits on REPO_HOLD: its repo is unknown, and a task never runs in a guessed one."""
     link = proj / "linear.json"
     feature = json.loads(link.read_text()).get("feature") if link.exists() else None
     if not feature:
@@ -125,6 +138,7 @@ def sync_tasks(proj, data, repo=None):
         return not repo or not t["repo"] or t["repo"].casefold() == repo.casefold()
     aside = sorted(({"linear": t["linear"], "id": t["id"], "repo": t["repo"], "title": t["title"], "status": t["linear_state"]}
                     for t in tasks if not here(t)), key=lambda t: t["id"])
+    named = any(t["repo"] for t in tasks)
     tasks = [t for t in tasks if here(t)]
     by_issue = {t["linear"]: t["id"] for t in tasks}
     states = {i["id"]: i.get("status") for i in data["issues"]}
@@ -133,6 +147,8 @@ def sync_tasks(proj, data, repo=None):
         t["after"] = ",".join(sorted(by_issue[b["id"]] for b in blockers if b["id"] in by_issue))
         t["waits_on"] = [f"{b['id']} ({b['status'] or 'state unknown'})" for b in blockers
                          if b["id"] not in by_issue and not blocker_finished(b["status"], b.get("labels") or ())]
+        if repo and named and not t["repo"] and not linear_done(t):
+            t["waits_on"].append(REPO_HOLD)
     tasks.sort(key=lambda t: t["id"])
     (proj / "results").mkdir(exist_ok=True)
     f = data["feature"]
@@ -188,7 +204,7 @@ def blocker_finished(status, labels=()):
 def waiting(tasks, released=()):
     """{task id: {"reason"}} for each task a blocker outside the feature's tasks holds back, as of the last sync. `released`: blocker
     ids git shows are in the trunk already (fc_blockers.released), which hold nothing."""
-    out = {m["id"]: [w for w in m.get("waits_on") or [] if w.split()[0] not in released] for m in tasks}
+    out = {m["id"]: [w for w in m.get("waits_on") or [] if no_blocker(w) or w.split()[0] not in released] for m in tasks}
     return {tid: {"reason": "waits on " + ", ".join(w)} for tid, w in out.items() if w}
 
 def linear_done(meta):

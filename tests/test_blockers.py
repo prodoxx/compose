@@ -55,6 +55,13 @@ class OutsideBlockers(unittest.TestCase):
         self.assertEqual(still, {"NEB-10": "found task 001: found-001 is not in main; found: no stack built yet"})
         self.assertIn("NEB-10", fc.fc_tasks.waiting(fc.fc_tasks.load_tasks(self.app), out)["010"]["reason"])
 
+    def test_a_task_held_for_its_repo_is_no_blocker_and_git_is_asked_nothing(self):
+        (self.app / "results" / "tasks.json").write_text(json.dumps({"feature": {"id": "NEB-2"}, "issues": {}, "tasks": [
+            {"id": "010", "kind": "code", "linear": "NEB-20", "waits_on": [fc.fc_tasks.REPO_HOLD]}]}))
+        with mock.patch.object(fc.fc_core, "all_projects", side_effect=AssertionError("asked")), mock.patch.object(fc.fc_blockers, "judge", side_effect=AssertionError("judged")):
+            self.assertEqual(self.released(), ({}, {}))
+        self.assertEqual(fc.fc_tasks.waiting(fc.fc_tasks.load_tasks(self.app), {"its": "x"}), {"010": {"reason": "waits on its repo (no repo: on the task)"}})
+
     def test_a_route_hold_is_no_blocker_and_is_not_judged(self):
         (self.app / "results" / "tasks.json").write_text(json.dumps({"feature": {"id": "NEB-2"}, "issues": {}, "tasks": [
             {"id": "010", "kind": "code", "linear": "NEB-20", "waits_on": ["the route (policies unreadable: x)"]}]}))
