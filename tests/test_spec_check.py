@@ -420,7 +420,7 @@ class SpecCheck(unittest.TestCase):
             lines, e = self.run_cli(repo=str(repo), project="p")
         want, we = self.run_cli(json.dumps(d))
         self.assertTrue(any(l.startswith("FAIL ENG-11") for l in want), want)
-        self.assertEqual((lines, e.code), (want, we.code))
+        self.assertEqual((lines, e.code), (["spec-check: the project's repo list was not checked (no Linear key)", *want], we.code))
 
     def test_a_task_whose_test_is_a_verify_check_runs_the_whole_suite_and_fails(self):
         d = data([task("ENG-3", "001", test="go  test ./..."), task("ENG-4", "002", test="go test ./b -run '^TestB'")])
@@ -702,12 +702,18 @@ def payload(*issues):
     return data(list(issues))
 
 
+def at_head(objects=None):
+    """spec-check with git's answer to what each path is at HEAD of another repo faked: {(checkout, path): "blob" or "tree"}."""
+    return mock.patch.object(fc.fc_spec, "kind_at", side_effect=lambda repo, path: (objects or {}).get((str(repo), path)))
+
+
 class RepoRules(unittest.TestCase):
     """spec-check against the Linear project's `## Repos` list: each task names a listed repo checked out here, and the cross-task
     rules hold within each repo, since two repos never share a file, a stack or a run wave."""
 
     def run_spec(self, *issues, repos=KNOWN, bases=None):
-        return fc.fc_spec.spec_check(payload(*issues), repos=repos, bases=bases or {})
+        with at_head():
+            return fc.fc_spec.spec_check(payload(*issues), repos=repos, bases=bases or {})
 
     def gaps_of(self, *issues, repos=KNOWN, bases=None):
         return {ident: gaps for ok, ident, level, gaps in self.run_spec(*issues, repos=repos, bases=bases) if level == "task"}
@@ -742,17 +748,45 @@ class RepoRules(unittest.TestCase):
         self.assertIn("two tasks of acme/web own the same file (they must be one task, or one must be `after:` the other): src/index.ts: 001, 002", got)
 
     def test_a_delete_path_missing_from_the_other_repo_fails(self):
-        # /r/web is not a directory here, so it holds no old.ts
+        # acme/web at /r/web holds no old.ts at its HEAD
         self.assertIn("`delete:` old.ts is not in acme/web", self.gaps_of(issue("ENG-1", "001", repo="acme/web", delete="old.ts"))["ENG-1"])
 
-    def test_delete_and_plain_reads_paths_are_looked_for_in_the_other_repos_checkout(self):
-        web = Path(tempfile.mkdtemp())
-        (web / "old.ts").write_text("x")
-        (web / "lib").mkdir()
-        (web / "lib" / "api.ts").write_text("x")
-        here = KNOWN._replace(paths={**KNOWN.paths, "acme/web": str(web)})
-        t = issue("ENG-1", "001", repo="acme/web", delete="old.ts, gone.ts", reads="lib/api.ts, HEAD~1:was.ts, lib/none.ts")
-        self.assertEqual(self.gaps_of(t, repos=here)["ENG-1"], ["`delete:` gone.ts is not in acme/web", "`reads:` lib/none.ts is not in acme/web"])
+    def test_delete_and_plain_reads_paths_must_be_at_the_head_of_the_other_repo(self):
+        # what the working tree holds counts for nothing: the other checks read that repo at HEAD, and `run` deletes with `git rm -r`, so a
+        # `delete:` may name a directory where a `reads:` must name a file
+        head = {("/r/web", "old.ts"): "blob", ("/r/web", "lib"): "tree", ("/r/web", "lib/api.ts"): "blob"}
+        t = issue("ENG-1", "001", repo="acme/web", delete="old.ts, lib/, gone.ts", reads="lib/api.ts, HEAD~1:was.ts, lib, lib/none.ts")
+        with at_head(head):
+            got = fc.fc_spec.spec_check(payload(t), repos=KNOWN, bases={})
+        self.assertEqual(next(g for ok, i, level, g in got if level == "task"),
+                         ["`delete:` gone.ts is not in acme/web", "`reads:` lib is not in acme/web", "`reads:` lib/none.ts is not in acme/web"])
+
+    def test_kind_at_asks_git_what_the_path_is_at_head(self):
+        answers = {"HEAD:a.py": (0, "blob\n"), "HEAD:lib": (0, "tree\n")}
+        sh = lambda argv, cwd, check=True: subprocess.CompletedProcess(argv, *(answers.get(argv[-1]) or (128,  "")), "")
+        with mock.patch.object(fc.fc_core, "sh", side_effect=sh) as asked:
+            self.assertEqual([fc.fc_spec.kind_at("/r/web", p) for p in ("a.py", "lib", "none.py")], ["blob", "tree", None])
+        self.assertEqual(asked.call_args_list[0].args, (["git", "cat-file", "-t", "HEAD:a.py"], "/r/web"))
+
+    def test_a_task_with_an_unusable_repo_is_checked_with_this_repos_tasks(self):
+        for bad in ({}, {"repo": "acme/other"}, {"repo": "acme/engine"}):
+            mine = issue("ENG-1", "001", repo="acme/api", files="src/index.ts")
+            got = self.feature_gaps(mine, issue("ENG-2", "002", files="src/index.ts", **bad))
+            self.assertTrue(has(got, "two tasks own the same file (they must be one task, or one must be `after:` the other): src/index.ts: 001, 002"), (bad, got))
+            chain = [mine, issue("ENG-2", "002", ["ENG-1"], **bad), issue("ENG-3", "003", ["ENG-2"], repo="acme/api")]
+            self.assertIn("serial chain: 3 tasks run in 3 waves, mostly one after another", self.feature_gaps(*chain), bad)
+
+    def test_a_repo_with_no_name_has_no_task_of_its_own_by_name(self):
+        nameless = KNOWN._replace(own=None)
+        got = self.gaps_of(issue("ENG-1", "001", repo="acme/api", files="src/index.ts"), issue("ENG-2", "002", repo="acme/web", files="src/index.ts"), repos=nameless)
+        self.assertEqual(got, {"ENG-1": [], "ENG-2": []})  # acme/api is another listed repo checked out here, so the two never clash
+        both = [issue("ENG-1", "001", repo="acme/api", files="src/index.ts"), issue("ENG-2", "002", repo="acme/api", files="src/index.ts")]
+        self.assertTrue(has(self.feature_gaps(*both, repos=nameless), "two tasks of acme/api own the same file"))
+        self.assertIn("no `repo:`: name one of acme/api, acme/web, acme/engine", self.gaps_of(issue("ENG-1", "001"), repos=nameless)["ENG-1"])
+
+    def test_a_blocked_by_from_a_task_with_an_unusable_repo_to_another_repos_task_is_no_after(self):
+        got = self.gaps_of(issue("ENG-1", "001", repo="acme/web"), issue("ENG-2", "002", ["ENG-1"], kind="toolchain"))
+        self.assertFalse(has(got["ENG-2"], "drop its `after:`"), got)
 
     def test_a_blocked_by_across_repos_is_no_after(self):
         # it holds the task until the other repo's lands and never stacks: a toolchain task may have one, and it chains no wave
@@ -775,12 +809,13 @@ class RepoRules(unittest.TestCase):
         py = issue("ENG-1", "001", repo="acme/web", files="lib.py")
         user = issue("ENG-2", "002", repo="acme/web", crit="- calls `lib.thing`")
         self.assertTrue(has(self.gaps_of(py, user)["ENG-2"], "add `after: 001`"))
-        on_web = {"acme/web": (lambda path, name: (path, name) == ("lib.py", "thing"), None)}
+        on_web = {"acme/web": lambda path, name: (path, name) == ("lib.py", "thing")}
         self.assertEqual(self.gaps_of(py, user, bases=on_web)["ENG-2"], [])
 
     def test_a_verify_check_as_test_fails_only_this_repos_task(self):
-        got = {i: g for ok, i, level, g in fc.fc_spec.spec_check(payload(issue("ENG-1", "001", repo="acme/api", test="go test ./..."), issue("ENG-2", "002", repo="acme/web", test="go test ./...")),
-                                                                 checks=["go test ./..."], repos=KNOWN, bases={}) if level == "task"}
+        with at_head():
+            got = {i: g for ok, i, level, g in fc.fc_spec.spec_check(payload(issue("ENG-1", "001", repo="acme/api", test="go test ./..."), issue("ENG-2", "002", repo="acme/web", test="go test ./...")),
+                                                                     checks=["go test ./..."], repos=KNOWN, bases={}) if level == "task"}
         self.assertTrue(has(got["ENG-1"], "is the verify check"))
         self.assertEqual(got["ENG-2"], [])
 
@@ -796,9 +831,16 @@ class RepoRulesCli(unittest.TestCase):
         self.proj = self.repo / ".compose" / "p"
         self.proj.mkdir(parents=True)
         (self.proj / "linear.json").write_text('{"feature": "ENG-1"}')
-        (self.repo / ".compose" / "linear.json").write_text(json.dumps({"project": "https://linear.app/acme/project/p-1", "team": "Eng"}))
-        d = payload(issue("ENG-3", "001", repo="acme/api"), issue("ENG-4", "002", repo="acme/web", delete="old.ts"), issue("ENG-5", "003"))
-        fc.fc_tasks.sync_tasks(self.proj, d, repo="acme/api")
+        self.link({"project": "https://linear.app/acme/project/p-1", "team": "Eng"})
+        self.sync("acme/api")
+
+    def link(self, link):
+        (self.repo / ".compose" / "linear.json").write_text(json.dumps(link))
+
+    def sync(self, repo):
+        d = payload(issue("ENG-3", "001", repo="acme/api"), issue("ENG-4", "002", repo="acme/web", delete="old.ts", files="src/index.ts"),
+                    issue("ENG-5", "003"), issue("ENG-6", "004", repo="ACME/API", files="src/index.ts"))
+        fc.fc_tasks.sync_tasks(self.proj, d, repo=repo)
 
     def spec_check(self, key="k", stdin=None):
         calls = []
@@ -807,7 +849,7 @@ class RepoRulesCli(unittest.TestCase):
                 mock.patch.object(fc.fc_repolist, "ensure", side_effect=lambda r: calls.append(("ensure", str(r)))), \
                 mock.patch.object(fc.fc_repolist, "known", side_effect=lambda r: calls.append(("known", str(r))) or KNOWN), \
                 mock.patch.object(fc.fc_linear, "refresh_tasks", side_effect=lambda *a, **kw: calls.append(("refresh",))), \
-                mock.patch.object(fc.fc_spec, "base_definitions", side_effect=defs), mock.patch.object(fc.fc_spec, "base_scripts", return_value=lambda p, n: True):
+                mock.patch.object(fc.fc_spec, "base_definitions", side_effect=defs), mock.patch.object(fc.fc_spec, "base_scripts", return_value=lambda p, n: True), at_head():
             lines, e = SpecCheck.run_cli(self, stdin, repo=str(self.repo), project="p")
         return lines, e, calls
 
@@ -820,9 +862,33 @@ class RepoRulesCli(unittest.TestCase):
         self.assertIn("FAIL ENG-4 task: `delete:` old.ts is not in acme/web", lines)  # set aside as another repo's, and checked still
         self.assertIn("FAIL ENG-5 task: no `repo:`: name one of acme/api, acme/web, acme/engine", lines)
 
-    def test_without_a_linear_key_or_on_stdin_no_list_is_read_and_no_repo_rule_runs(self):
+    def test_without_the_list_it_says_so_checks_only_this_repos_tasks_and_holds_them_to_this_repos_name(self):
+        project = "https://linear.app/acme/project/p-1"
+        self.link({"project": project, "team": "Eng", "repo": "acme/api", "listed": project})
         lines, e, calls = self.spec_check(key=None)
-        self.assertEqual(([c for c in calls if c[0] in ("ensure", "known")], e.code), ([], 0))
-        self.assertIn("PASS ENG-5 task", lines)
+        self.assertEqual([c for c in calls if c[0] in ("ensure", "known")], [])
+        self.assertEqual(lines[0], "spec-check: the project's repo list was not checked (no Linear key)")
+        self.assertEqual(sum("repo list" in l for l in lines), 1)
+        self.assertFalse(any("ENG-4" in l for l in lines), lines)  # set aside as acme/web's: checked with its own repo's tasks only
+        self.assertIn("PASS ENG-3 task", lines)
+        self.assertIn("PASS ENG-6 task", lines)
+        self.assertIn("PASS ENG-1 feature", lines)  # ENG-4's src/index.ts is acme/web's, so ENG-6 owns it alone here
+        self.assertIn("FAIL ENG-5 task: no `repo:`: name acme/api", lines)
+        self.assertEqual(e.code, 1)
+        self.sync(None)  # synced before the project listed this repo: every task is kept
+        lines, e, calls = self.spec_check(key=None)
+        self.assertIn("FAIL ENG-4 task: `repo: acme/web` is not in the project's Repos (acme/api)", lines)
+
+    def test_with_no_project_linked_or_no_recorded_name_only_the_line_and_this_repos_tasks(self):
+        self.link({"team": "Eng"})
+        lines, e, calls = self.spec_check()
+        self.assertEqual([c for c in calls if c[0] in ("ensure", "known")], [])
+        self.assertEqual(lines[0], "spec-check: the project's repo list was not checked (no Linear project linked)")
+        self.assertFalse(any("ENG-4" in l for l in lines), lines)
+        self.assertIn("PASS ENG-5 task", lines)  # no name to hold it to
+        self.assertEqual(e.code, 0)
+
+    def test_on_stdin_no_list_is_read_and_nothing_is_said(self):
         lines, e, calls = self.spec_check(stdin=json.dumps(payload(issue("ENG-5", "003"))))
         self.assertEqual(([c for c in calls if c[0] in ("ensure", "known")], e.code), ([], 0))
+        self.assertFalse(any("repo list" in l for l in lines), lines)
