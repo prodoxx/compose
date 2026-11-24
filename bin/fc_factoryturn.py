@@ -57,9 +57,10 @@ def pick(entries, plan, state, free, judge, own=None):
     """Walk the entries in order and start up to free ready stories, and find the first ticket to offer for planning: planning goes on
     while stories build, and reaches stories whose feature waits on another, which are never started. judge(id, write=True) is the
     caller's readiness check; the caller binds the repo. Only a fresh verdict counts toward JUDGE_LIMIT: a kept one costs nothing.
-    With own (this repo's listed name), a story to build whose tasks name any other repo is built by hand in each: it goes in "spans"
-    as (id, repos), takes no slot and is never offered. "judged" holds every story a verdict came back for, so a spans line is said again
-    only after the story was judged and no longer spans."""
+    With own (this repo's name), a story to build whose tasks name no repo but others is theirs: their own factory builds it, so here it
+    is skipped and said nothing about. One whose tasks name this repo and another is built by hand, each repo its own part: it goes in
+    "spans" as (id, repos). Neither takes a slot or is offered. "judged" holds every story a verdict came back for, so a spans line is
+    said again only after the story was judged and no longer spans."""
     flying = set(in_flight(plan, state))
     out = {"picks": [], "ready_waiting": False, "offer": None, "failed": [], "specced": set(), "busy": False, "spans": [], "judged": set()}
     candidate, judged = None, 0
@@ -91,6 +92,8 @@ def pick(entries, plan, state, free, judge, own=None):
             out["specced"].add(e["id"])
         kind = None if e["waits_on"] else classify(labels, r)
         repos = r.get("repos") or []
+        if kind == "build" and own and repos and not any(fc_repos.same(n, own) for n in repos):
+            continue
         if kind == "build" and own and any(not fc_repos.same(n, own) for n in repos):
             out["spans"].append((e["id"], repos))
         elif kind:
@@ -537,7 +540,8 @@ def _turn(repo, state, now, stopping, saved, out):
         del said[key]
     for ident, repos in got["spans"]:
         fc_factorystate.say_once(state, f"spans:{ident}", f"event factory=spans story={ident} repos={','.join(repos)}  "
-                                 "(its tasks are in more than this repo: build it by hand, compose init, run and verify in each)", out)
+                                 "(its tasks are in more than this repo: build this repo's part by hand, compose init, run and verify here; "
+                                 "each other repo builds its own part)", out)
     if not got["busy"]:  # Linear is rate limited: no judge runs until it passes
         got["failed"] += _move_up(repo, plan, entries, got["specced"], state, judge, out)
     live = {i for i, _ in got["failed"]}
