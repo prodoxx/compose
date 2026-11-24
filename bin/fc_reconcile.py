@@ -2,7 +2,7 @@
 import datetime, json, sys
 from pathlib import Path
 
-import fc_core, fc_config, fc_crew, fc_herdr, fc_fleet, fc_layout, fc_linear, fc_linear_cmd, fc_tasks
+import fc_core, fc_config, fc_crew, fc_herdr, fc_fleet, fc_labels, fc_layout, fc_linear, fc_linear_cmd, fc_tasks
 
 SORTS = ("keep", "cancel", "merge", "verify")
 LABELS = ("Epic", "Feature", "Story")
@@ -11,7 +11,7 @@ HEADS = {"cancel": "Canceled in the {project} reconcile ({date}), on the product
          "merge": "Canceled in the {project} reconcile ({date}), on the product owner's go: merged into {id} ({title}).",
          "drop-ready": "Ready label removed in the {project} reconcile ({date}): it needs shaping before it can be ready.",
          "title": 'Renamed in the {project} reconcile ({date}) from "{old}".'}
-TEAM_QUERY = "query($id: String!) { team(id: $id) { name states { nodes { id name } } labels(first: 250) { nodes { id name } } } }"
+TEAM_QUERY = "query($id: String!) { team(id: $id) { name states { nodes { id name } } %s } }" % fc_labels.TEAM_LABELS
 CREATE_ISSUE = "mutation($in: IssueCreateInput!) { issueCreate(input: $in) { issue { id identifier } } }"
 UPDATE_ISSUE = "mutation($id: String!, $in: IssueUpdateInput!) { issueUpdate(id: $id, input: $in) { success } }"
 CREATE_LABEL = "mutation($name: String!, $team: String!) { issueLabelCreate(input: {name: $name, teamId: $team}) { issueLabel { id name } } }"
@@ -304,15 +304,19 @@ def comment_for(stored, act, today):
     return head + ("\n" + reason if reason else "")
 
 class Team:
-    """The project's team labels and states, read once; a label the cleanup needs is created the first time it is asked for."""
-    def __init__(self, team_id):
-        self.id, self.team = team_id, fc_linear.linear_gql(TEAM_QUERY, {"id": team_id})["team"]
+    """The project's team labels and states, read once; a label the cleanup needs resolves as `compose linear` resolves it
+    (fc_labels: the `Type` group's child first), and a bare name the team lacks is created the first time it is asked for."""
+    def __init__(self, team_id, types=None):
+        self.id, self.team, self.types = team_id, fc_linear.linear_gql(TEAM_QUERY, {"id": team_id})["team"], types
 
     def label(self, name):
-        found = next((l for l in self.team["labels"]["nodes"] if l["name"].lower() == name.lower()), None)
-        if not found:
-            found = fc_linear.linear_gql(CREATE_LABEL, {"name": name, "team": self.id})["issueLabelCreate"]["issueLabel"]
-            self.team["labels"]["nodes"].append({"id": found["id"], "name": name})
+        try:
+            return fc_labels.resolve(self.team["labels"]["nodes"], name, self.types, self.team["name"])[0]["id"]
+        except fc_labels.Missing as e:
+            if e.create != name or fc_labels.SEP in name:  # a group's child or a mapped type is made in Linear, never as a loose label
+                raise RuntimeError(str(e)) from e
+        found = fc_linear.linear_gql(CREATE_LABEL, {"name": name, "team": self.id})["issueLabelCreate"]["issueLabel"]
+        self.team["labels"]["nodes"].append({"id": found["id"], "name": name})
         return found["id"]
 
 def stale(issue, was):
@@ -361,7 +365,7 @@ def create_ticket(stored, n, team):
     inp["parentId"] = fc_linear.linear_issue(parent)["id"]
     stored["created"][n["key"]] = fc_linear.linear_gql(CREATE_ISSUE, {"in": inp})["issueCreate"]["issue"]["identifier"]
 
-def apply_sheet(stored, path, quote):
+def apply_sheet(stored, path, quote, types=None):
     """Write every action not yet applied, saving the sheet after each success; one line per action."""
     acts = [a for a in actions(stored) if a["key"] not in stored["applied"]]
     notes = [f"{k} already filed as {stored['created'][k]}; edit it in Linear" for k in stored.pop("changed_after_filing", [])]
@@ -371,7 +375,7 @@ def apply_sheet(stored, path, quote):
     stored["go"].append({"quote": quote, "at": datetime.datetime.now().isoformat(timespec="seconds")})
     save(path, stored)
     stored["skipped"], stored["steps"] = {}, stored.get("steps", {})
-    team, today, lines = Team(stored["project"]["team"]), datetime.date.today().isoformat(), notes
+    team, today, lines = Team(stored["project"]["team"], types), datetime.date.today().isoformat(), notes
     for act in acts:
         try:
             why = do_action(stored, act, team, today, path)
@@ -406,7 +410,7 @@ def verb_apply(a):
     stored = read_stored(project)
     if not stored:
         sys.exit(f"no checked reconcile for {project['name']}: compose reconcile check --file <sheet> first")
-    lines = apply_sheet(stored, sheet_path(project["id"]), go)
+    lines = apply_sheet(stored, sheet_path(project["id"]), go, fc_labels.types_map(a.repo))
     if not lines and all(x["key"] in stored["applied"] for x in actions(stored)):
         print("nothing left to apply")
         return

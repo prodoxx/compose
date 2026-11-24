@@ -324,7 +324,7 @@ class LinearList(unittest.TestCase):
         self.assertEqual(sent[0]["f"], {"project": {"id": {"eq": "p1"}}, "parent": {"id": {"eq": "ENG-9"}}, "searchableContent": {"contains": "cart"}})
 
 class LinearCreate(unittest.TestCase):
-    TEAM, CREATE = "team(id: $id) { name states { nodes { id name } } labels(first: 250) { nodes { id name } } }", "issueCreate(input: $in) { issue { id identifier } }"
+    TEAM, CREATE = "team(id: $id) { name states { nodes { id name } } labels(first: 250) { nodes { id name isGroup groupType parent { id name } } } }", "issueCreate(input: $in) { issue { id identifier } }"
     args, fails = LinearProject.args, LinearProject.fails
 
     def setUp(self):
@@ -467,7 +467,7 @@ class LinearCreate(unittest.TestCase):
 
 
 class LinearUpdate(unittest.TestCase):
-    READ, UPDATE = "issue(id: $id) { id identifier description labels { nodes { name } } project { id name } team { name states { nodes { id name } } labels(first: 250) { nodes { id name } } } }", "issueUpdate(id: $id, input: $in) { success }"
+    READ, UPDATE = "issue(id: $id) { id identifier description labels { nodes { id name parent { id name } } } project { id name } team { name states { nodes { id name } } labels(first: 250) { nodes { id name isGroup groupType parent { id name } } } } }", "issueUpdate(id: $id, input: $in) { success }"
     args, fails = LinearProject.args, LinearProject.fails
 
     def setUp(self):
@@ -727,6 +727,152 @@ class LinearUpdate(unittest.TestCase):
         self.assertEqual(self.update(title="T", any_project=True)[0], {"title": "T"})
 
 
+class LinearTypeLabels(unittest.TestCase):
+    """compose linear finds a type in either shape a workspace keeps it: a standalone label, or a child of the `Type` group (#494)."""
+    UPDATE = "issueUpdate(id: $id, input: $in) { success }"
+    args, fails = LinearProject.args, LinearProject.fails
+    TYPE = {"id": "g-type", "name": "Type", "isGroup": True, "groupType": "singleSelect", "parent": None}
+    GROUP = {"id": "g-type", "name": "Type"}
+
+    def setUp(self):
+        self.repo = Path(tempfile.mkdtemp()).resolve()
+        (self.repo / ".compose").mkdir()
+        self.link({})
+        self.calls, self.labels, self.have = [], [{"id": "bug", "name": "Bug", "isGroup": False, "parent": None}], []
+        tty = mock.Mock(**{"isatty.return_value": True, "read.side_effect": AssertionError("read stdin from a terminal")})
+        for mod, name, value in ((fc.fc_config, "LINEAR_KEY", KEY), (fc.fc_linear, "linear_gql", self.gql), (sys, "stdin", tty), (fc.fc_linear_cmd, "await_write", mock.Mock()),
+                                 (fc.fc_core, "worktree_branches", lambda repo: [(self.repo, "main")])):
+            p = mock.patch.object(mod, name, value); p.start(); self.addCleanup(p.stop)
+
+    def link(self, extra):
+        (self.repo / ".compose" / "linear.json").write_text(json.dumps({"project": URL, "team": "Engineering", **extra}))
+
+    def group(self, *names):
+        self.labels.append(self.TYPE)
+        self.labels += [{"id": f"type-{n.lower()}", "name": n, "isGroup": False, "parent": self.GROUP} for n in names]
+
+    def loose(self, *names):
+        self.labels += [{"id": n.lower(), "name": n, "isGroup": False, "parent": None} for n in names]
+
+    def gql(self, query, variables):
+        self.calls.append((" ".join(query.split()), variables))
+        team = {"name": "Engineering", "states": {"nodes": []}, "labels": {"nodes": list(self.labels)}}
+        if "projects(" in query:
+            return {"projects": {"nodes": [{"id": "p1", "name": "Shop", "url": URL, "teams": {"nodes": [{"id": "t1", "name": "Engineering", "key": "ENG"}]}}]}}
+        if "issueCreate" in query:
+            return {"issueCreate": {"issue": {"id": "new-id", "identifier": "ENG-12"}}}
+        if "issueUpdate" in query or "issueLabelCreate" in query:
+            return {}
+        if "issue(" in query:
+            return {"issue": {"id": "iid", "identifier": "ENG-7", "description": "# Cart\n\n## Plan\n\nold\n", "project": {"id": "p1", "name": "Shop"},
+                              "labels": {"nodes": [{k: v for k, v in l.items() if k in ("id", "name", "parent")} for l in self.labels if l["id"] in self.have]}, "team": team}}
+        return {"team": team}
+
+    def run_verb(self, verb, *target, **kw):
+        self.calls.clear()
+        with mock.patch.object(fc.fc_linear, "linear_blocked_by", return_value=[]), redirect_stdout(io.StringIO()) as out:
+            getattr(fc.fc_linear_cmd, f"verb_{verb}")(self.args(verb, *target, **kw))
+        return out.getvalue().strip().splitlines()
+
+    def created(self, *names):
+        out = self.run_verb("create", title="Fix it", label=list(names))
+        return next(v["in"]["labelIds"] for q, v in self.calls if "issueCreate" in q), out
+
+    def updated(self, **kw):
+        out = self.run_verb("update", "ENG-7", **kw)
+        return next((v["in"] for q, v in self.calls if self.UPDATE in q), None), out
+
+    def test_a_group_with_the_child_and_no_standalone_label_writes_the_child_and_says_so(self):
+        self.group("Story", "Feature")
+        self.assertEqual(self.created("Story", "bug"), (["type-story", "bug"], ["label Story: Type > Story", "created ENG-12"]))
+
+    def test_the_grouped_label_wins_over_a_standalone_one_of_the_same_name(self):
+        self.loose("Story"); self.group("Story")
+        self.assertEqual(self.created("story")[0], ["type-story"])
+
+    def test_a_type_the_group_lacks_falls_back_to_the_standalone_label(self):
+        self.group("Story"); self.loose("Epic", "Task")
+        self.assertEqual(self.created("Epic", "task"), (["epic", "task"], ["created ENG-12"]))
+
+    def test_without_a_group_the_lookup_is_unchanged(self):
+        self.loose("Story", "Feature"); self.have = ["feature"]
+        self.assertEqual(self.created("Story"), (["story"], ["created ENG-12"]))
+        self.assertEqual(self.updated(add_label=["Story"]), ({"addedLabelIds": ["story"]}, ["updated ENG-7"]))  # no group: nothing is single-select
+        self.assertEqual(self.fails(fc.fc_linear_cmd.verb_create, self.args("create", title="Fix it", label=["Epic"])),
+                         (1, "team Engineering has no label 'Epic'; compose linear labels --create Epic makes it"))
+
+    def test_a_qualified_name_is_exactly_that_child_and_a_missing_one_names_the_create_line(self):
+        self.loose("Story"); self.group("Story")
+        self.assertEqual(self.created("Type > Story"), (["type-story"], ["created ENG-12"]))
+        self.assertEqual(self.fails(fc.fc_linear_cmd.verb_create, self.args("create", title="Fix it", label=["type>epic"])),
+                         (1, 'team Engineering has no label \'type > epic\'; compose linear labels --create "type > epic" makes it'))
+
+    def test_the_types_map_names_the_label_a_type_is_written_as(self):
+        self.loose("Story", "Epic"); self.group("Story", "Tech Task")
+        self.link({"types": {"task": "Type > Tech Task", "story": "Story", "epic": None}})  # a bare name is the standalone label on purpose
+        self.assertEqual(self.created("Task", "Story", "Epic"), (["type-tech task", "story", "epic"], ["label Task: Type > Tech Task (types.task in .compose/linear.json)", "created ENG-12"]))
+        self.link({"types": {"feature": "Type > Feature"}})
+        self.assertEqual(self.fails(fc.fc_linear_cmd.verb_create, self.args("create", title="Fix it", label=["Feature"])),
+                         (1, "team Engineering has no label 'Type > Feature', which types.feature in .compose/linear.json names for Feature; "
+                             'compose linear labels --create "Type > Feature" makes it'))
+        self.link({"types": ["task"]})
+        self.assertIn('maps a type to a label name or null', self.fails(fc.fc_linear_cmd.verb_create, self.args("create", title="Fix it", label=["Story"]))[1])
+
+    def test_setting_a_type_drops_the_old_type_child_and_the_old_standalone_type_in_the_same_update(self):
+        self.loose("Feature", "Story"); self.group("Story", "Feature"); self.have = ["type-feature", "feature", "bug"]
+        sent, out = self.updated(add_label=["Story"])
+        self.assertEqual(sent["addedLabelIds"], ["type-story"]); self.assertCountEqual(sent["removedLabelIds"], ["type-feature", "feature"])
+        self.assertCountEqual(out, ["label Story: Type > Story", "drops Type > Feature: the issue takes one type", "drops Feature: the issue takes one type", "updated ENG-7"])
+        self.have = ["story"]  # labeled before the team moved to the group: the switch takes the loose label off
+        self.assertEqual(self.updated(add_label=["Story"])[0], {"addedLabelIds": ["type-story"], "removedLabelIds": ["story"]})
+        self.have = ["type-story"]  # a type the group lacks still replaces the issue's Type child
+        self.loose("Epic")
+        self.assertEqual(self.updated(add_label=["Epic"])[0], {"addedLabelIds": ["epic"], "removedLabelIds": ["type-story"]})
+
+    def test_drop_label_takes_off_either_shape_and_a_whole_label_list_is_written_as_given(self):
+        self.loose("Story"); self.group("Story", "Feature"); self.have = ["type-feature"]
+        self.assertEqual(self.updated(drop_label=["Story"])[0], {"removedLabelIds": ["story", "type-story"]})
+        self.assertEqual(self.updated(drop_label=["Type > Story"])[0], {"removedLabelIds": ["type-story"]})
+        self.assertEqual(self.updated(drop_label=["Feature"], add_label=["Story"])[0], {"removedLabelIds": ["type-feature"], "addedLabelIds": ["type-story"]})
+        self.assertEqual(self.updated(label=["Story", "Bug"])[0], {"labelIds": ["type-story", "bug"]})  # --label replaces the list: nothing else dropped
+
+    def test_an_issue_carrying_either_shape_is_read_as_its_type(self):
+        log = fc_plan.LOG_HEADING
+        for have in (["story"], ["type-story"]):
+            self.labels = [{"id": "bug", "name": "Bug", "isGroup": False, "parent": None}]; self.loose("Story"); self.group("Story"); self.have = have
+            self.assertIn(log, self.updated(section="## Intent", file=str(self.write("Keep it.")))[0]["description"])
+        self.assertEqual(fc.fc_linear_cmd.issue_labels({"labels": {"nodes": [{"name": "Story", "parent": self.GROUP}]}}), ["Story"])
+
+    def write(self, text):
+        (path := self.repo / "body.md").write_text(text)
+        return path
+
+    def test_labels_lists_children_qualified_and_create_never_duplicates_a_type_child(self):
+        self.loose("Story"); self.group("Feature")
+        self.assertEqual(self.run_verb("labels"), ["Bug", "Story", "Type > Feature"])
+        self.assertEqual(self.fails(fc.fc_linear_cmd.verb_labels, self.args("labels", create="feature")),
+                         (1, "team Engineering already has label 'Type > Feature': nothing created"))
+        self.assertEqual(self.run_verb("labels", create="Type > Epic"), ["created label Type > Epic"])
+        self.assertEqual([v for q, v in self.calls if "issueLabelCreate" in q], [{"in": {"name": "Epic", "teamId": "t1", "parentId": "g-type"}}])
+        self.assertEqual(self.fails(fc.fc_linear_cmd.verb_labels, self.args("labels", create="Kind > Epic")),
+                         (1, "team Engineering has no label group 'Kind': make the group in Linear first"))
+
+    def test_list_by_a_qualified_label_filters_on_its_group(self):
+        f = fc.fc_linear_cmd.fc_labels.list_filter
+        self.assertEqual(f(["Story", "bug"]), {"name": {"in": ["Story", "bug"]}})
+        self.assertEqual(f(["Type > Story", "bug"]), {"or": [{"name": {"in": ["bug"]}}, {"and": [{"name": {"eqIgnoreCase": "Story"}}, {"parent": {"name": {"eqIgnoreCase": "Type"}}}]}]})
+        self.assertEqual(f(["task"], {"task": "Type > Tech Task"}), {"or": [{"and": [{"name": {"eqIgnoreCase": "Tech Task"}}, {"parent": {"name": {"eqIgnoreCase": "Type"}}}]}]})
+
+    def test_a_reconcile_labels_new_tickets_with_the_type_child_and_creates_no_loose_copy(self):
+        import fc_reconcile
+        self.group("Story")
+        team = fc_reconcile.Team("t1")
+        self.assertEqual(team.label("Story"), "type-story")
+        with self.assertRaisesRegex(RuntimeError, "no label 'Type > Epic'"):
+            team.label("Type > Epic")
+        self.assertEqual([q for q, _ in self.calls if "issueLabelCreate" in q], [])
+
+
 class LinearStaleRead(unittest.TestCase):
     """Linear serves an issue's description from before the last write for a few seconds: a second write must not start from that read."""
     args, fails = LinearProject.args, LinearProject.fails
@@ -773,8 +919,8 @@ class LinearStaleRead(unittest.TestCase):
         self.assertEqual(10 ** 6 - self.stale, 7)  # the reads back off: seven requests over the wait, not one every half second
 
 class LinearCommentLabelsDoc(unittest.TestCase):
-    ISSUE, LABELS, DOC = "issue(id: $id) { id identifier project { id name } }", "team(id: $id) { labels(first: 250) { nodes { id name } } }", "document(id: $id) { title content url }"
-    NEW_LABEL, NEW_DOC, DOC_URL = "issueLabelCreate(input: {name: $name, teamId: $team}) { success }", "documentCreate(input: $in) { document { url } }", "https://linear.app/acme/document/research-d1"
+    ISSUE, LABELS, DOC = "issue(id: $id) { id identifier project { id name } }", "team(id: $id) { labels(first: 250) { nodes { id name isGroup groupType parent { id name } } } }", "document(id: $id) { title content url }"
+    NEW_LABEL, NEW_DOC, DOC_URL = "issueLabelCreate(input: $in) { success }", "documentCreate(input: $in) { document { url } }", "https://linear.app/acme/document/research-d1"
     args, fails = LinearProject.args, LinearProject.fails
 
     def setUp(self):
@@ -838,7 +984,7 @@ class LinearCommentLabelsDoc(unittest.TestCase):
 
     def test_labels_lists_the_repo_team_sorted_or_creates_one(self):
         self.assertEqual((self.run_verb("labels"), self.sent(self.LABELS)), (["bug", "perf", "ui"], [{"id": "t1"}]))
-        self.assertEqual((self.run_verb("labels", create="docs")[-1], self.sent(self.NEW_LABEL)), ("created label docs", [{"name": "docs", "team": "t1"}]))
+        self.assertEqual((self.run_verb("labels", create="docs")[-1], self.sent(self.NEW_LABEL)), ("created label docs", [{"in": {"name": "docs", "teamId": "t1"}}]))
 
     def test_doc_create_sends_the_body_as_read_and_get_prints_title_then_content(self):
         self.assertEqual(self.run_verb("doc", "create", title="Research", body="Findings.\n"), [self.DOC_URL])

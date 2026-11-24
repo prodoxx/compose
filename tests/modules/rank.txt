@@ -14,6 +14,7 @@ fc_transcript
 fc_snapshot
 fc_compactlog
 fc_linearapi
+fc_labels
 fc_load
 fc_history
 fc_tiers

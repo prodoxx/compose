@@ -46,6 +46,7 @@ Stop and ask the user, never guess, when:
 ### 0i. The levels: project, epic, feature, story, task
 Linear has projects, issues, sub-issues, and labels; compose maps five levels onto them.
 Labels `Epic`, `Feature`, `Story`, `Task`, `Ready`, and `deep-dive` (a deep dive, 0b) live on the Engineering team (`Feature` exists; create the others once with `compose linear labels --create <name>` if `compose linear labels` does not show them).
+A team that keeps its types in a `Type` label group (`compose linear labels` lists `Type > Story`) needs no loose copies: a bare `Story` writes the group's child when it has one, else the standalone label, setting a type drops the issue's old one, and `"Type > Story"` names the child exactly.
 `Ready` marks a story or feature that can start now, and `compose ready` sets it.
 
 | level | in Linear | in compose | holds |

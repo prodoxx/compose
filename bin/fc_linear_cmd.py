@@ -2,7 +2,7 @@
 import hashlib, json, os, re, select, sys, time, urllib.parse
 from pathlib import Path
 
-import fc_core, fc_config, fc_layout, fc_linear, fc_plan, fc_tasks
+import fc_core, fc_config, fc_labels, fc_layout, fc_linear, fc_plan, fc_tasks
 
 
 def issue_line(issue):
@@ -59,16 +59,29 @@ def in_scope(item, a, name=None):
     if (item["project"] or {}).get("id") != p["id"]:
         sys.exit(f"{name or item['identifier']} is not in project {p['name']}; pass --any-project to use it")
 
-def label_ids(team, names):
-    ids = []
-    for name in names:
-        l = next((l for l in team["labels"]["nodes"] if l["name"].lower() == name.lower()), None)
-        if not l:
-            sys.exit(f"team {team['name']} has no label '{name}'; compose linear labels --create {name} makes it")
-        ids.append(l["id"])
-    return ids
+def missing(e):
+    """Exit with a Missing label's message and the `labels --create` line that makes it."""
+    name = f'"{e.create}"' if fc_labels.SEP in e.create else e.create
+    sys.exit(f"{e}; compose linear labels --create {name} makes it")
 
-def state_and_labels(team, a):
+def resolved(team, names, types=None):
+    """The labels `names` mean on `team` (fc_labels.resolve), printing a line for each name that resolved to another label than
+    its own: a `Type` group's child, or what the types map names. Exits naming the create line for a name the team lacks."""
+    out = []
+    for name in names:
+        try:
+            label, note = fc_labels.resolve(team["labels"]["nodes"], name, types, team["name"])
+        except fc_labels.Missing as e:
+            missing(e)
+        if note:
+            print(note)
+        out.append(label)
+    return out
+
+def label_ids(team, names, types=None):
+    return [l["id"] for l in resolved(team, names, types)]
+
+def state_and_labels(team, a, types=None):
     out = {}
     if a.state:
         s = next((s for s in team["states"]["nodes"] if s["name"].lower() == a.state.lower()), None)
@@ -76,20 +89,25 @@ def state_and_labels(team, a):
             sys.exit(f"team {team['name']} has no state '{a.state}'")
         out["stateId"] = s["id"]
     if a.label:
-        out["labelIds"] = label_ids(team, a.label)
+        out["labelIds"] = label_ids(team, a.label, types)
     return out
 
-def label_changes(team, a):
+def label_changes(team, a, have=(), types=None):
     """{"addedLabelIds": [...], "removedLabelIds": [...]} for --add-label and --drop-label, by the same case-insensitive lookup
-    as --label; Linear ignores dropping a label the issue lacks, so the issue's own labels are not read."""
+    as --label (fc_labels). A bare --drop-label takes off every label the name could mean; Linear ignores dropping one the issue
+    lacks. Each added label also takes off what single-select allows only one of (fc_labels.single_select) from `have`, the
+    issue's labels, in the same update, saying so."""
     if not (a.add_label or a.drop_label):
         return {}
     if a.label:
         sys.exit("update takes --label (the whole list) or --add-label/--drop-label, not both")
-    out = {}
-    for key, names in (("removedLabelIds", a.drop_label), ("addedLabelIds", a.add_label)):
-        if names:
-            out[key] = label_ids(team, names)
+    added = resolved(team, a.add_label or (), types)
+    try:
+        out, notes = fc_labels.changes(team["labels"]["nodes"], have, added, a.drop_label or (), types, team["name"])
+    except fc_labels.Missing as e:
+        missing(e)
+    for note in notes:
+        print(note)
     return out
 
 PRIORITIES = {"none": 0, "urgent": 1, "high": 2, "medium": 3, "low": 4}  # Linear's own numbers
@@ -282,7 +300,7 @@ def verb_list(a):
     if a.state:
         f["state"] = {"name": {"eqIgnoreCase": a.state}}
     if a.label:
-        f["labels"] = {"some": {"name": {"in": a.label}}}
+        f["labels"] = {"some": fc_labels.list_filter(a.label, fc_labels.types_map(a.repo))}
     query = "query($after: String, $f: IssueFilter) { issues(first: 100, after: $after, filter: $f) { pageInfo { hasNextPage endCursor } nodes { identifier title state { name } labels { nodes { name } } } } }"
     nodes, after = [], None
     while True:
@@ -334,10 +352,10 @@ def verb_create(a):
     if why := fc_core.long_title(a.title):
         sys.exit(f"create: {why}")
     p = linear_project(a.repo)
-    team = fc_linear.linear_gql("query($id: String!) { team(id: $id) { name states { nodes { id name } } labels(first: 250) { nodes { id name } } } }",
+    team = fc_linear.linear_gql("query($id: String!) { team(id: $id) { name states { nodes { id name } } %s } }" % fc_labels.TEAM_LABELS,
                                 {"id": p["team"]["id"]})["team"]
     inp = {"teamId": p["team"]["id"], "projectId": p["id"], "title": a.title, "description": fc_layout.laid_out(one_block("", read_body(a)), ids(a.label))}
-    inp.update(state_and_labels(team, a))
+    inp.update(state_and_labels(team, a, fc_labels.types_map(a.repo)))
     inp.update(priority(a))
     if a.parent:
         inp["parentId"] = fc_linear.linear_issue(a.parent)["id"]
@@ -373,16 +391,17 @@ def verb_update(a):
     if a.blocked_by is not None and (add or drop):
         sys.exit("update takes --blocked-by (the whole list) or --add-blocked-by/--drop-blocked-by, not both")
     prio = priority(a)  # a bad value refuses before the issue is read
-    issue = fc_linear.linear_gql("query($id: String!) { issue(id: $id) { id identifier description labels { nodes { name } } project { id name } team { name states { nodes { id name } } labels(first: 250) { nodes { id name } } } } }",
-                                 {"id": a.target[0]})["issue"]
+    issue = fc_linear.linear_gql("query($id: String!) { issue(id: $id) { id identifier description %s project { id name } team { name states { nodes { id name } } %s } } }"
+                                 % (fc_labels.ISSUE_LABELS, fc_labels.TEAM_LABELS), {"id": a.target[0]})["issue"]
     in_scope(issue, a)
     inp = {}
     if a.title:
         inp["title"] = a.title
     if a.parent:
         inp["parentId"] = fc_linear.linear_issue(a.parent)["id"]
-    inp.update(state_and_labels(issue["team"], a))
-    inp.update(label_changes(issue["team"], a))
+    types = fc_labels.types_map(a.repo)
+    inp.update(state_and_labels(issue["team"], a, types))
+    inp.update(label_changes(issue["team"], a, (issue.get("labels") or {}).get("nodes") or [], types))
     inp.update(prio)
     same = False
     if writes:
@@ -486,16 +505,27 @@ def verb_cancel(a):
         print(f"{issue['identifier']} is already Canceled: nothing written")
 
 def verb_labels(a):
+    """List the team's labels, a group's children as `Group > Name`, or create one: `--create "Type > Story"` under that group.
+    A label that would duplicate one the team has (the `Type` group's child of that name included) is refused."""
     p = linear_project(a.repo)
-    if a.create:
-        fc_linear.linear_gql("mutation($name: String!, $team: String!) { issueLabelCreate(input: {name: $name, teamId: $team}) { success } }",
-                             {"name": a.create, "team": p["team"]["id"]})
-        print(f"created label {a.create}")
+    nodes = fc_linear.linear_gql("query($id: String!) { team(id: $id) { %s } }" % fc_labels.TEAM_LABELS, {"id": p["team"]["id"]})["team"]["labels"]["nodes"]
+    if not a.create:
+        for name in sorted(fc_labels.qualified(l) for l in nodes if not l.get("isGroup")):
+            print(name)
         return
-    team = fc_linear.linear_gql("query($id: String!) { team(id: $id) { labels(first: 250) { nodes { id name } } } }",
-                                {"id": p["team"]["id"]})["team"]
-    for l in sorted(team["labels"]["nodes"], key=lambda l: l["name"]):
-        print(l["name"])
+    group, child = fc_labels.split(a.create)
+    if not child:
+        sys.exit("labels --create needs a name: Story, or \"Type > Story\" for a group's child")
+    if same := fc_labels.duplicate(nodes, a.create):
+        sys.exit(f"team {p['team']['name']} already has label '{fc_labels.qualified(same)}': nothing created")
+    inp, parent = {"name": child, "teamId": p["team"]["id"]}, None
+    if group:
+        parent = next((l for l in nodes if l.get("isGroup") and l["name"].lower() == group.lower()), None)
+        if not parent:
+            sys.exit(f"team {p['team']['name']} has no label group '{group}': make the group in Linear first")
+        inp["parentId"] = parent["id"]
+    fc_linear.linear_gql("mutation($in: IssueLabelCreateInput!) { issueLabelCreate(input: $in) { success } }", {"in": inp})
+    print(f"created label {fc_labels.qualified({'name': child, 'parent': parent})}")
 
 def verb_doc(a):
     if a.target == ["create"]:
