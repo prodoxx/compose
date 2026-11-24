@@ -6,7 +6,7 @@ This page draws all three and names the command or event behind every move.
 
 ## The feature
 
-A feature is one compose project, one worktree and one gh stack.
+A feature is one compose project in each repo its tasks name, each with one worktree and one gh stack.
 It starts as a brief and ends when its stack merges.
 
 ```mermaid

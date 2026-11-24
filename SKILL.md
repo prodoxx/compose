@@ -24,8 +24,11 @@ The path is shape, plan, build, verify: a feature whose request leaves something
 ### 0. Know the repo's Linear project
 Every ticket lives on Linear, never as a file in the repo: feature (with decisions), stories, tasks.
 Repo's Linear project lives in one file, `.compose/linear.json` in the repo's main checkout: `{"project": "<Linear project URL>", "team": "Engineering"}`.
+compose adds `"repo": "<owner>/<name>"` and `"listed"` to it when it lists the repo.
 Every worktree reads that file, so run `compose linear project` from wherever you are.
 If it prints `no .compose/linear.json in <folder>`, ask the user for the Linear project link, write the file in that folder with that URL and team `Engineering` (unless the user names another), and never commit it.
+`compose linear project` also adds this repo to the project's `## Repos` and, when this repo is then the only one listed, writes `repo:` on the project's open tasks that have none, and it prints what it added.
+If it exits `compose cannot name this repo`, ask the user for `<owner>/<name>` and write it as `"repo"` in `.compose/linear.json`.
 `compose init` ignores `.compose/`, `graft/`, and `.trail/` in every checkout before anything else.
 You create and edit issues and write judgment comments with `compose linear` (`get <id> [--body] [--comments]`, `list --parent <id> | --search "<terms>"`, `create`, `update <id>`, `comment <id>`, `labels`, `project`, `doc`), never a Linear MCP tool; the CLI moves task, story, and feature states and writes the routine run comments, all with the workspace's Linear key.
 The Linear key is required: without it `compose doctor` fails and `compose linear` stops with the line that stores one.
@@ -51,9 +54,9 @@ A team that keeps its types in a `Type` label group (`compose linear labels` lis
 
 | level | in Linear | in compose | holds |
 |---|---|---|---|
-| **project** | the Linear project from `.compose/linear.json` | the repo | epics and features; set once, never created by you |
+| **project** | the Linear project from `.compose/linear.json` | one or more repos, listed under `## Repos` of the project; each repo links to it in its own `.compose/linear.json` | epics and features; set once, never created by you |
 | **epic** | top-level issue, label `Epic`; description is its short design (0b) | shaped (0b) until its features can be named; once features are known, a set of projects (one per feature) the engineering manager runs together | features, as sub-issues; decisions live in its description |
-| **feature** | label `Feature`; sub-issue of its epic, or top-level with no epic | one compose project: worktree, plan, one stack | stories; its description is its design: Intent, Constraints, My calls, Decisions (0b) |
+| **feature** | label `Feature`; sub-issue of its epic, or top-level with no epic | one compose project per repo its tasks name: worktree, plan, one stack | stories; its description is its design: Intent, Constraints, My calls, Decisions (0b) |
 | **story** | label `Story`; sub-issue of its feature | a contiguous group of layers in the feature's stack | tasks; its description is one user-visible slice with acceptance criteria |
 | **task** | label `Task`; sub-issue of its story | one task issue (with its `compose` block), one stack layer | goal, acceptance criteria, test plan |
 

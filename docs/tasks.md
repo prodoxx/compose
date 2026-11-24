@@ -29,6 +29,7 @@ One paragraph. What to build, where, exact export names.
 
 ```compose
 id: 002
+repo: acme/extension
 files: extension/snapshot.js
 protected: tests/snapshot.test.js
 test: node --test 'tests/**/*.test.js'
@@ -60,10 +61,14 @@ oracle: the returned list
 - `spec-check` fails a task whose scenario lacks a required key, whose ids do not match its criteria, or that has a line shaped like a key with a capital or a digit (`Given:`, `step2:`), which would join the value above it.
   A task without the block is read exactly as before.
 
-Three more rules apply to the block and the issue around it:
+More rules apply to the block and the issue around it:
 
-- The `after` field comes from the issue's "blocked by" links to other tasks of the feature.
+- The `after` field comes from the issue's "blocked by" links to other tasks of the feature in the same repo.
   Each linked task becomes the layer this task stacks on.
+- The `repo:` field, on the line after `id:`, is the `<owner>/<name>` of the repo that builds the task, one of the project's `## Repos`.
+  `compose linear project` writes it on a project's open tasks when this repo is the only one listed, and a planner writes it on each new task.
+  `spec-check` fails a task with no `repo:`, with one the project's list lacks, or with one that is not on this machine.
+  A "blocked by" link to a task of another repo never stacks: `run` holds the task until that task is Done or Canceled, and says `<id> is a task of <repo>: it holds until it is finished there`.
 - Any other "blocked by" link (a design story, another feature's issue) does not stack.
   `run` holds the task until that blocker is Done or Canceled, or In Review with the Design label, as of the last `sync`.
   A blocker in any other state is let go when git shows its code in the trunk the run starts on: the task branch of the blocker, or the top layer of the project that builds it once all its tasks passed, is an ancestor of that trunk.
@@ -216,6 +221,7 @@ From `--stdin`, give such an issue the status `Canceled` (or `Cancelled`).
 
 `sync` refuses a feature other than the one `linear.json` names, a block without `id` or `test`, and an id used twice.
 `run`, `verify`, `resume`, `bench`, and `tasks` read what was last synced, so the team lead syncs right before each.
+With the project's repo list, `sync` keeps this repo's tasks and prints `  elsewhere: <id> <linear id> in <repo>` for each task of another repo.
 
 The CLI writes to Linear only to keep states true, and only when the active workspace has a Linear key.
 The team lead writes everything else on Linear with `compose linear`.

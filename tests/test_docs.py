@@ -53,6 +53,11 @@ class Docs(unittest.TestCase):
                       "again and end with what it prints (nothing printed means no footer).", text)
         self.assertNotIn("per-task table, `verify` stage lines", (ROOT / "SKILL.md").read_text())
 
+    def test_the_docs_name_the_repo_field_and_the_repos_verb(self):
+        for path, needle in (("docs/tasks.md", "repo: "), ("docs/cli.md", "repos [--add"), ("sections/2.md", "`repo:`"),
+                             ("sections/0f.md", "factory=spans"), ("SKILL.md", "## Repos"), ("docs/workspaces.md", "repos.json")):
+            self.assertIn(needle, (ROOT / path).read_text(), path)
+
 
 if __name__ == "__main__":
     unittest.main()

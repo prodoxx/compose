@@ -153,14 +153,15 @@ Work lives at five levels in Linear:
 
 | Level | Is |
 |---|---|
-| project | the repo |
+| project | one or more repos, listed under `## Repos` of the project |
 | epic | a short design, when the work is bigger than one feature |
-| feature | one `compose` project and one stack; its description is the plan |
+| feature | one `compose` project and one stack in each repo its tasks name; its description is the plan |
 | story | one user-visible slice of the feature |
 | task | one stack layer; see [tasks.md](tasks.md) |
 
 You can hand `compose` a link to any of these levels, and it creates the missing ones.
 It asks for the repo's Linear project link once and keeps it in `.compose/linear.json` in the repo's main checkout, which every worktree of the repo reads.
+The first `compose linear project`, `spec-check` or `planner` after that also lists the repo on the project and records its path in `~/.compose/repos.json`.
 Each task moves to In Progress when it is dispatched, In Review when its layer passes, and Done when its PR merges.
 
 ## What a miss teaches
