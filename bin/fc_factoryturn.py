@@ -1,7 +1,7 @@
 """The build loop's decision step: what is in flight, and which ready stories to start next."""
 import copy, hashlib, json, os, re, subprocess, sys, time, traceback
 from pathlib import Path
-import fc_change, fc_config, fc_core, fc_crew, fc_delivery, fc_linearapi, fc_herdr, fc_fleet, fc_linear, fc_load, fc_plan, fc_prd, fc_readiness, fc_reconcile, fc_tasks
+import fc_change, fc_config, fc_core, fc_crew, fc_delivery, fc_linearapi, fc_herdr, fc_fleet, fc_linear, fc_load, fc_plan, fc_prd, fc_readiness, fc_reconcile, fc_repos, fc_tasks
 import fc_factorystate, fc_lead
 
 JUDGE_LIMIT = 6
@@ -53,12 +53,15 @@ def backed_off(state, ident):
     b = (state.get("backoff") or {}).get(ident)
     return isinstance(b, dict) and b.get("until_turn", 0) >= state.get("turns", 0)
 
-def pick(entries, plan, state, free, judge):
+def pick(entries, plan, state, free, judge, own=None):
     """Walk the entries in order and start up to free ready stories, and find the first ticket to offer for planning: planning goes on
     while stories build, and reaches stories whose feature waits on another, which are never started. judge(id, write=True) is the
-    caller's readiness check; the caller binds the repo. Only a fresh verdict counts toward JUDGE_LIMIT: a kept one costs nothing."""
+    caller's readiness check; the caller binds the repo. Only a fresh verdict counts toward JUDGE_LIMIT: a kept one costs nothing.
+    With own (this repo's listed name), a story to build whose tasks name any other repo is built by hand in each: it goes in "spans"
+    as (id, repos), takes no slot and is never offered. "judged" holds every story a verdict came back for, so a spans line is said again
+    only after the story was judged and no longer spans."""
     flying = set(in_flight(plan, state))
-    out = {"picks": [], "ready_waiting": False, "offer": None, "failed": [], "specced": set(), "busy": False}
+    out = {"picks": [], "ready_waiting": False, "offer": None, "failed": [], "specced": set(), "busy": False, "spans": [], "judged": set()}
     candidate, judged = None, 0
     for e in entries:
         if judged >= JUDGE_LIMIT or (len(out["picks"]) == free and candidate):
@@ -83,10 +86,14 @@ def pick(entries, plan, state, free, judge):
         if r.get("error"):
             out["failed"].append((e["id"], r["error"]))
             continue
+        out["judged"].add(e["id"])
         if r.get("specced"):
             out["specced"].add(e["id"])
         kind = None if e["waits_on"] else classify(labels, r)
-        if kind:
+        repos = r.get("repos") or []
+        if kind == "build" and own and any(not fc_repos.same(n, own) for n in repos):
+            out["spans"].append((e["id"], repos))
+        elif kind:
             if len(out["picks"]) < free:
                 out["picks"].append((e, kind))
             else:
@@ -524,7 +531,13 @@ def _turn(repo, state, now, stopping, saved, out):
     _expire(plan, state)
     free = 0 if fc_load.held() else max(0, fc_factorystate.pace(state)["cap"] - len(in_flight(plan, state)))
     judge = lambda s, **kw: fc_readiness.story_readiness(repo, s, **kw)
-    got = pick(entries, plan, state, free, judge)
+    got = pick(entries, plan, state, free, judge, own=fc_core.linked_repo(repo))
+    spans = dict(got["spans"])
+    for key in [k for k in said if k.startswith("spans:") and k[6:] not in spans and (k[6:] in got["judged"] or story_of(plan, k[6:]) is None)]:
+        del said[key]
+    for ident, repos in got["spans"]:
+        fc_factorystate.say_once(state, f"spans:{ident}", f"event factory=spans story={ident} repos={','.join(repos)}  "
+                                 "(its tasks are in more than this repo: build it by hand, compose init, run and verify in each)", out)
     if not got["busy"]:  # Linear is rate limited: no judge runs until it passes
         got["failed"] += _move_up(repo, plan, entries, got["specced"], state, judge, out)
     live = {i for i, _ in got["failed"]}

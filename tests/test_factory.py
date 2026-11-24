@@ -134,6 +134,38 @@ class Pick(unittest.TestCase):
                 lambda s, **kw: calls.append(s) or rd(s, ready=False, specced=False))
         self.assertLessEqual(len(calls), ft.JUDGE_LIMIT)
 
+    def test_a_story_wholly_in_this_repo_is_picked(self):
+        j = judge({"NEB-10": {"ready": True, "has_tasks": True, "specced": True, "repos": ["Acme/API"]}})
+        out = ft.pick([entry("NEB-10", "NEB-9")], plan_of(NEB_9=[story("NEB-10", "Todo", "Ready")]), {"dispatched": {}}, 1, j, own="acme/api")
+        self.assertEqual(([e["id"] for e, _ in out["picks"]], out["spans"]), (["NEB-10"], []))
+
+    def test_a_story_with_a_task_elsewhere_is_set_aside_and_takes_no_slot(self):
+        j = judge({"NEB-10": {"ready": True, "has_tasks": True, "specced": True, "repos": ["acme/api", "acme/web"]},
+                   "NEB-11": {"ready": True, "has_tasks": True, "specced": True, "repos": ["acme/api"]}})
+        plan = plan_of(NEB_9=[story("NEB-10", "Todo", "Ready"), story("NEB-11", "Todo", "Ready")])
+        out = ft.pick([entry("NEB-10", "NEB-9"), entry("NEB-11", "NEB-9")], plan, {"dispatched": {}}, 1, j, own="acme/api")
+        self.assertEqual(([e["id"] for e, _ in out["picks"]], out["spans"], out["offer"]), (["NEB-11"], [("NEB-10", ["acme/api", "acme/web"])], None))
+
+    def test_a_set_aside_story_never_makes_a_ready_story_wait(self):
+        j = judge({"NEB-10": {"ready": True, "has_tasks": True, "specced": True, "repos": ["acme/web"]}})
+        out = ft.pick([entry("NEB-10", "NEB-9")], plan_of(NEB_9=[story("NEB-10", "Todo", "Ready")]), {"dispatched": {}}, 0, j, own="acme/api")
+        self.assertEqual((out["picks"], out["ready_waiting"], out["offer"], out["spans"]), ([], False, None, [("NEB-10", ["acme/web"])]))
+
+    def test_a_story_wholly_in_another_repo_is_set_aside_too(self):
+        j = judge({"NEB-10": {"ready": True, "has_tasks": True, "specced": True, "repos": ["acme/web"]}})
+        out = ft.pick([entry("NEB-10", "NEB-9")], plan_of(NEB_9=[story("NEB-10", "Todo", "Ready")]), {"dispatched": {}}, 1, j, own="acme/api")
+        self.assertEqual((out["picks"], out["failed"], out["spans"]), ([], [], [("NEB-10", ["acme/web"])]))
+
+    def test_a_story_with_no_tasks_yet_is_still_picked_to_cut(self):
+        j = judge({"NEB-10": {"ready": True, "has_tasks": False, "specced": True, "repos": []}})
+        out = ft.pick([entry("NEB-10", "NEB-9")], plan_of(NEB_9=[story("NEB-10")]), {"dispatched": {}}, 1, j, own="acme/api")
+        self.assertEqual([k for _, k in out["picks"]], ["cut"])
+
+    def test_with_no_own_repo_given_nothing_is_set_aside(self):
+        j = judge({"NEB-10": {"ready": True, "has_tasks": True, "specced": True, "repos": ["acme/web"]}})
+        out = ft.pick([entry("NEB-10", "NEB-9")], plan_of(NEB_9=[story("NEB-10", "Todo", "Ready")]), {"dispatched": {}}, 1, j)
+        self.assertEqual(len(out["picks"]), 1)
+
 
 class Dispatch(unittest.TestCase):
     def setUp(self):
@@ -613,6 +645,29 @@ class Turn(unittest.TestCase):
         with unittest.mock.patch.object(ft.fc_readiness, "story_readiness", busy):
             lines = ft.turn(self.repo, self.state, 100.0)
         self.assertEqual((seen, [l for l in lines if "judge-failed" in l]), (["NEB-10"], []))
+
+    def test_the_turn_says_a_spanning_story_once(self):
+        spans = "event factory=spans story=NEB-10 repos=acme/api,acme/web"
+        said = lambda lines: [l for l in lines if l.startswith(spans)]
+        self.results["NEB-10"] = {**rd("NEB-10"), "repos": ["acme/api", "acme/web"]}
+        with unittest.mock.patch.object(ft.fc_core, "linked_repo", lambda repo: "acme/api"):
+            lines = ft.turn(self.repo, self.state, 100.0) + ft.turn(self.repo, self.state, 200.0)
+            self.assertEqual(lines.count(spans + "  (its tasks are in more than this repo: build it by hand, compose init, run and verify in each)"), 1)
+            self.assertEqual({c.args[2]["id"] for c in self.dispatch.call_args_list}, {"NEB-11"})  # NEB-11 again: its lead is gone in this fixture
+            busy = unittest.mock.Mock(side_effect=ft.fc_linearapi.LinearBusy("Linear rate limit (HTTP 429)"))
+            with unittest.mock.patch.object(ft.fc_readiness, "story_readiness", busy):  # not judged this turn: it still spans
+                ft.turn(self.repo, self.state, 300.0)
+            self.assertEqual(said(ft.turn(self.repo, self.state, 400.0)), [])
+            self.results["NEB-10"] = rd("NEB-10", ready=False, specced=False)  # its tasks changed: it stops spanning
+            ft.turn(self.repo, self.state, 500.0)
+            self.results["NEB-10"] = {**rd("NEB-10"), "repos": ["acme/api", "acme/web"]}
+            self.assertEqual(len(said(ft.turn(self.repo, self.state, 600.0))), 1)
+
+    def test_an_unlisted_repo_sets_nothing_aside(self):
+        self.results["NEB-10"] = {**rd("NEB-10"), "repos": ["acme/web"]}
+        with unittest.mock.patch.object(ft.fc_core, "linked_repo", lambda repo: None):
+            lines = ft.turn(self.repo, self.state, 100.0)
+        self.assertEqual(([c.args[2]["id"] for c in self.dispatch.call_args_list], [l for l in lines if "factory=spans" in l]), (["NEB-10", "NEB-11"], []))
 
     def test_a_bad_delivery_plan_is_one_turn_failed_line(self):
         import fc_plan

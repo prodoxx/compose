@@ -389,6 +389,21 @@ class StoryReadiness(unittest.TestCase):
         self.tree = tree(tasks=[{"identifier": "ENG-71", "state": {"name": "Todo"}, "description": block}])
         self.assertTrue(fc_readiness.story_readiness(self.repo, "ENG-7")["has_tasks"])
 
+    def test_a_story_reports_the_repos_of_its_tasks(self):
+        task = lambda n, repo: {"identifier": f"ENG-7{n}", "state": {"name": "Todo"}, "description": f"```compose\nid: t{n}\n{repo}test: x\n```"}
+        self.tree = tree(tasks=[task(1, "repo: acme/web\n"), task(2, "repo: acme/api\n"), task(3, "repo: Acme/Web\n"), task(4, "")])
+        self.assertEqual(fc_readiness.story_readiness(self.repo, "ENG-7", write=False)["repos"], ["acme/api", "acme/web"])
+
+    def test_every_early_return_and_a_kept_verdict_report_the_repos(self):
+        tasks = [{"identifier": "ENG-71", "state": {"name": "Todo"}, "description": "```compose\nid: t\nrepo: acme/web\n```"}]
+        def repos(**kw):
+            self.tree = tree(tasks=tasks, **kw)
+            return fc_readiness.story_readiness(self.repo, "ENG-7")["repos"]
+        self.assertEqual((repos(state="In Progress"), repos(labels_=("needs-shaping",)), repos(), repos()), (["acme/web"],) * 4)
+        self.assertEqual(self.judge.call_count, 1)  # the last one was the kept verdict
+        self.judge.side_effect = RuntimeError("typesafe (Jev readiness): HTTP 503")
+        self.assertEqual(repos(story=STORY + "\nnew\n"), ["acme/web"])
+
     def test_write_false_never_writes(self):
         self.verdict["missing"] = [{"item": "intent", "issue": "ENG-7", "question": "What is ENG-7 for, and who is it for?"}]
         fc_readiness.story_readiness(self.repo, "ENG-7", write=False)

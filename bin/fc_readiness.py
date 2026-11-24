@@ -1,7 +1,7 @@
 import hashlib, json, os, re, subprocess, sys, time
 from pathlib import Path
 from types import SimpleNamespace
-import fc_core, fc_tasks, fc_linear, fc_linear_cmd, fc_layout, fc_plan, fc_change, fc_stale, fc_models, fc_claude, fc_config
+import fc_core, fc_tasks, fc_linear, fc_linear_cmd, fc_layout, fc_plan, fc_change, fc_stale, fc_models, fc_claude, fc_config, fc_repos
 
 DEEP_DIVE = "deep-dive"
 MAX_CRITERIA = 5
@@ -235,9 +235,22 @@ def _asked(description):
     return [TAG_RE.sub("", q).strip() for q in fc_linear.open_questions(description) if TAG_RE.search(q)]
 
 
+def task_repos(tasks):
+    """The repos the tasks' compose blocks name (`repo:`, read the way `fc_tasks.task_from_issue` reads its first block), each once in the
+    case first seen and sorted; a task naming none adds nothing. Read from the block alone: a malformed task must not stop the judge."""
+    names = []
+    for t in tasks:
+        block = (fc_tasks.task_blocks(t.get("description")) or [""])[0]
+        name = {k.strip(): v.strip() for k, v in (l.split(":", 1) for l in block.splitlines() if ":" in l)}.get("repo", "")
+        if name and not any(fc_repos.same(name, n) for n in names):
+            names.append(name)
+    return sorted(names, key=str.casefold)
+
+
 def _result(story, **kw):
     out = {"id": story["identifier"], "title": story.get("title") or "", "state": story["state"]["name"], "ready": False, "specced": None,
-           "unblocked": None, "blocked_by": [], "has_tasks": False, "technical": False, "judge": None, "missing": [], "cached": False, "error": None, "needs_shaping": False}
+           "unblocked": None, "blocked_by": [], "has_tasks": False, "repos": [], "technical": False, "judge": None, "missing": [], "cached": False,
+           "error": None, "needs_shaping": False}
     return {**out, **kw}
 
 
@@ -247,7 +260,7 @@ def story_readiness(repo, story, refresh=False, write=True):
     tree = fc_linear.linear_gql(READINESS_TREE, {"id": story})["issue"]
     chain = story_chain(tree)
     node = chain["story"]
-    out = _result(node, has_tasks=bool(chain["tasks"]))
+    out = _result(node, has_tasks=bool(chain["tasks"]), repos=task_repos(chain["tasks"]))  # read on every call: the cache keeps verdicts only
     if (node["state"]["name"] or "").lower() not in ("todo", "backlog"):
         return out
     feature = (chain["feature"] or {}).get("identifier")
