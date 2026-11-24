@@ -102,7 +102,8 @@ def ensure(repo):
     Every run reads the list once, so a caller has it without asking again, and a repo the list lost comes back on the next command.
     The link file's mark, `"listed": "<the project's URL>"`, says only that the open tasks were seen to from this checkout for that project:
     while it is missing and the list holds this repo alone, each open task that names no repo is named this one (name_open_tasks). The mark
-    is written last, so a run that died earlier names the rest, and a second run makes no write and reads no open issue.
+    is written last, also when the list holds other repos too (then no task is ever named from here), so a run that died earlier names the
+    rest, and a second run makes no write and reads no open issue.
     The list is read again after it is written, and the tasks are named only from that read: two repos listing themselves at once, or a
     hand edit between the read and the write, can drop a bullet, and neither run may then believe it is the project's only repo."""
     path = fc_core.repo_link(repo)
@@ -114,7 +115,7 @@ def ensure(repo):
         sys.exit(f'{path} has no "project": add the Linear project URL')
     name = fc_repos.repo_name(repo)
     if not name:
-        sys.exit(f'compose cannot name this repo: it has no origin remote. Ask the user for its <owner>/<name> and add "repo": "<owner>/<name>" to {fc_core.repo_link(repo)}')
+        sys.exit(f'compose cannot name this repo: it has no origin remote. Ask the user for its <owner>/<name> and add "repo": "<owner>/<name>" to {path}')
     p = fc_linear_cmd.linear_project(repo)
     content = content_of(p["id"])
     fc_repos.record_path(listed_as(content, name) or name, repo)  # on every run: a pruned or lost path map, or another workspace, is fixed here
