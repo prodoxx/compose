@@ -220,6 +220,20 @@ class RefreshBeforeRun(unittest.TestCase):
             self.assertEqual(str(e.exception), "refreshed")
             refresh.assert_called_once_with(self.proj, say_stale=False)
 
+    def test_a_refresh_in_a_listed_repo_keeps_its_own_tasks_and_what_it_set_aside(self):
+        payload = {"feature": {"id": "ENG-1", "title": "F", "description": ""}, "issues": [
+            issue("ENG-3", "One", block(id="001", test="t", repo="acme/api"), blocked_by=["ENG-5"]),
+            issue("ENG-5", "t", block(id="003", test="t", repo="acme/web"))]}
+        link = self.proj / ".compose" / "linear.json"  # outside git a folder's own link, as fc_core.repo_link reads it
+        link.parent.mkdir()
+        for listed, kept in (("https://linear.app/acme/project/p", [("001", "", ["ENG-5 (Todo)"])]), (True, [("001", "003", []), ("003", "", [])])):
+            with self.subTest(listed=listed), mock.patch.object(fc.fc_config, "LINEAR_KEY", "lin_test"), \
+                    mock.patch.object(fc.fc_linear, "linear_sync_payload", return_value=payload), mock.patch("sys.stdout", io.StringIO()):
+                link.write_text(json.dumps({"project": "https://linear.app/acme/project/p", "repo": "acme/api", "listed": listed}))
+                fc.fc_linear.refresh_tasks(self.proj)
+            self.assertEqual([(t["id"], t["after"], t["waits_on"]) for t in fc.fc_tasks.load_tasks(self.proj)], kept)
+            self.assertEqual([t["linear"] for t in fc.fc_tasks.elsewhere(self.proj)], ["ENG-5"] if listed is not True else [])
+
     def test_a_project_with_no_feature_keeps_its_stored_tasks_and_reads_nothing(self):
         (self.proj / "linear.json").write_text("{}")
         read, out = self.refresh()

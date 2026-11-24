@@ -34,7 +34,7 @@ def judge(repo, base, blocker, owners, elsewhere=()):
     every task of its project passed and the top layer of that project's stack is an ancestor of base: the layers are rebuilt
     commits, so a task whose branch was rebased into them is found there."""
     if other := next((t for t in elsewhere if t["linear"] == blocker), None):
-        return None, f"{blocker} is a task of {other['repo']}: it holds until it is Done there"
+        return None, f"{blocker} is a task of {other['repo']}: it holds until it is finished there"
     why = []
     for slug, owner in owners.items():
         cache = fc_tasks.linear_cache(owner)

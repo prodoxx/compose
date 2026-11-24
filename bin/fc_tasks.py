@@ -121,7 +121,8 @@ def sync_tasks(proj, data, repo=None):
     dupes = sorted({i for i in ids if ids.count(i) > 1})
     if dupes:
         sys.exit(f"{feature}: task ids used twice: {', '.join(dupes)}")  # over every repo's tasks: an id is unique across the Linear project
-    here = lambda t: not repo or not t["repo"] or t["repo"].casefold() == repo.casefold()
+    def here(t):
+        return not repo or not t["repo"] or t["repo"].casefold() == repo.casefold()
     aside = sorted(({"linear": t["linear"], "id": t["id"], "repo": t["repo"], "title": t["title"], "status": t["linear_state"]}
                     for t in tasks if not here(t)), key=lambda t: t["id"])
     tasks = [t for t in tasks if here(t)]
