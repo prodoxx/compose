@@ -11,8 +11,10 @@ import fc_config, fc_core, fc_plan, fc_tasks
 
 def name_from_url(url):
     """`<owner>/<name>` from a git remote URL, the same for its ssh, scp-like, https and `.git` forms; a subgroup keeps its whole path and
-    case is kept. None when the URL has no owner: a local path, a `file://` URL, or a host with one segment."""
+    case is kept. None when the URL has no owner: a local path (a Windows one too, `C:/code/api`), a `file://` URL, or a host with one segment."""
     url = (url or "").strip()
+    if re.match(r"[A-Za-z]:[\\/]", url):
+        return None
     if "://" in url:
         parts = urllib.parse.urlsplit(url)
         path = "" if parts.scheme == "file" else parts.path
@@ -52,16 +54,40 @@ def section(lines):
             return i, next((j for j, lv in found[n + 1:] if lv <= level), len(lines))
     return None
 
+BULLET_LINK = re.compile(r"\[([^\]]*)\]\(<?([^()<>\s]*)>?\)")
+
+def plain(name):
+    return "/" in name and not any(c.isspace() for c in name)
+
+def url_name(token):
+    """The name a URL-like token of a hand-written bullet gives: a URL, `<URL>`, an scp-like `git@host:owner/name`, or a host path such
+    as `github.com/acme/api`; None for anything else, a plain `owner/name` too (an owner has no dot)."""
+    token = token.strip("<>")
+    head = token.split("/", 1)[0]
+    if "://" in token or ("@" in head and ":" in head):
+        return name_from_url(token)
+    return name_from_url("https://" + token) if "." in head and "/" in token else None
+
 def bullet(line):
-    """(name, about) of a list line `- owner/name: about` (or `*`, the name in backticks, the colon optional), None for any other line:
-    a name counts only with a `/` and no space. Read as Linear serves it back: its `\\_` and other markdown escapes undone
-    (fc_plan.LINEAR_ESCAPE), so a name with `_` is the one that was written."""
+    """(name, about) of a list line `- owner/name: about` (or `*` or `+`, the name in backticks, the colon optional), None for any other
+    line: a name counts only with a `/` and no space. A hand-written URL (`- https://github.com/acme/api`, `- github.com/acme/api`) or a
+    link (`- [acme/api](https://github.com/acme/api)`) reads as the name it gives (name_from_url, else the link's text). Read as Linear
+    serves it back: its `\\_` and other markdown escapes undone (fc_plan.LINEAR_ESCAPE), so a name with `_` is the one that was written."""
     line = line.rstrip("\r")
-    if line[:2] not in ("- ", "* "):
+    if line[:2] not in ("- ", "* ", "+ "):
         return None
-    name, _, about = fc_plan.LINEAR_ESCAPE.sub(r"\1", line[2:]).partition(":")
-    name = name.strip("` ")
-    return (name, about.strip()) if "/" in name and not any(c.isspace() for c in name) else None
+    rest = fc_plan.LINEAR_ESCAPE.sub(r"\1", line[2:]).strip()
+    token = rest.split(None, 1)[0] if rest else ""
+    if m := BULLET_LINK.match(rest):
+        text = m.group(1).strip("` ")
+        name, about = url_name(text) or (text if plain(text) else None) or url_name(m.group(2)) or "", rest[m.end():]
+    elif found := url_name(token.rstrip(":")):
+        name, about = found, rest[len(token):]
+    else:
+        name, _, about = rest.partition(":")
+        name = name.strip("` ")
+    about = about.strip()
+    return (name, about[1:].strip() if about.startswith(":") else about) if plain(name) else None
 
 def parse_list(content):
     """The `## Repos` list of a project's content as [(name, about)], [] when it has no such section."""
@@ -102,11 +128,11 @@ def with_task_repo(description, name):
     m = fc_tasks.TASK_BLOCK.search(description or "")
     if not m:
         return None
-    lines = m.group(1).split("\n")
-    keys = [l.split(":", 1)[0].strip() if ":" in l else None for l in lines]
-    if "repo" in keys or "id" not in keys:
+    meta = fc_tasks.block_meta(m.group(1))
+    if "repo" in meta or "id" not in meta:
         return None
-    at = keys.index("id")
+    lines = m.group(1).split("\n")
+    at = next(i for i, l in enumerate(lines) if ":" in l and l.split(":", 1)[0].strip() == "id")  # the line to write after
     indent = lines[at][:len(lines[at]) - len(lines[at].lstrip())]
     block = "\n".join([*lines[:at + 1], f"{indent}repo: {name}", *lines[at + 1:]])
     return description[:m.start(1)] + block + description[m.end(1):]

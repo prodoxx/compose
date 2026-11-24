@@ -167,7 +167,7 @@ def verb_repos(a):
     if name and (len(name.split("/")) < 2 or not all(name.split("/")) or any(c.isspace() for c in name)):
         sys.exit(f"--{'add' if a.add else 'drop'} takes <owner>/<name>, such as acme/api, not {name!r}")
     if a.drop and (own := fc_repos.repo_name(a.repo)) and fc_repos.same(a.drop, own):
-        sys.exit("this repo is linked to the project: unlink it before dropping it from the list")
+        sys.exit(f'this repo is linked to the project: to drop it, remove "project" from {fc_core.repo_link(a.repo)}, or run the drop from another checkout')
     p = fc_linear_cmd.linear_project(a.repo)
     if not name:
         k = known(a.repo, p)
@@ -182,6 +182,8 @@ def verb_repos(a):
     else:
         write_content(p, content, fc_repos.with_repo(content, name, a.about or "") if a.add else fc_repos.without_repo(content, name))
         print(f"repos: added {name} to {p['name']}" if a.add else f"repos: dropped {there} from {p['name']}")
+        if a.drop and (still := [i["identifier"] for i in open_tasks(p) if (r := named(i)) and fc_repos.same(r, name)]):
+            print(f"repos: {len(still)} open task(s) still name {there}: {', '.join(still)}")  # dropped all the same: spec-check fails each
 
 def wrapped(action, fn, *args):
     """`fn(*args)`, with a Linear or file error turned into the exit `compose linear` gives for one."""
@@ -191,8 +193,8 @@ def wrapped(action, fn, *args):
         sys.exit(f"linear {action}: {e}")
 
 def cmd_linear(a):
-    """`compose linear`: `repos` here, `project` (when it only reads) with the repo listed first and the list printed after, and every
-    other verb as fc_linear_cmd has it."""
+    """`compose linear`: `repos` here, `project` (when it only reads) with the repo listed first and the list printed after (not after
+    `--body`, whose section hashes end it), and every other verb as fc_linear_cmd has it."""
     if a.action != "repos" and any(getattr(a, f, None) for f in ("add", "about", "drop")):
         sys.exit("--add, --about and --drop belong to compose linear repos")
     if not fc_config.LINEAR_KEY or a.action not in ("project", "repos") or (a.action == "project" and fc_linear_cmd.writes_body(a, "project")):
@@ -201,4 +203,5 @@ def cmd_linear(a):
         return wrapped("repos", verb_repos, a)
     k = wrapped("project", ensure, a.repo)
     fc_linear_cmd.cmd_linear(a)
-    print("\n".join(list_lines(k)))
+    if not a.body:  # --body ends with its section hashes, which a section write reads back
+        print("\n".join(list_lines(k)))

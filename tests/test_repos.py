@@ -29,7 +29,7 @@ class Names(unittest.TestCase):
         self.assertEqual(fc_repos.name_from_url("git@gitlab.com:Acme/web/Shop.git"), "Acme/web/Shop")
 
     def test_a_url_with_no_owner_gives_none(self):
-        for url in ("", "   ", "/tmp/bare.git", "file:///tmp/bare.git", "https://github.com/onlyone"):
+        for url in ("", "   ", "/tmp/bare.git", "file:///tmp/bare.git", "https://github.com/onlyone", "C:/code/api", "c:\\code\\api", "D:/a/b/c.git"):
             self.assertIsNone(fc_repos.name_from_url(url), url)
 
     def test_the_recorded_name_wins_over_origin(self):
@@ -128,6 +128,15 @@ class RepoList(unittest.TestCase):
         self.assertEqual(fc_repos.without_repo(text, "ACME/web"), text.replace("- acme/web: the web app\r\n", ""))
         self.assertEqual(fc_repos.with_repo("Intro.\r\n", "acme/api", ""), "Intro.\r\n\r\n## Repos\r\n- acme/api\r\n")
 
+    def test_a_hand_written_url_or_link_bullet_reads_as_the_repo_s_name(self):
+        text = ("## Repos\n- github.com/acme/api\n- https://github.com/acme/web: the web app\n- [acme/engine](https://github.com/acme/engine): the engine\n"
+                "- <https://gitlab.com/acme/sub/tool>\n- [https://github.com/acme/docs](https://github.com/acme/docs)\n- [the site](https://github.com/acme/site) the site\n"
+                "- git@github.com:acme/cli.git: the CLI\n")
+        self.assertEqual(fc_repos.parse_list(text), [("acme/api", ""), ("acme/web", "the web app"), ("acme/engine", "the engine"), ("acme/sub/tool", ""),
+                                                     ("acme/docs", ""), ("acme/site", "the site"), ("acme/cli", "the CLI")])
+        self.assertEqual(fc_repos.with_repo(text, "acme/web", "x"), text)
+        self.assertNotIn("acme/engine", fc_repos.without_repo(text, "ACME/engine"))
+
     def test_a_name_linear_escaped_reads_as_written(self):
         # Linear serves `_` in a bullet back as `\_` (fc_plan.linear_markdown): the name is the one that was written, and so is its line
         text = "## Repos\n* acme/my\\_repo: the my\\_repo app\n* `acme/other_one`\n"
@@ -156,6 +165,11 @@ class TaskRepo(unittest.TestCase):
         two = TASK + "\n```compose\nid: 009\ntest: x\n```\n"
         self.assertEqual(fc_repos.with_task_repo(two, "acme/api").count("repo: acme/api"), 1)
         self.assertIsNone(fc_repos.with_task_repo("no block", "acme/api"))
+
+    def test_a_block_is_read_by_one_parse_its_keys_and_values_stripped(self):
+        self.assertEqual(fc.fc_tasks.block_meta(" id : 001\nfiles:a.py, b.py\nno colon here\nrepo: acme/api: x\n"),
+                         {"id": "001", "files": "a.py, b.py", "repo": "acme/api: x"})
+        self.assertEqual(fc.fc_tasks.block_meta(None), {})
 
     def test_a_block_whose_first_line_is_not_id_gets_the_repo_after_its_id_line(self):
         odd = "```compose\nfiles: a.py\nid: 001\ntest: x\n```\n"

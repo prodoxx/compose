@@ -937,6 +937,12 @@ class Digest(unittest.TestCase):
         self.assertEqual(fd._field('event factory=held story=NEB-1 why="the story=NEB-9 moved"', "story"), "NEB-1")
         self.assertEqual(fd._field('event factory=turn-failed why="x story=NEB-9 y"', "story"), "")
 
+    def test_review_lists_the_stories_the_factory_set_aside_as_spanning_repos_whenever_it_said_so(self):
+        # said once, maybe before the night began: the factory's state, not the night's events, says which still wait on a person
+        self.state["said"] = {"spans:NEB-20": "event factory=spans story=NEB-20 repos=acme/api,acme/web  (its tasks are in more than this repo: ...)",
+                              "offer:NEB-30": "event factory=offer ticket=NEB-30"}
+        self.assertEqual(fd.review(self.repo, self.state, []), ["Build by hand: NEB-20 (its tasks are in acme/api, acme/web: build this repo's part with compose init, run and verify)"])
+
     def test_review_covers_projects_nothing_was_dispatched_to(self):
         self.state["dispatched"] = {}
         self.paused.return_value = {"003": {"reason": "waits on D2"}}

@@ -236,12 +236,11 @@ def _asked(description):
 
 
 def task_repos(tasks):
-    """The repos the tasks' compose blocks name (`repo:`, read the way `fc_tasks.task_from_issue` reads its first block), each once in the
+    """The repos the tasks' compose blocks name (`repo:` of the first block, through fc_tasks.block_meta as `task_from_issue` reads it), each once in the
     case first seen and sorted; a task naming none adds nothing. Read from the block alone: a malformed task must not stop the judge."""
     names = []
     for t in tasks:
-        block = (fc_tasks.task_blocks(t.get("description")) or [""])[0]
-        name = {k.strip(): v.strip() for k, v in (l.split(":", 1) for l in block.splitlines() if ":" in l)}.get("repo", "")
+        name = fc_tasks.block_meta((fc_tasks.task_blocks(t.get("description")) or [""])[0]).get("repo", "")
         if name and not any(fc_repos.same(name, n) for n in names):
             names.append(name)
     return sorted(names, key=str.casefold)

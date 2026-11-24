@@ -329,6 +329,14 @@ class Command(Fake):
         self.assertEqual(out.splitlines()[-3:], ["repos:", "  acme/web: the web app", "  acme/api: the API (this repo)"])
         self.assertEqual(out.splitlines()[:2], ["repos: added acme/api to Shop", f"Shop on team Engineering: {URL}"])
 
+    def test_project_body_ends_with_its_section_hashes_and_no_list(self):
+        self.content = "## Repos\n- acme/web: the web app\n"
+        out = self.run_cmd(self.args("project", body=True))
+        self.assertEqual(out[0], "repos: added acme/api to Shop")  # what it wrote is said still, before the project
+        self.assertEqual(out[-2:], ['--- section hashes (--section "<heading>" --expect <hash>)', out[-1]])
+        self.assertTrue(out[-1].endswith(" ## Repos"), out)
+        self.assertNotIn("repos:", out[1:])
+
     def test_a_listed_repo_with_no_path_here_says_where_to_run(self):
         self.content = "## Repos\n- acme/web: the web app\n- acme/docs\n"
         self.assertEqual(self.run_cmd(self.args("project"))[-4:], ["repos:", "  acme/web: the web app" + NOT_HERE, "  acme/docs" + NOT_HERE, "  acme/api: the API (this repo)"])
@@ -340,6 +348,14 @@ class Command(Fake):
         self.assertEqual(self.run_cmd(self.args("repos", drop="acme/engine")), ["repos: dropped acme/engine from Shop"])
         self.assertEqual(self.content, before)
         self.assertNotIn("listed", self.link())
+
+    def test_a_drop_names_the_open_tasks_that_still_name_that_repo_and_drops_it(self):
+        self.content = "## Repos\n- acme/api: the API\n- acme/web: the web app\n"
+        self.issues = {"ENG-1": TASK.replace("id: 001\n", "id: 001\nrepo: Acme/Web\n"), "ENG-2": TASK, "ENG-3": TASK.replace("id: 001\n", "id: 003\nrepo: acme/web\n")}
+        self.assertEqual(self.run_cmd(self.args("repos", drop="acme/web")), ["repos: dropped acme/web from Shop", "repos: 2 open task(s) still name acme/web: ENG-1, ENG-3"])
+        self.assertEqual(self.content, "## Repos\n- acme/api: the API\n")
+        self.content = "## Repos\n- acme/api: the API\n- acme/engine\n"
+        self.assertEqual(self.run_cmd(self.args("repos", drop="acme/engine")), ["repos: dropped acme/engine from Shop"])
 
     def test_repos_prints_the_list_and_writes_nothing(self):
         self.content = "## Repos\n- acme/web: the web app\n- acme/api: the API\n"
@@ -356,7 +372,8 @@ class Command(Fake):
 
     def test_repos_refuses_dropping_this_repo_and_a_wrong_flag_mix(self):
         self.content = "## Repos\n- acme/api: the API\n"
-        self.assertEqual(self.fails(fc_repolist.cmd_linear, self.args("repos", drop="ACME/api")), "this repo is linked to the project: unlink it before dropping it from the list")
+        self.assertEqual(self.fails(fc_repolist.cmd_linear, self.args("repos", drop="ACME/api")),
+                         f'this repo is linked to the project: to drop it, remove "project" from {self.repo / ".compose" / "linear.json"}, or run the drop from another checkout')
         self.assertEqual(self.fails(fc_repolist.cmd_linear, self.args("repos", add="acme/x", drop="acme/y")), "repos takes one of --add, --drop")
         self.assertEqual(self.fails(fc_repolist.cmd_linear, self.args("repos", about="words")), "--about goes with --add")
         for bad in ("engine", "a//b", "/a/b", "a/b/", "acme/my engine", "acme/\tx"):

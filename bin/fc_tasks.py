@@ -77,7 +77,7 @@ def task_from_issue(issue):
         return None
     span = route_span(desc)
     body_desc = desc[:span[0]] + re.sub(r"^\s+", "", desc[span[1]:]) if span else desc
-    meta = {k.strip(): v.strip() for k, v in (l.split(":", 1) for l in m.group(1).splitlines() if ":" in l)}
+    meta = block_meta(m.group(1))
     if "id" not in meta or "test" not in meta:
         sys.exit(f"{issue['id']}: its compose block needs id and test")
     for key in ("delete", "files", "protected", "reads", "nodes", "figma_nodes"):

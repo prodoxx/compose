@@ -111,7 +111,14 @@ def review(repo, state, lines) -> list:
         paused += guard(f"paused tasks of {slug}", read)
     failed = [f"Failed or stuck: {_field(l, 'why') or _field(l, 'question') or _field(l, 'story')}" for l in lines if _kind(l) in FAILED_KINDS]
     proposals = guard("last reconcile", reconcile)
-    return answers + confirm + proposals + replan + paused + waiting + failed + out
+    return answers + confirm + proposals + replan + paused + waiting + spanning(state) + failed + out
+
+def spanning(state) -> list:
+    """The stories the factory set aside because their tasks are in this repo and another: said once (fc_factoryturn, `spans:<id>`), maybe
+    before the night, and kept in its state while they still span, so the state and not the night's events says which wait on a person."""
+    lines = [l for k, l in sorted((state.get("said") or {}).items()) if k.startswith("spans:")]
+    return [f"Build by hand: {_field(l, 'story')} (its tasks are in {', '.join(_field(l, 'repos').split(','))}: build this repo's part with compose init, run and verify)"
+            for l in lines]
 
 def _sections(content) -> dict:
     """{ticket id: (title, number of numbered questions)} from the prep document's `## <id>: <title>` sections."""
