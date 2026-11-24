@@ -94,8 +94,8 @@ def state_and_labels(team, a, types=None):
 
 def label_changes(team, a, have=(), types=None):
     """{"addedLabelIds": [...], "removedLabelIds": [...]} for --add-label and --drop-label, by the same case-insensitive lookup
-    as --label (fc_labels). A bare --drop-label takes off every label the name could mean; Linear ignores dropping one the issue
-    lacks. Each added label also takes off what single-select allows only one of (fc_labels.single_select) from `have`, the
+    as --label (fc_labels). A bare --drop-label takes off every label on the issue the name could mean, and one the issue lacks
+    is skipped with a note, since Linear refuses the update for it. Each added label also takes off what single-select allows only one of (fc_labels.single_select) from `have`, the
     issue's labels, in the same update, saying so."""
     if not (a.add_label or a.drop_label):
         return {}
@@ -420,6 +420,8 @@ def verb_update(a):
         fc_linear.linear_blocked_by(issue, None, add=add, drop=drop)
     if same and not (inp or a.blocked_by is not None or add or drop):
         print(f"unchanged {issue['identifier']}: the body already reads as written, so nothing was sent")
+    elif not (inp or a.blocked_by is not None or add or drop):  # a --drop-label of what the issue lacks: nothing was sent
+        print(f"unchanged {issue['identifier']}: nothing to change, so nothing was sent")
     else:
         print(f"updated {issue['identifier']}")
     if note := block_kept(a, issue["description"]):

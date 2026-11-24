@@ -126,9 +126,9 @@ def resolve(nodes, name, types=None, team="the team"):
 
 
 def drops(nodes, name, types=None, team="the team"):
-    """The labels a --drop-label of `name` takes off: a qualified or mapped name exactly that one, a bare name every label it could
-    mean (the `Type` child and the standalone label both, so an issue labeled before its team moved to the group loses it too).
-    Linear ignores dropping a label the issue lacks. Raises Missing when the team has none."""
+    """The labels a --drop-label of `name` can take off: a qualified or mapped name exactly that one, a bare name every label it
+    could mean (the `Type` child and the standalone label both, so an issue labeled before its team moved to the group loses it
+    too). Raises Missing when the team has none."""
     group, child = split(name)
     if group or (types or {}).get(child.lower()):
         return [resolve(nodes, name, types, team)[0]]
@@ -152,9 +152,16 @@ def single_select(nodes, have, added, types=None):
 
 def changes(nodes, have, added, dropped, types=None, team="the team"):
     """({"addedLabelIds": [...], "removedLabelIds": [...]}, notes) for an update that adds the labels `added` (resolved) and drops
-    the names `dropped` (drops) from an issue carrying `have`: each added label also takes off what single-select allows only
-    one of, in the same update, with a note for each. Raises Missing for a dropped name the team lacks."""
-    removed, notes = [l for name in dropped for l in drops(nodes, name, types, team)], []
+    the names `dropped` (drops) from an issue carrying `have`. Only labels the issue carries are dropped, since Linear refuses
+    the whole update ("Label not on issue") for one it lacks; a name the issue carries none of gets a note. Each added label
+    also takes off what single-select allows only one of, in the same update, with a note for each. Raises Missing for a
+    dropped name the team lacks."""
+    on, removed, notes = {l["id"] for l in have}, [], []
+    for name in dropped:
+        hit = [l for l in drops(nodes, name, types, team) if l["id"] in on]
+        removed += hit
+        if not hit:
+            notes.append(f"the issue has no label {name.strip()}: nothing to drop")
     for label in added:
         for old in single_select(nodes, have, label, types):
             if old["id"] not in {r["id"] for r in removed}:

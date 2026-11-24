@@ -650,6 +650,7 @@ class LinearUpdate(unittest.TestCase):
 
     def test_add_and_drop_label_keep_the_other_labels(self):
         self.issue["team"]["labels"]["nodes"] += [{"id": "l9", "name": "Ready"}, {"id": "l8", "name": "needs-shaping"}]
+        self.issue["labels"] = {"nodes": [{"id": "l9", "name": "Ready", "parent": None}, {"id": "l1", "name": "Bug", "parent": None}]}
         sent, _, _ = self.update(drop_label=["ready"], add_label=["needs-shaping"])
         self.assertEqual(sent, {"removedLabelIds": ["l9"], "addedLabelIds": ["l8"]})
 
@@ -830,9 +831,13 @@ class LinearTypeLabels(unittest.TestCase):
         self.assertEqual(self.updated(add_label=["Epic"])[0], {"addedLabelIds": ["epic"], "removedLabelIds": ["type-story"]})
 
     def test_drop_label_takes_off_either_shape_and_a_whole_label_list_is_written_as_given(self):
-        self.loose("Story"); self.group("Story", "Feature"); self.have = ["type-feature"]
+        self.loose("Story"); self.group("Story", "Feature"); self.have = ["type-story", "story", "type-feature"]
         self.assertEqual(self.updated(drop_label=["Story"])[0], {"removedLabelIds": ["story", "type-story"]})
         self.assertEqual(self.updated(drop_label=["Type > Story"])[0], {"removedLabelIds": ["type-story"]})
+        self.have = ["type-feature"]  # Linear refuses the whole update for a label the issue lacks: only what it carries is sent
+        self.assertEqual(self.updated(drop_label=["Story"]), (None, ["the issue has no label Story: nothing to drop", "unchanged ENG-7: nothing to change, so nothing was sent"]))
+        self.have = ["type-story", "type-feature"]
+        self.assertEqual(self.updated(drop_label=["Story"])[0], {"removedLabelIds": ["type-story"]})
         self.assertEqual(self.updated(drop_label=["Feature"], add_label=["Story"])[0], {"removedLabelIds": ["type-feature"], "addedLabelIds": ["type-story"]})
         self.assertEqual(self.updated(label=["Story", "Bug"])[0], {"labelIds": ["type-story", "bug"]})  # --label replaces the list: nothing else dropped
 
