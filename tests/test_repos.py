@@ -47,24 +47,25 @@ class Names(unittest.TestCase):
         with mock.patch.object(fc_repos, "origin_url", return_value=""):
             self.assertIsNone(fc_repos.repo_name(self.repo))
 
-    def test_origin_url_is_the_one_git_call_and_empty_without_a_remote(self):
-        with mock.patch.object(fc_repos.fc_core, "sh", return_value=mock.Mock(returncode=0, stdout="git@github.com:acme/shop.git\n")) as sh:
+    def test_origin_url_is_the_one_git_call_and_empty_without_a_remote_or_outside_git(self):
+        with mock.patch.object(fc_repos.fc_core, "sh") as sh:
+            self.assertEqual(fc_repos.origin_url(self.repo), "")  # no .git here or above: git is not asked
+        sh.assert_not_called()
+        inside = mock.patch.object(fc_repos.fc_core, "checkout", return_value=object())  # in a checkout
+        with inside, mock.patch.object(fc_repos.fc_core, "sh", return_value=mock.Mock(returncode=0, stdout="git@github.com:acme/shop.git\n")) as sh:
             self.assertEqual(fc_repos.origin_url(self.repo), "git@github.com:acme/shop.git")
         self.assertEqual(sh.call_args.args[0], ["git", "remote", "get-url", "origin"])
-        with mock.patch.object(fc_repos.fc_core, "sh", return_value=mock.Mock(returncode=2, stdout="")):
+        with inside, mock.patch.object(fc_repos.fc_core, "sh", return_value=mock.Mock(returncode=2, stdout="")):
             self.assertEqual(fc_repos.origin_url(self.repo), "")
 
-    def test_the_link_reader_gives_the_repo_only_once_it_is_listed(self):
+    def test_the_link_reader_gives_the_recorded_name_listed_or_not(self):
         link = Path(self.repo) / ".compose" / "linear.json"
-        self.assertEqual((fc.fc_core.recorded_repo(self.repo), fc.fc_core.linked_repo(self.repo)), ("fork/shop", None))
-        link.write_text(json.dumps({"project": "x", "repo": "fork/shop", "listed": "x"}))
-        self.assertEqual(fc.fc_core.linked_repo(self.repo), "fork/shop")
-        for junk in ("{not json", "[]", '{"listed": "x", "project": "x"}', '{"repo": "", "listed": "x", "project": "x"}', '{"repo": "a/b", "listed": true, "project": "x"}',
-                     '{"repo": "a/b", "listed": "x", "project": "y"}', '{"repo": "a/b", "listed": ""}', '{"repo": "a/b", "listed": null, "project": null}'):
+        self.assertEqual(fc.fc_core.recorded_repo(self.repo), "fork/shop")
+        for junk in ("{not json", "[]", '{"listed": "x", "project": "x"}', '{"repo": "", "listed": "x", "project": "x"}', '{"repo": 3}'):
             link.write_text(junk)
-            self.assertIsNone(fc.fc_core.linked_repo(self.repo), junk)
+            self.assertIsNone(fc.fc_core.recorded_repo(self.repo), junk)
         link.unlink()
-        self.assertEqual((fc.fc_core.recorded_repo(self.repo), fc.fc_core.linked_repo(self.repo)), (None, None))
+        self.assertIsNone(fc.fc_core.recorded_repo(self.repo))
 
     def test_names_compare_without_case(self):
         self.assertTrue(fc_repos.same("JobscanCo/Jobscan", "jobscanco/jobscan"))

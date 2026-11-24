@@ -1,5 +1,6 @@
-"""The `## Repos` list of a Linear project, kept by compose itself: `compose linear project` lists this repo the first time it runs in it
-(and, while this repo is the project's only one, names it on the open tasks), and `compose linear repos` prints, adds and drops by hand.
+"""The `## Repos` list of a Linear project, kept by compose itself: every command that reads the list (`compose linear project`, spec-check,
+the planner's brief) lists this repo when it is absent (and the first time, while this repo is the project's only one, names it on the open
+tasks), and `compose linear repos` prints, adds and drops by hand.
 It sits above fc_linear_cmd, which reads the project and waits for a write, and holds the `compose linear` entry point so that
 fc_linear_cmd's own verbs never call back up into it."""
 import argparse, json, re, subprocess, sys
@@ -75,26 +76,27 @@ def name_open_tasks(repo, p, name):
     finally:
         if written:  # a cached `get` would serve the body from before the write, also when a later write failed
             fc_linear_cmd.drop_get_cache(argparse.Namespace(repo=repo))
+    if written:
+        print(f"repos: wrote repo: {name} on {written} open task(s)", flush=True)
     return written
 
 def ensure(repo):
-    """List this repo in its Linear project, and while it is the project's only repo name it on every open task, then mark the link file
-    `"listed": "<the project's URL>"`; return the lines it printed. The mark is written last, so a run that died earlier does it all again,
-    every write already made is skipped, and once marked for the project the link points at the command asks Linear nothing.
+    """Read the Linear project's list, add this repo when it is absent (a first run, a hand edit, or the write race below dropped it), and
+    record where this repo is on this machine; return the fc_repos.Known it ended with, and print one line for each thing it wrote.
+    Every run reads the list once, so a caller has it without asking again, and a repo the list lost comes back on the next command.
+    The link file's mark, `"listed": "<the project's URL>"`, says only that the open tasks were seen to from this checkout for that project:
+    while it is missing and the list holds this repo alone, each open task that names no repo is named this one (name_open_tasks). The mark
+    is written last, so a run that died earlier names the rest, and a second run makes no write and reads no open issue.
     The list is read again after it is written, and the tasks are named only from that read: two repos listing themselves at once, or a
     hand edit between the read and the write, can drop a bullet, and neither run may then believe it is the project's only repo."""
-    if own := fc_core.linked_repo(repo):
-        fc_repos.record_path(own, repo)  # on every run: a pruned or lost path map, or another workspace, is fixed by running it here
-        return []
-    project = fc_core.read_link(repo).get("project")
+    link = fc_core.read_link(repo)
+    project = link.get("project")
     name = fc_repos.repo_name(repo)
     if not name:
         sys.exit(f'compose cannot name this repo: it has no origin remote. Ask the user for its <owner>/<name> and add "repo": "<owner>/<name>" to {fc_core.repo_link(repo)}')
-    p, lines = fc_linear_cmd.linear_project(repo), []
-    def say(line):
-        print(line, flush=True)
-        lines.append(line)
+    p = fc_linear_cmd.linear_project(repo)
     content = content_of(p["id"])
+    fc_repos.record_path(listed_as(content, name) or name, repo)  # on every run: a pruned or lost path map, or another workspace, is fixed here
     if listed_as(content, name) is None:
         new = fc_repos.with_repo(content, name, about(repo))
         write_content(p, content, new)
@@ -102,15 +104,15 @@ def ensure(repo):
         if listed_as(content, name) is None:
             raise RuntimeError(f"another write to the content of {p['name']} replaced its list before {name} showed in it: "
                                "run compose linear project again")
-        say(f"repos: added {name} to {p['name']}")
+        print(f"repos: added {name} to {p['name']}", flush=True)
     listed = fc_repos.parse_list(content)
     name = listed_as(content, name) or name
-    if len(listed) == 1 and (n := name_open_tasks(repo, p, name)):
-        say(f"repos: wrote repo: {name} on {n} open task(s)")
-    fc_repos.record_path(name, repo)
-    path = fc_core.repo_link(repo)
-    fc_core.atomic_write(path, json.dumps({**json.loads(path.read_text()), "repo": name, "listed": project}, indent=2) + "\n")
-    return lines
+    if link.get("listed") != project and len(listed) == 1:
+        name_open_tasks(repo, p, name)
+    if (link.get("repo"), link.get("listed")) != (name, project):
+        path = fc_core.repo_link(repo)
+        fc_core.atomic_write(path, json.dumps({**json.loads(path.read_text()), "repo": name, "listed": project}, indent=2) + "\n")
+    return found(name, listed)
 
 def unread(repo):
     """Why the project's list cannot be read from this repo, None when it can: it takes a Linear key and a Linear project in the repo's link."""
@@ -118,18 +120,18 @@ def unread(repo):
         return "no Linear key"
     return None if fc_core.read_link(repo).get("project") else "no Linear project linked"
 
-def known(repo, p=None):
-    """This repo's name, the project's list as Linear serves it, and where each listed repo is checked out on this machine; `p`, the
-    project when the caller has read it already."""
-    listed = fc_repos.parse_list(content_of((p or fc_linear_cmd.linear_project(repo))["id"]))
-    paths = {n: str(at) for n, _ in listed if (at := fc_repos.path_of(n))}
-    return fc_repos.Known(fc_repos.repo_name(repo), listed, paths)
+def found(own, listed):
+    """The fc_repos.Known of this repo's name `own` and the project's list `listed`: with where each listed repo is on this machine."""
+    return fc_repos.Known(own, listed, {n: str(at) for n, _ in listed if (at := fc_repos.path_of(n))})
 
-def list_lines(repo, p):
-    """The list as `project` and `repos` print it, this repo marked, and each listed repo with no checkout here told where to run."""
-    k = known(repo, p)
-    if not k.listed:
-        return [f"repos: none listed in {p['name']}"]
+def known(repo, p=None):
+    """This repo's name, the project's list as Linear serves it, and where each listed repo is checked out on this machine, with nothing
+    added: what `repos` prints. `p`, the project when the caller has read it already."""
+    return found(fc_repos.repo_name(repo), fc_repos.parse_list(content_of((p or fc_linear_cmd.linear_project(repo))["id"])))
+
+def list_lines(k):
+    """The list `k` (fc_repos.Known, which holds a repo) as `project` and `repos` print it, this repo marked, and each listed repo with no
+    checkout here told where to run."""
     def mark(n):
         if k.own and fc_repos.same(n, k.own):
             return " (this repo)"
@@ -148,7 +150,8 @@ def verb_repos(a):
         sys.exit("this repo is linked to the project: unlink it before dropping it from the list")
     p = fc_linear_cmd.linear_project(a.repo)
     if not name:
-        print("\n".join(list_lines(a.repo, p)))
+        k = known(a.repo, p)
+        print("\n".join(list_lines(k)) if k.listed else f"repos: none listed in {p['name']}")
         return
     content = content_of(p["id"])
     there = listed_as(content, name)
@@ -176,6 +179,6 @@ def cmd_linear(a):
         return fc_linear_cmd.cmd_linear(a)
     if a.action == "repos":
         return wrapped("repos", verb_repos, a)
-    wrapped("project", ensure, a.repo)
+    k = wrapped("project", ensure, a.repo)
     fc_linear_cmd.cmd_linear(a)
-    print("\n".join(wrapped("project", lambda: list_lines(a.repo, fc_linear_cmd.linear_project(a.repo)))))
+    print("\n".join(list_lines(k)))

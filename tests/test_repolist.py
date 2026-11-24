@@ -82,9 +82,16 @@ class Ensure(Fake):
         super().setUp()
         p = mock.patch("sys.stdout", io.StringIO()); p.start(); self.addCleanup(p.stop)
 
+    def ens(self):
+        """The lines one ensure prints; what it returns is kept in self.known."""
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.known = fc_repolist.ensure(self.repo)
+        return out.getvalue().splitlines()
+
     def test_a_project_with_no_list_gets_it_and_its_open_tasks_get_the_repo(self):
         self.content, self.issues = "Intro.", {"ENG-1": TASK, "ENG-2": "## A story\nNo block."}
-        lines = fc_repolist.ensure(self.repo)
+        lines = self.ens()
         self.assertEqual(self.content, "Intro.\n\n## Repos\n- acme/api: the API\n")
         self.assertIn("```compose\nid: 001\nrepo: acme/api\nfiles: a.py\n", self.issues["ENG-1"])
         self.assertEqual(self.issues["ENG-2"], "## A story\nNo block.")
@@ -93,36 +100,40 @@ class Ensure(Fake):
         self.assertEqual((link["repo"], link["listed"], link["project"]), ("acme/api", URL, URL))
         self.assertEqual(fc_repos.path_of("acme/api"), self.repo)
 
-    def test_a_second_run_asks_linear_nothing(self):
-        self.content, self.issues = "", {}
-        fc_repolist.ensure(self.repo); self.calls.clear()
-        self.assertEqual(fc_repolist.ensure(self.repo), [])
-        self.assertEqual(self.calls, [])
+    def test_a_second_run_makes_no_write_and_no_open_issues_read_and_returns_what_it_read(self):
+        self.content, self.issues = "", {"ENG-1": TASK}
+        self.ens(); self.calls.clear()
+        before = (self.repo / ".compose" / "linear.json").read_text()
+        self.assertEqual(self.ens(), [])
+        self.assertEqual([q for q, _ in self.calls if "Update" in q or "issues(" in q], [])
+        self.assertEqual(self.known, fc_repos.Known("acme/api", [("acme/api", "the API")], {"acme/api": str(self.repo)}))
+        self.assertEqual((self.repo / ".compose" / "linear.json").read_text(), before)
 
     def test_a_second_repo_is_added_and_no_task_is_touched(self):
         self.content, self.issues = "## Repos\n- acme/web: the web app\n", {"ENG-1": TASK}
-        self.assertEqual(fc_repolist.ensure(self.repo), ["repos: added acme/api to Shop"])
+        self.assertEqual(self.ens(), ["repos: added acme/api to Shop"])
         self.assertEqual(self.issues["ENG-1"], TASK)
 
     def test_a_run_that_died_after_the_list_was_written_still_fills_the_tasks(self):
         self.content, self.issues = "## Repos\n- acme/api: the API\n", {"ENG-1": TASK}
-        self.assertEqual(fc_repolist.ensure(self.repo), ["repos: wrote repo: acme/api on 1 open task(s)"])
+        self.assertEqual(self.ens(), ["repos: wrote repo: acme/api on 1 open task(s)"])
 
     def test_a_repo_with_no_name_stops_and_says_where_to_record_one(self):
         with mock.patch.object(fc_repos, "origin_url", return_value=""), self.assertRaises(SystemExit) as e:
-            fc_repolist.ensure(self.repo)
+            self.ens()
         self.assertIn('add "repo": "<owner>/<name>" to ' + str(self.repo / ".compose" / "linear.json"), str(e.exception.code))
         self.assertEqual(self.calls, [])
 
     def test_known_names_this_repo_the_list_and_the_paths_on_this_machine(self):
         self.content, self.issues = "## Repos\n- acme/web: the web app\n", {}
-        fc_repolist.ensure(self.repo)
-        k = fc_repolist.known(self.repo)
+        self.ens()
+        k = self.known
         self.assertEqual((k.own, [n for n, _ in k.listed], k.paths), ("acme/api", ["acme/web", "acme/api"], {"acme/api": str(self.repo)}))
+        self.assertEqual(fc_repolist.known(self.repo), k)  # the list as it is, with no add: what `repos` prints
 
     def test_every_page_of_open_tasks_is_read_and_only_open_ones_are_asked_for(self):
         self.issues = {f"ENG-{i}": TASK.replace("001", f"00{i}") for i in range(1, 4)}
-        self.assertEqual(fc_repolist.ensure(self.repo)[-1], "repos: wrote repo: acme/api on 3 open task(s)")
+        self.assertEqual(self.ens()[-1], "repos: wrote repo: acme/api on 3 open task(s)")
         self.assertTrue(all("repo: acme/api" in d for d in self.issues.values()))
         asked = [(q, v) for q, v in self.calls if "issues(" in q]
         self.assertEqual([v["after"] for _, v in asked], [None, "1", "2"])
@@ -131,7 +142,7 @@ class Ensure(Fake):
 
     def test_each_write_waits_for_linear_to_serve_it_back(self):
         self.content, self.issues = "Intro.", {"ENG-1": TASK}
-        fc_repolist.ensure(self.repo)
+        self.ens()
         waits = fc.fc_linear_cmd.await_write.call_args_list
         self.assertEqual([(c.args[1], c.args[2]) for c in waits], [("Intro.", self.content), (TASK, self.issues["ENG-1"])])
         self.assertEqual([c.args[0]() for c in waits], [self.content, self.issues["ENG-1"]])
@@ -139,20 +150,20 @@ class Ensure(Fake):
     def test_a_task_that_already_names_a_repo_is_not_written(self):
         named = TASK.replace("id: 001\n", "id: 001\nrepo: acme/other\n")
         self.issues = {"ENG-1": named}
-        self.assertEqual(fc_repolist.ensure(self.repo), ["repos: added acme/api to Shop"])
+        self.assertEqual(self.ens(), ["repos: added acme/api to Shop"])
         self.assertEqual(([q for q, _ in self.calls if "issueUpdate" in q], self.issues["ENG-1"]), ([], named))
 
     def test_the_list_in_another_case_counts_as_listed_and_the_link_keeps_its_other_keys(self):
         self.content = "## Repos\n- ACME/Api: the API\n"
         (self.repo / ".compose" / "linear.json").write_text(json.dumps({"project": URL, "team": "Engineering", "feature": "ENG-9"}))
-        self.assertEqual(fc_repolist.ensure(self.repo), [])
+        self.assertEqual(self.ens(), [])
         self.assertEqual([q for q, _ in self.calls if "projectUpdate" in q], [])
         self.assertEqual(self.link(), {"project": URL, "team": "Engineering", "feature": "ENG-9", "repo": "ACME/Api", "listed": URL})  # as the list first wrote it
         self.assertEqual(fc_repos.paths(), {"ACME/Api": str(self.repo)})
 
     def test_a_null_content_gets_the_list(self):
         self.content = None
-        fc_repolist.ensure(self.repo)
+        self.ens()
         self.assertEqual(self.content, "## Repos\n- acme/api: the API\n")
 
     def test_a_failed_write_leaves_the_link_unmarked_so_the_next_run_does_it_again(self):
@@ -162,72 +173,76 @@ class Ensure(Fake):
                 return {"projectUpdate": {"success": False}}
             return real(query, variables)
         with mock.patch.object(fc.fc_linear, "linear_gql", refuse), self.assertRaises(RuntimeError):
-            fc_repolist.ensure(self.repo)
+            self.ens()
         self.assertNotIn("listed", self.link())
-        self.assertEqual(fc_repolist.ensure(self.repo)[0], "repos: added acme/api to Shop")
+        self.assertEqual(self.ens()[0], "repos: added acme/api to Shop")
         self.assertEqual(self.link()["listed"], URL)
 
-    def test_a_link_marked_for_its_project_asks_linear_nothing_and_an_old_true_mark_runs_again(self):
+    def test_a_marked_link_whose_repo_left_the_list_adds_it_back_and_names_no_task_and_an_old_true_mark_names_them(self):
+        # a hand edit, or the write race two repos listing themselves at once can still lose, dropped this repo from the list
+        self.content, self.issues = "Intro.", {"ENG-1": TASK}
         (self.repo / ".compose" / "linear.json").write_text(json.dumps({"project": URL, "team": "Engineering", "repo": "acme/api", "listed": URL}))
-        self.assertEqual((fc_repolist.ensure(self.repo), self.calls), ([], []))
+        self.assertEqual(self.ens(), ["repos: added acme/api to Shop"])
+        self.assertEqual((self.content, self.issues["ENG-1"]), ("Intro.\n\n## Repos\n- acme/api: the API\n", TASK))
+        self.assertEqual([q for q, _ in self.calls if "issues(" in q], [])  # the mark: the open tasks were seen to from here once already
         (self.repo / ".compose" / "linear.json").write_text(json.dumps({"project": URL, "team": "Engineering", "repo": "acme/api", "listed": True}))
-        self.assertEqual(fc_repolist.ensure(self.repo), ["repos: added acme/api to Shop"])
+        self.assertEqual(self.ens(), ["repos: wrote repo: acme/api on 1 open task(s)"])
         self.assertEqual(self.link()["listed"], URL)
 
     def test_a_link_pointed_at_another_project_after_marking_lists_the_repo_there(self):
-        fc_repolist.ensure(self.repo)
+        self.ens()
         other = "https://linear.app/acme/project/the-right-one-def456"
         (self.repo / ".compose" / "linear.json").write_text(json.dumps({**self.link(), "project": other}))
         self.content, self.calls[:] = "Other project.", []
-        self.assertEqual(fc_repolist.ensure(self.repo), ["repos: added acme/api to Shop"])
+        self.assertEqual(self.ens(), ["repos: added acme/api to Shop"])
         self.assertEqual([v for _, v in self.calls][0], {"slug": "def456"})
         self.assertEqual((self.content, self.link()["listed"]), ("Other project.\n\n## Repos\n- acme/api: the API\n", other))
 
     def test_a_list_write_another_writer_replaced_leaves_the_link_unmarked_and_names_no_task(self):
         self.content, self.issues, self.overwrite = "Intro.", {"ENG-1": TASK}, lambda new: "Intro.\n\n## Repos\n- acme/web: the web app\n"
         with self.assertRaises(RuntimeError) as e:
-            fc_repolist.ensure(self.repo)
+            self.ens()
         self.assertIn("Shop", str(e.exception))
-        self.assertEqual((self.issues["ENG-1"], "listed" in self.link(), fc_repos.paths()), (TASK, False, {}))
+        self.assertEqual((self.issues["ENG-1"], "listed" in self.link(), fc_repos.paths()), (TASK, False, {"acme/api": str(self.repo)}))  # where it is holds anyway
 
     def test_a_fresh_read_that_shows_a_second_repo_names_no_task(self):
         self.content, self.issues = "Intro.", {"ENG-1": TASK}
         self.overwrite = lambda new: new.replace("- acme/api: the API\n", "- acme/web: the web app\n- acme/api: the API\n")
-        self.assertEqual(fc_repolist.ensure(self.repo), ["repos: added acme/api to Shop"])
+        self.assertEqual(self.ens(), ["repos: added acme/api to Shop"])
         self.assertEqual((self.issues["ENG-1"], self.link()["listed"]), (TASK, URL))
 
     def test_every_run_records_where_this_repo_is(self):
         # after `compose doctor` pruned it, a lost repos.json or another workspace: the fix compose prints is to run it here again
         self.content = "## Repos\n- acme/api: the API\n"
-        fc_repolist.ensure(self.repo)
+        self.ens()
         for gone in (lambda: fc_repos.PATHS_FILE().unlink(), lambda: fc_repos.write_all({"default": {"acme/api": str(self.repo / "moved")}})):
             gone()
             self.assertIsNone(fc_repos.path_of("acme/api"))
-            fc_repolist.ensure(self.repo)
+            self.ens()
             self.assertEqual(fc_repos.path_of("acme/api"), self.repo)
         with mock.patch.object(fc.fc_config, "WORKSPACE", "work"):
-            fc_repolist.ensure(self.repo)
+            self.ens()
             self.assertEqual(fc_repos.paths(), {"acme/api": str(self.repo)})
 
     def test_a_name_linear_serves_back_escaped_is_listed_once_and_stays_listed(self):
         self.content, self.overwrite = "Intro.", lambda new: new.replace("_", "\\_")  # as Linear stores a bullet
         with mock.patch.object(fc_repos, "origin_url", return_value="git@github.com:acme/my_repo.git"):
-            fc_repolist.ensure(self.repo)
+            self.ens()
             self.assertEqual(self.content, "Intro.\n\n## Repos\n- acme/my\\_repo: the API\n")
-            fc_repolist.ensure(self.repo)
+            self.ens()
         self.assertEqual([q for q, _ in self.calls if "projectUpdate" in q], ["mutation($id: String!, $in: ProjectUpdateInput!) { projectUpdate(id: $id, input: $in) { success } }"])
         self.assertEqual(self.link()["repo"], "acme/my_repo")
 
     def test_a_task_write_that_fails_midway_is_finished_by_the_next_run(self):
         self.issues, self.refuse = {f"ENG-{i}": TASK.replace("001", f"00{i}") for i in range(1, 4)}, {"ENG-2"}
         with mock.patch.object(fc.fc_linear_cmd, "drop_get_cache") as dropped, self.assertRaises(RuntimeError):
-            fc_repolist.ensure(self.repo)
+            self.ens()
         dropped.assert_called_once()  # ENG-1 was written, so a cached `get` of it is stale
         self.assertNotIn("listed", self.link())
         self.assertIn("id: 001\nrepo: acme/api\n", self.issues["ENG-1"])
         self.assertNotIn("repo:", self.issues["ENG-3"])
         self.calls.clear()
-        self.assertEqual(fc_repolist.ensure(self.repo), ["repos: wrote repo: acme/api on 2 open task(s)"])
+        self.assertEqual(self.ens(), ["repos: wrote repo: acme/api on 2 open task(s)"])
         self.assertEqual([v["id"] for q, v in self.calls if "issueUpdate" in q], ["ENG-2", "ENG-3"])
         self.assertEqual([d.count("repo: acme/api") for d in self.issues.values()], [1, 1, 1])
         self.assertEqual(self.link()["listed"], URL)

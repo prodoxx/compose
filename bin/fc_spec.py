@@ -406,10 +406,10 @@ def spec_check(data, checks=(), defined=None, scripts=None, repos=None, bases=No
 def cmd_spec_check(a):
     """The feature, its stories, and its tasks against the spec: one PASS or FAIL line each, exit 1 on any FAIL.
     The base is the project's head, or the repo's HEAD for --stdin, which names no project. With a Linear key and a linked project the
-    repo is listed in it first, so the sync below keeps this repo's tasks, and every repo's task the sync read (the cache's issues hold
-    them all) is checked against the project's list, each other repo's at the HEAD of its checkout here; --stdin reads no list. Without
-    the key or the project, spec-check says the list went unchecked and checks this repo's tasks alone, never mixed with the ones the last
-    sync set aside, each held to the repo name the link records once listed."""
+    repo is listed in it first (fc_repolist.ensure, which returns the list it read), and every repo's task the sync read (the cache's issues
+    hold them all) is checked against that list, each other repo's at the HEAD of its checkout here; --stdin reads no list. Without
+    the key or the project, spec-check says the list went unchecked and checks this repo's tasks alone, never mixed with the ones the sync
+    set aside, each held to this repo's name (fc_repos.repo_name), none with no name at all."""
     repo = Path(a.repo).resolve()
     repos = None
     if a.stdin:
@@ -427,16 +427,14 @@ def cmd_spec_check(a):
             except (RuntimeError, OSError) as e:  # a Linear or link file error, as `compose linear` exits on one
                 sys.exit(f"spec-check: {e}")
         if not unread:
-            asked(fc_repolist.ensure)
+            repos = asked(fc_repolist.ensure)
         fc_linear.refresh_tasks(proj, say_stale=False)
         aside = set()
-        if unread:  # the list cannot be read: check this repo's tasks alone, against the one repo name the link records once listed
+        if unread:  # the list cannot be read: check this repo's tasks alone, against this repo's own name
             print(f"spec-check: the project's repo list was not checked ({unread})")
             aside = {t["linear"] for t in fc_tasks.elsewhere(proj)}
-            own = fc_core.linked_repo(repo)
+            own = fc_repos.repo_name(repo)
             repos = fc_repos.Known(own, [(own, "")], {}) if own else None
-        else:
-            repos = asked(fc_repolist.known)
         fc_tasks.load_tasks(proj, required=True)
         cache = fc_tasks.linear_cache(proj)
         d = {"feature": cache.get("feature") or {},

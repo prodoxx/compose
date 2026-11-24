@@ -863,8 +863,8 @@ class RepoRulesCli(unittest.TestCase):
         calls = []
         defs = lambda path, rev: calls.append(("base", str(path), rev)) or (lambda p, n: False)
         with mock.patch.object(fc.fc_config, "LINEAR_KEY", key), mock.patch.object(fc.fc_core, "project_dir", return_value=self.proj), \
-                mock.patch.object(fc.fc_repolist, "ensure", side_effect=lambda r: calls.append(("ensure", str(r)))), \
-                mock.patch.object(fc.fc_repolist, "known", side_effect=lambda r: calls.append(("known", str(r))) or KNOWN), \
+                mock.patch.object(fc.fc_repolist, "ensure", side_effect=lambda r: calls.append(("ensure", str(r))) or KNOWN), \
+                mock.patch.object(fc.fc_repolist, "known", side_effect=AssertionError("ensure returns the list: nothing reads it again")), \
                 mock.patch.object(fc.fc_linear, "refresh_tasks", side_effect=lambda *a, **kw: calls.append(("refresh",))), \
                 mock.patch.object(fc.fc_spec, "base_definitions", side_effect=defs), mock.patch.object(fc.fc_spec, "base_scripts", return_value=lambda p, n: True), at_head():
             lines, e = SpecCheck.run_cli(self, stdin, repo=str(self.repo), project="p")
@@ -873,7 +873,7 @@ class RepoRulesCli(unittest.TestCase):
     def test_it_lists_the_repo_before_the_sync_and_fails_each_task_off_its_repo(self):
         lines, e, calls = self.spec_check()
         here = str(self.repo.resolve())
-        self.assertEqual(calls, [("ensure", here), ("refresh",), ("known", here), ("base", here, "head"), ("base", "/r/web", "HEAD")])
+        self.assertEqual(calls, [("ensure", here), ("refresh",), ("base", here, "head"), ("base", "/r/web", "HEAD")])
         self.assertEqual(e.code, 1)
         self.assertIn("PASS ENG-3 task", lines)
         self.assertIn("FAIL ENG-4 task: `delete:` old.ts is not in acme/web", lines)  # set aside as another repo's, and checked still

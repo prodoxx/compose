@@ -175,14 +175,14 @@ def _prd(wt):
 
 def _known(wt):
     """The project's repos for the planner brief (fc_repos.Known), or None when the list cannot be read in principle: with no Linear key or
-    link the brief goes out without them. Otherwise the repo is listed in the project first, as every command that reads the list does, and a
-    read that fails for any reason (Linear, a file, a repo compose cannot name) stops the planner: a brief with no repo rules in a
-    multi-repo project cuts tasks with no repo, and nothing is printed before the read is done, so a pipe never gets half a brief."""
+    link the brief goes out without them. Otherwise the list is read with the repo listed in it (fc_repolist.ensure), as every command that
+    reads the list does, and a read that fails for any reason (Linear, a file, a repo compose cannot name) stops the planner: a brief with
+    no repo rules in a multi-repo project cuts tasks with no repo, and no brief is printed before the read is done, so a pipe never gets
+    half a brief."""
     if fc_repolist.unread(wt):
         return None
     try:
-        fc_repolist.ensure(wt)
-        return fc_repolist.known(wt)
+        return fc_repolist.ensure(wt)
     except (RuntimeError, OSError, SystemExit) as e:
         sys.exit(f"planner: could not read the project's repos ({e}); fix that and run it again")
 

@@ -650,7 +650,7 @@ class Turn(unittest.TestCase):
         spans = "event factory=spans story=NEB-10 repos=acme/api,acme/web"
         said = lambda lines: [l for l in lines if l.startswith(spans)]
         self.results["NEB-10"] = {**rd("NEB-10"), "repos": ["acme/api", "acme/web"]}
-        with unittest.mock.patch.object(ft.fc_core, "linked_repo", lambda repo: "acme/api"):
+        with unittest.mock.patch.object(ft.fc_repos, "origin_url", lambda repo: "git@github.com:acme/api.git"):  # never listed: named by its origin
             lines = ft.turn(self.repo, self.state, 100.0) + ft.turn(self.repo, self.state, 200.0)
             self.assertEqual(lines.count(spans + "  (its tasks are in more than this repo: build it by hand, compose init, run and verify in each)"), 1)
             self.assertEqual({c.args[2]["id"] for c in self.dispatch.call_args_list}, {"NEB-11"})  # NEB-11 again: its lead is gone in this fixture
@@ -663,9 +663,9 @@ class Turn(unittest.TestCase):
             self.results["NEB-10"] = {**rd("NEB-10"), "repos": ["acme/api", "acme/web"]}
             self.assertEqual(len(said(ft.turn(self.repo, self.state, 600.0))), 1)
 
-    def test_an_unlisted_repo_sets_nothing_aside(self):
-        self.results["NEB-10"] = {**rd("NEB-10"), "repos": ["acme/web"]}
-        with unittest.mock.patch.object(ft.fc_core, "linked_repo", lambda repo: None):
+    def test_a_repo_with_no_name_sets_nothing_aside(self):
+        self.results["NEB-10"] = {**rd("NEB-10"), "repos": ["acme/api", "acme/web"]}
+        with unittest.mock.patch.object(ft.fc_repos, "origin_url", lambda repo: ""):
             lines = ft.turn(self.repo, self.state, 100.0)
         self.assertEqual(([c.args[2]["id"] for c in self.dispatch.call_args_list], [l for l in lines if "factory=spans" in l]), (["NEB-10", "NEB-11"], []))
 

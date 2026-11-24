@@ -531,7 +531,7 @@ def _turn(repo, state, now, stopping, saved, out):
     _expire(plan, state)
     free = 0 if fc_load.held() else max(0, fc_factorystate.pace(state)["cap"] - len(in_flight(plan, state)))
     judge = lambda s, **kw: fc_readiness.story_readiness(repo, s, **kw)
-    got = pick(entries, plan, state, free, judge, own=fc_core.linked_repo(repo))
+    got = pick(entries, plan, state, free, judge, own=fc_repos.repo_name(repo))
     spans = dict(got["spans"])
     for key in [k for k in said if k.startswith("spans:") and k[6:] not in spans and (k[6:] in got["judged"] or story_of(plan, k[6:]) is None)]:
         del said[key]

@@ -26,7 +26,9 @@ def name_from_url(url):
     return "/".join(segments) if len(segments) >= 2 else None
 
 def origin_url(repo):
-    """The repo's `origin` URL, "" when it has none: the one place this module asks git."""
+    """The repo's `origin` URL, "" when it has none or is in no git checkout at all: the one place this module asks git."""
+    if fc_core.checkout(repo) is None:
+        return ""
     p = fc_core.sh(["git", "remote", "get-url", "origin"], repo, check=False)
     return p.stdout.strip() if p.returncode == 0 else ""
 

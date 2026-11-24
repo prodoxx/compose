@@ -127,19 +127,10 @@ def read_link(path):
         return {}
     return link if isinstance(link, dict) else {}
 
-def recorded_repo(path, listed=False):
-    """The repo's name as its Linear link records it, `"repo"`; None when it records none, or with `listed` when the link's `"listed"`
-    is not its `"project"`."""
-    link = read_link(path)
-    name, project = link.get("repo"), link.get("project")
-    marked = isinstance(project, str) and project and link.get("listed") == project
-    return name if isinstance(name, str) and name and (not listed or marked) else None
-
-def linked_repo(path):
-    """The recorded name once compose has listed the repo in the Linear project the link points at (`"listed": "<that project's URL>"`,
-    written last, after the list and the open tasks name it), else None: what tells a command the project's repo list already holds this
-    repo, with no Linear call. A link pointed at another project since, or an older `"listed": true`, reads as not listed, so it runs again."""
-    return recorded_repo(path, listed=True)
+def recorded_repo(path):
+    """The repo's name as its Linear link records it, `"repo"`; None when it records none."""
+    name = read_link(path).get("repo")
+    return name if isinstance(name, str) and name else None
 
 def project_config(proj):
     f = Path(proj) / "verify.json"

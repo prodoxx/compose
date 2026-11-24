@@ -263,9 +263,11 @@ class SyncFromLinear(unittest.TestCase):
             return got
         link = self.proj / ".compose" / "linear.json"
         link.parent.mkdir()
-        for listed, kept, aside in (("https://linear.app/acme/project/p", ["004", "005"], "  elsewhere: 006 ENG-6 in acme/web\n"), (True, ["004", "005", "006"], "")):
-            with self.subTest(listed=listed), mock.patch.object(fc.fc_linear, "linear_gql", gql):
-                link.write_text(json.dumps({"project": "https://linear.app/acme/project/p", "repo": "acme/api", "listed": listed}))
+        named = (["004", "005"], "  elsewhere: 006 ENG-6 in acme/web\n")
+        for recorded, origin, (kept, aside) in (({"repo": "acme/api", "listed": "https://linear.app/acme/project/p"}, "", named), ({}, "https://github.com/acme/api", named),
+                                                ({}, "", (["004", "005", "006"], ""))):
+            with self.subTest(recorded=recorded, origin=origin), mock.patch.object(fc.fc_linear, "linear_gql", gql), mock.patch.object(fc.fc_repos, "origin_url", return_value=origin):
+                link.write_text(json.dumps({"project": "https://linear.app/acme/project/p", **recorded}))
                 out = self.sync()
                 self.assertEqual([t["id"] for t in json.loads((self.proj / "results" / "tasks.json").read_text())["tasks"]], kept)
                 self.assertEqual("  elsewhere:" in out, bool(aside))
