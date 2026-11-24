@@ -161,7 +161,8 @@ def cmd_planner(a):
     issue = a.issue or feature
     role = "planner" if issue.lower() == feature.lower() else re.sub(r"[^a-z0-9_-]+", "-", f"planner-{issue.lower()}").strip("-")  # a story's planner runs beside the feature's
     brief = fc_planner_brief.PLANNER_BRIEF.format(slug=proj.name, wt=wt, issue=issue, name=fc_herdr.agent_name(proj.name, role))
-    print(fc_planner_brief.with_repos(fc_planner_brief.with_prd(brief, _prd(wt)), _known(wt)) + (f"\nProject notes from the team lead:\n{extra.strip()}\n" if extra.strip() else ""))
+    repos = _known(wt)
+    print(fc_planner_brief.with_repos(fc_planner_brief.with_prd(brief, _prd(wt)), repos) + (f"\nProject notes from the team lead:\n{extra.strip()}\n" if extra.strip() else ""))
 
 def _prd(wt):
     """The repo's PRD for the planner brief, or None: with no Linear key, no link, or Linear down the brief goes out without it."""
@@ -173,16 +174,17 @@ def _prd(wt):
         return None
 
 def _known(wt):
-    """The project's repos for the planner brief (fc_repos.Known), or None: the repo is listed in the project first, as every command that
-    reads the list does; with no Linear key or link, or Linear down (said on stderr), the brief goes out without them."""
+    """The project's repos for the planner brief (fc_repos.Known), or None when the list cannot be read in principle: with no Linear key or
+    link the brief goes out without them. Otherwise the repo is listed in the project first, as every command that reads the list does, and a
+    read that fails for any reason (Linear, a file, a repo compose cannot name) stops the planner: a brief with no repo rules in a
+    multi-repo project cuts tasks with no repo, and nothing is printed before the read is done, so a pipe never gets half a brief."""
     if fc_repolist.unread(wt):
         return None
     try:
         fc_repolist.ensure(wt)
         return fc_repolist.known(wt)
-    except (RuntimeError, OSError) as e:
-        print(f"planner: the project's repos were not read ({e}); the brief goes out without them", file=sys.stderr)
-        return None
+    except (RuntimeError, OSError, SystemExit) as e:
+        sys.exit(f"planner: could not read the project's repos ({e}); fix that and run it again")
 
 def cmd_toolsmith(a):
     """Print the toolsmith's brief for the project's newest tool-bug entry: every toolsmith only reproduces, diagnoses, and files

@@ -122,17 +122,26 @@ class Groundwork(unittest.TestCase):
                     mock.patch.object(fc.fc_repolist, "ensure") as ensure, mock.patch.object(fc.fc_repolist, "known") as known:
                 brief = self.planner()
             self.assertIn("You are the planner teammate", brief)
-            self.assertNotIn("this Linear project", brief)
+            self.assertNotIn("Repos: this Linear project", brief); self.assertNotIn("Repo: this Linear project", brief)
             ensure.assert_not_called(); known.assert_not_called()
 
-    def test_the_planner_command_goes_without_the_repos_when_linear_cannot_be_asked(self):
-        err = io.StringIO()
-        with mock.patch.object(fc.fc_briefs.fc_config, "LINEAR_KEY", "k"), mock.patch.object(fc.fc_core, "read_link", return_value={"project": "https://linear.app/p"}), \
-                mock.patch.object(fc.fc_repolist, "ensure", side_effect=RuntimeError("linear down")), mock.patch("sys.stderr", err):
-            brief = self.planner()
-        self.assertIn("You are the planner teammate", brief)
-        self.assertNotIn("this Linear project", brief)
-        self.assertIn("linear down", err.getvalue())
+    def test_a_failed_read_of_the_list_stops_the_planner_with_one_line_and_no_brief(self):
+        gone = SystemExit("compose cannot name this repo: it has no origin remote. Ask the user for its <owner>/<name>")
+        for patched, why in (({"ensure": RuntimeError("linear down")}, "linear down"), ({"known": OSError("disk gone")}, "disk gone"), ({"ensure": gone}, str(gone))):
+            kw = {name: {"side_effect": err} for name, err in patched.items()}
+            out = io.StringIO()
+            with mock.patch.object(fc.fc_briefs.fc_config, "LINEAR_KEY", "k"), mock.patch.object(fc.fc_core, "read_link", return_value={"project": "https://linear.app/p"}), \
+                    mock.patch.object(fc.fc_repolist, "ensure", **kw.get("ensure", {})), mock.patch.object(fc.fc_repolist, "known", **kw.get("known", {})), mock.patch("sys.stdout", out):
+                with self.assertRaises(SystemExit) as cm:
+                    self.planner()
+            self.assertEqual(cm.exception.code, f"planner: could not read the project's repos ({why}); fix that and run it again")
+            self.assertEqual(out.getvalue(), "", why)
+
+    def test_this_repo_with_no_recorded_path_is_written_without_one(self):
+        k = fc.fc_repos.Known("acme/api", [("acme/api", "the API"), ("acme/web", "the web app")], {"acme/web": "/r/web"})
+        out = fc.fc_briefs.fc_planner_brief.with_repos("BRIEF", k)
+        self.assertIn("\n- acme/api (this repo): the API\n", out)
+        self.assertIn("\n- acme/web (/r/web): the web app\n", out)
 
     MCP_TOOLS = ("save_issue", "get_issue", "list_issues", "save_comment", "get_project", "list_issue_labels", "create_issue_label",
                  "save_document", "mcp__claude_ai_Linear")
