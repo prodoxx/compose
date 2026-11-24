@@ -143,11 +143,12 @@ def settle_asks(proj, issue, ids, open_on, cleared=()):
     a question only while it is open where `report` read it when it let the ask through, on the map of the ask's own issue or on the
     feature's. Every ask this decide can have changed is judged, on all its ids (an ask may name one that was decided before it was
     asked): the asks of `issue`, of a map in `cleared`, and those that name one of `ids`. `open_on(issue)` is the ids open on a map
-    now, None when it cannot be read: what cannot be known stays. `ids` are open on none of `issue`, `cleared` and the feature, whatever
-    a read that is behind the write says. An ask whose issue is not known is left to `answered`. The maps are read before the list is
+    now, None when it cannot be read: what cannot be known stays. `ids` are open on neither `issue` nor `cleared`, whatever a read that
+    is behind the write says; the feature counts only as one of those, since ids run per map and its own Q1 may be another question. An id
+    settled on the ask's own map leaves the ask whatever the feature holds under it: that was the question it asked. An ask whose issue is not known is left to `answered`. The maps are read before the list is
     locked, so a slow read never holds up the list's other readers. Returns the ids of the items closed."""
     gone, feature, seen = {str(i) for i in ids}, _feature(proj), {}
-    settled_on = {issue, feature, *cleared}
+    settled_on = {issue, *cleared}
     def read(m):
         if m not in seen:
             seen[m] = open_on(m)
@@ -159,7 +160,8 @@ def settle_asks(proj, issue, ids, open_on, cleared=()):
             return None
         def holds(m, i):
             return not (i in gone and m in settled_on) and ((held := look(m)) is None or i in held)
-        return [i for i in item["ids"] if any(holds(m, i) for m in [own] + ([feature] if feature and feature != own else []))]
+        maps = [own] + ([feature] if feature and feature != own else [])
+        return [i for i in item["ids"] if not (i in gone and own in settled_on) and any(holds(m, i) for m in maps)]  # its own map settled it: that was its question
     for item in load(proj)["items"]:
         if item.get("kind") == "answer" and _is_open(item) and item.get("ids"):
             keep(item, read)  # reads the maps the rule asks for, before the lock

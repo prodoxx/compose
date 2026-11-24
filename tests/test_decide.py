@@ -187,6 +187,33 @@ class Decide(unittest.TestCase):
         self.assertEqual(maps["NEB-3"], other)
         self.assertIn("cleared Q1 from Not yet specified on NEB-1", out)
 
+    def test_closing_a_question_on_a_story_keeps_another_issue_s_own_question_of_the_same_id(self):
+        story = "## Decisions so far\n\n## Not yet specified\n\n- Q1: Which font on the card? - Recommendation: Inter - brand\n"
+        other = "## Decisions so far\n\n## Not yet specified\n\n- Q1: Retry on 500s? - Recommendation: yes, twice - flaky upstream\n"
+        maps = {"NEB-1": MAP, "NEB-2": story, "NEB-3": other}  # ids run per map: three different Q1s
+        self.maps_on_linear(maps)
+        out = self.decide(new=["Inter"], closes=["Q1"], quote="inter", issue="NEB-2")
+        self.assertNotIn("Which font on the card?", maps["NEB-2"])
+        self.assertEqual((maps["NEB-1"], maps["NEB-3"]), (MAP, other))
+        self.assertNotIn("cleared", out)
+
+    def test_a_copied_question_clears_though_its_markup_and_spacing_differ(self):
+        story = MAP.replace("- Q1: Which auth?", "* **Q1**:  which  auth")  # Linear saves `- ` as `* `; the copy kept the question
+        maps = {"NEB-1": MAP, "NEB-2": story}
+        self.maps_on_linear(maps)
+        out = self.decide(new=["Clerk"], closes=["Q1"], quote="clerk")
+        self.assertIn("cleared Q1 from Not yet specified on NEB-2", out)
+        self.assertNotIn("auth", fc.fc_decide.fc_change.map_section(maps["NEB-2"], "Not yet specified"))
+
+    def test_an_ask_about_another_issue_s_own_question_of_the_same_id_stays_open(self):
+        story = "## Decisions so far\n\n## Not yet specified\n\n- Q1: Which font on the card? - Recommendation: Inter - brand\n"
+        self.maps_on_linear({"NEB-1": MAP, "NEB-2": story, "NEB-3": self.STORY})
+        fc.fc_waiting.open_item(self.proj, "answer", "report:shop-planner:t1", "NEB-1: 1 question Q1", ids=["Q1"], issue="NEB-1")
+        fc.fc_waiting.open_item(self.proj, "answer", "report:shop-planner:t2", "NEB-3: 1 question Q1", ids=["Q1"], issue="NEB-3")  # the feature's Q1, asked from a story
+        out = self.decide_reading_maps(new=["Inter"], closes=["Q1"], quote="inter", issue="NEB-2")
+        self.assertNotIn("on the waiting list", out)
+        self.assertEqual([i["closed"] for i in fc.fc_waiting.load(self.proj)["items"]], [None, None])
+
     def maps_on_linear(self, maps, outside=()):
         """Linear with one map per issue: NEB-1 the feature, the others its stories, but for the issues `outside` its tree."""
         def gql(query, variables):

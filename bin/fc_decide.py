@@ -254,9 +254,14 @@ def write_map(lid, old, new):
     fc_linear.linear_gql("mutation($id: String!, $in: IssueUpdateInput!) { issueUpdate(id: $id, input: $in) { success } }", {"id": lid, "in": {"description": new}})
     fc_linear_cmd.await_write(lambda: fc_linear.linear_gql("query($id: String!) { issue(id: $id) { description } }", {"id": lid})["issue"]["description"], old, new)
 
+def question_key(text):
+    """A question's text as two maps listing the same question share it: no markdown marks, case, spacing or end punctuation."""
+    return " ".join(re.sub(r"[*_`]", "", text).casefold().split()).rstrip(" ?.!:;,")
+
 def clear_elsewhere(proj, ident, closed):
-    """A closed question is listed on the feature and on its stories alike, so it leaves every Not yet specified of the feature's tree
-    that still holds it, not only the map `decide` wrote. Returns [(identifier, ids cleared)] for the other maps."""
+    """A question the feature and its stories list together leaves every Not yet specified of the feature's tree that still holds it,
+    not only the map `decide` wrote. `closed` is {id: question} as the written map held them; ids run per map, so another map's question
+    clears only when it is the same question (question_key), never on its id alone. Returns [(identifier, ids cleared)] for the other maps."""
     feature = json.loads((proj / "linear.json").read_text()).get("feature") if (proj / "linear.json").exists() else None
     if not closed or not feature:
         return []
@@ -265,7 +270,8 @@ def clear_elsewhere(proj, ident, closed):
     done = []
     for m in [root] + kids:
         body = m.get("description") or ""
-        held = [i for i in closed if i in open_questions(body)]
+        there = open_questions(body)
+        held = [i for i, q in closed.items() if i in there and question_key(there[i]["question"]) == question_key(q)]
         if m["identifier"] != ident and held:
             write_map(m["identifier"], body, close_questions(body, held))
             done.append((m["identifier"], held))
@@ -345,7 +351,7 @@ def cmd_decide(a):
         closed_items += fc_waiting.reconcile_decisions(proj, ident, *decision_state(new_body))
     except Exception as e:  # noqa: BLE001  a waiting-list failure never stops a decision
         print(f"waiting list not updated ({e})")
-    cleared = clear_elsewhere(proj, ident, [i for i in qs if i in answered or i in accepted])
+    cleared = clear_elsewhere(proj, ident, {i: q["question"] for i, q in qs.items() if i in answered or i in accepted})
     try:  # every ask this decide can have changed keeps only what is still open where `report` read it: its own map or the feature's
         closed_items += fc_waiting.settle_asks(proj, ident, settled, open_reader(ident, new_body), [other for other, _ in cleared])
     except Exception as e:  # noqa: BLE001  a waiting-list failure never stops a decision
