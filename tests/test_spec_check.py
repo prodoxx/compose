@@ -819,6 +819,23 @@ class RepoRules(unittest.TestCase):
         self.assertTrue(has(got["ENG-1"], "is the verify check"))
         self.assertEqual(got["ENG-2"], [])
 
+    def test_a_done_task_is_never_checked_for_its_repo(self):
+        # merged before the project listed its repos, or its repo since dropped: Done is left alone (the spec), on a list of one repo too
+        one = KNOWN._replace(listed=[("acme/api", "the API")])
+        for bad in ({}, {"repo": "acme/other"}, {"repo": "acme/engine"}):
+            self.assertEqual(self.gaps_of(issue("ENG-1", "001", **bad) | {"status": "Done"}, repos=one), {"ENG-1": []}, bad)
+        head = {("/r/web", "old.ts"): None}
+        with at_head(head):
+            got = fc.fc_spec.spec_check(payload(issue("ENG-1", "001", repo="acme/web", delete="old.ts") | {"status": "Done"}), repos=KNOWN, bases={})
+        self.assertEqual(next(g for ok, i, level, g in got if level == "task"), [])
+
+    def test_a_done_task_is_still_grouped_with_its_repos_tasks(self):
+        done = lambda ident, tid, **kv: issue(ident, tid, **kv) | {"status": "Done"}
+        got = self.feature_gaps(done("ENG-1", "001", repo="acme/web", files="src/index.ts"), issue("ENG-2", "002", repo="acme/web", files="src/index.ts"))
+        self.assertIn("two tasks of acme/web own the same file (they must be one task, or one must be `after:` the other): src/index.ts: 001, 002", got)
+        got = self.feature_gaps(done("ENG-1", "001", files="src/index.ts"), issue("ENG-2", "002", repo="acme/api", files="src/index.ts"))
+        self.assertTrue(has(got, "two tasks own the same file (they must be one task, or one must be `after:` the other): src/index.ts: 001, 002"), got)
+
     def test_with_no_repos_given_nothing_about_repos_is_checked(self):
         self.assertEqual(self.gaps_of(issue("ENG-1", "001"), repos=None), {"ENG-1": []})
 

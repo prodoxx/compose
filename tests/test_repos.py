@@ -127,6 +127,17 @@ class RepoList(unittest.TestCase):
         self.assertEqual(fc_repos.without_repo(text, "ACME/web"), text.replace("- acme/web: the web app\r\n", ""))
         self.assertEqual(fc_repos.with_repo("Intro.\r\n", "acme/api", ""), "Intro.\r\n\r\n## Repos\r\n- acme/api\r\n")
 
+    def test_a_name_linear_escaped_reads_as_written(self):
+        # Linear serves `_` in a bullet back as `\_` (fc_plan.linear_markdown): the name is the one that was written, and so is its line
+        text = "## Repos\n* acme/my\\_repo: the my\\_repo app\n* `acme/other_one`\n"
+        self.assertEqual(fc_repos.parse_list(text), [("acme/my_repo", "the my_repo app"), ("acme/other_one", "")])
+
+    def test_adding_or_dropping_an_escaped_name_finds_it(self):
+        text = "## Repos\n* acme/my\\_repo: the app\n\n## Links\n"
+        self.assertEqual(fc_repos.with_repo(text, "acme/my_repo", "the app"), text)
+        self.assertEqual(fc_repos.with_repo(text, "ACME/My_Repo", ""), text)
+        self.assertEqual(fc_repos.without_repo(text, "acme/my_repo"), "## Repos\n\n## Links\n")
+
     def test_a_closed_or_indented_heading_is_written_into_not_duplicated(self):
         for heading in ("## Repos ##", "  ## Repos"):
             text = f"{heading}\n- acme/api: the API\n\n## Links\n"

@@ -83,7 +83,8 @@ def ensure(repo):
     every write already made is skipped, and once marked for the project the link points at the command asks Linear nothing.
     The list is read again after it is written, and the tasks are named only from that read: two repos listing themselves at once, or a
     hand edit between the read and the write, can drop a bullet, and neither run may then believe it is the project's only repo."""
-    if fc_core.linked_repo(repo):
+    if own := fc_core.linked_repo(repo):
+        fc_repos.record_path(own, repo)  # on every run: a pruned or lost path map, or another workspace, is fixed by running it here
         return []
     project = fc_core.read_link(repo).get("project")
     name = fc_repos.repo_name(repo)

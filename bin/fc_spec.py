@@ -303,7 +303,10 @@ def spec_check(data, checks=(), defined=None, scripts=None, repos=None, bases=No
     suite = {" ".join(c.split()) for c in checks}
     issues = [i for i in data["issues"] if (i.get("status") or "").lower() not in fc_tasks.CANCELED]
     tasks = [t for t in (fc_tasks.task_from_issue(i) for i in issues) if t]
-    placed = {t["id"]: task_repo(t, repos) if repos else (None, []) for t in tasks}
+    def place(t):  # a Done task is merged, maybe before the project listed its repos: never checked for its repo, grouped with it still
+        home, gaps = task_repo(t, repos) if repos else (None, [])
+        return home, [] if fc_tasks.linear_done(t) else gaps
+    placed = {t["id"]: place(t) for t in tasks}
     out = []
     desc = (data["feature"].get("description") or "")
     gaps = []

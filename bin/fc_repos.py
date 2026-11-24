@@ -52,11 +52,12 @@ def section(lines):
 
 def bullet(line):
     """(name, about) of a list line `- owner/name: about` (or `*`, the name in backticks, the colon optional), None for any other line:
-    a name counts only with a `/` and no space."""
+    a name counts only with a `/` and no space. Read as Linear serves it back: its `\\_` and other markdown escapes undone
+    (fc_plan.LINEAR_ESCAPE), so a name with `_` is the one that was written."""
     line = line.rstrip("\r")
     if line[:2] not in ("- ", "* "):
         return None
-    name, _, about = line[2:].partition(":")
+    name, _, about = fc_plan.LINEAR_ESCAPE.sub(r"\1", line[2:]).partition(":")
     name = name.strip("` ")
     return (name, about.strip()) if "/" in name and not any(c.isspace() for c in name) else None
 

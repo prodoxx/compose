@@ -196,6 +196,28 @@ class Ensure(Fake):
         self.assertEqual(fc_repolist.ensure(self.repo), ["repos: added acme/api to Shop"])
         self.assertEqual((self.issues["ENG-1"], self.link()["listed"]), (TASK, URL))
 
+    def test_every_run_records_where_this_repo_is(self):
+        # after `compose doctor` pruned it, a lost repos.json or another workspace: the fix compose prints is to run it here again
+        self.content = "## Repos\n- acme/api: the API\n"
+        fc_repolist.ensure(self.repo)
+        for gone in (lambda: fc_repos.PATHS_FILE().unlink(), lambda: fc_repos.write_all({"default": {"acme/api": str(self.repo / "moved")}})):
+            gone()
+            self.assertIsNone(fc_repos.path_of("acme/api"))
+            fc_repolist.ensure(self.repo)
+            self.assertEqual(fc_repos.path_of("acme/api"), self.repo)
+        with mock.patch.object(fc.fc_config, "WORKSPACE", "work"):
+            fc_repolist.ensure(self.repo)
+            self.assertEqual(fc_repos.paths(), {"acme/api": str(self.repo)})
+
+    def test_a_name_linear_serves_back_escaped_is_listed_once_and_stays_listed(self):
+        self.content, self.overwrite = "Intro.", lambda new: new.replace("_", "\\_")  # as Linear stores a bullet
+        with mock.patch.object(fc_repos, "origin_url", return_value="git@github.com:acme/my_repo.git"):
+            fc_repolist.ensure(self.repo)
+            self.assertEqual(self.content, "Intro.\n\n## Repos\n- acme/my\\_repo: the API\n")
+            fc_repolist.ensure(self.repo)
+        self.assertEqual([q for q, _ in self.calls if "projectUpdate" in q], ["mutation($id: String!, $in: ProjectUpdateInput!) { projectUpdate(id: $id, input: $in) { success } }"])
+        self.assertEqual(self.link()["repo"], "acme/my_repo")
+
     def test_a_task_write_that_fails_midway_is_finished_by_the_next_run(self):
         self.issues, self.refuse = {f"ENG-{i}": TASK.replace("001", f"00{i}") for i in range(1, 4)}, {"ENG-2"}
         with mock.patch.object(fc.fc_linear_cmd, "drop_get_cache") as dropped, self.assertRaises(RuntimeError):
