@@ -26,11 +26,15 @@ def landed_as(repo, ref, base):
     seen = fc_core.sh(f"git log -p --no-merges --format=%H {fork}..{shlex.quote(base)} | git patch-id --stable", repo, check=False).stdout
     return next((line.split()[1] for line in seen.splitlines() if line.split()[0] == tip[0]), "")
 
-def judge(repo, base, blocker, owners):
+def judge(repo, base, blocker, owners, elsewhere=()):
     """(proof, None) when git shows the code of `blocker` is in `base`, else (None, why). `owners` is {project name: project dir}.
+    `elsewhere` is the waiting project's tasks of other repos (fc_tasks.elsewhere): this repo's git cannot show such a blocker landed,
+    so it holds until Linear says it is finished, and the why names the repo it is built in.
     A task blocker counts when its passed task branch is an ancestor of base, or its tip is in base under another hash (same patch-id). Else, or for a blocker that is no task (a story), when
     every task of its project passed and the top layer of that project's stack is an ancestor of base: the layers are rebuilt
     commits, so a task whose branch was rebased into them is found there."""
+    if other := next((t for t in elsewhere if t["linear"] == blocker), None):
+        return None, f"{blocker} is a task of {other['repo']}: it holds until it is Done there"
     why = []
     for slug, owner in owners.items():
         cache = fc_tasks.linear_cache(owner)
@@ -64,5 +68,6 @@ def released(repo, proj, tasks, base):
     if not ids:
         return {}, {}
     owners = {slug: p for slug, (_, p) in fc_core.all_projects(repo).items() if p != proj}
-    verdicts = {b: judge(repo, base, b, owners) for b in ids}
+    aside = fc_tasks.elsewhere(proj)
+    verdicts = {b: judge(repo, base, b, owners, aside) for b in ids}
     return {b: v[0] for b, v in verdicts.items() if v[0]}, {b: v[1] for b, v in verdicts.items() if not v[0]}

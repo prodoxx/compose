@@ -253,6 +253,24 @@ class SyncFromLinear(unittest.TestCase):
                          [("004", "", []), ("005", "004", []), ("006", "", ["ENG-91 (In Progress)"])])  # a design at In Review is finished
         self.assertEqual(json.loads((self.proj / "results" / "tasks.json").read_text())["issues"]["ENG-5"]["labels"], ["Task"])
 
+    def test_sync_in_a_listed_repo_keeps_its_own_tasks_and_names_the_others(self):
+        repos = {"ENG-4": "acme/api", "ENG-5": "Acme/API", "ENG-6": "acme/web"}
+        def gql(query, variables):
+            got = self.gql(query, variables)
+            for n in (got.get("issue") or {}).get("children", {}).get("nodes", []):
+                if n["identifier"] in repos:
+                    n["description"] = n["description"].replace("test: t", f"test: t\nrepo: {repos[n['identifier']]}")
+            return got
+        link = self.proj / ".compose" / "linear.json"
+        link.parent.mkdir()
+        for listed, kept, aside in (("https://linear.app/acme/project/p", ["004", "005"], "  elsewhere: 006 ENG-6 in acme/web\n"), (True, ["004", "005", "006"], "")):
+            with self.subTest(listed=listed), mock.patch.object(fc.fc_linear, "linear_gql", gql):
+                link.write_text(json.dumps({"project": "https://linear.app/acme/project/p", "repo": "acme/api", "listed": listed}))
+                out = self.sync()
+                self.assertEqual([t["id"] for t in json.loads((self.proj / "results" / "tasks.json").read_text())["tasks"]], kept)
+                self.assertEqual("  elsewhere:" in out, bool(aside))
+                self.assertIn(aside, out)
+
     def test_a_duplicate_issue_is_read_as_canceled_by_its_state_type_not_its_name(self):
         # #488: Linear files Duplicate (and Won't Do) under the canceled type; ENG-6 repeats task id 005 and is a Duplicate of ENG-5
         def gql(query, variables):

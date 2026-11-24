@@ -575,12 +575,14 @@ def cmd_sync(a):
             sys.exit(f"sync: stdin is not JSON ({e}); expected {fc_tasks.SYNC_SHAPE}")
     else:
         data = linear_sync_payload(proj)
-    tasks = fc_tasks.sync_tasks(proj, data)
+    tasks = fc_tasks.sync_tasks(proj, data, repo=fc_core.linked_repo(a.repo))  # None until the project lists this repo: every task, as before
     f = fc_tasks.linear_cache(proj)["feature"]
     print(f"{f['id']} {f['title']}: {len(tasks)} task(s) synced")
     for m in tasks:
         print(f"  {m['id']:4} {m['linear']:9} {m['linear_state'][:12]:12} {m['title'][:50]:50} after {m['after'] or '-'}"
               + (f"  waits on {', '.join(m['waits_on'])}" if m.get("waits_on") else ""))
+    for m in fc_tasks.elsewhere(proj):
+        print(f"  elsewhere: {m['id']} {m['linear']} in {m['repo']}")
     if not a.stdin:
         refresh_ready(proj)
         linear_feature_after(Path(a.repo).resolve(), proj)

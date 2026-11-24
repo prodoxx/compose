@@ -77,6 +77,7 @@ def task_from_issue(issue):
     if "tier" in meta and meta["tier"] not in fc_tiers.PINS:
         sys.exit(f"{issue['id']}: tier must be cheap, standard, frontier or no-frontier, not {meta['tier']}")
     meta.setdefault("kind", "code")
+    meta.setdefault("repo", "")  # the repo the task's code lands in, `<owner>/<name>`; "" when the block names none
     if "model" not in meta:
         meta["model_auto"] = True
     meta.setdefault("model", fc_config.DEFAULT_MODEL)
@@ -89,8 +90,10 @@ def hand_task(issue):
     """An issue labelled Task that carries no compose block: work done by hand (a lowfi flow in Frame0), never dispatched."""
     return not TASK_BLOCK.search(issue.get("description") or "") and any(l.lower() == "task" for l in issue.get("labels") or ())
 
-def sync_tasks(proj, data):
-    """Store the feature and its tasks, as the team lead read them from Linear, in results/tasks.json. Returns the tasks."""
+def sync_tasks(proj, data, repo=None):
+    """Store the feature and its tasks, as the team lead read them from Linear, in results/tasks.json. Returns the tasks. With `repo`
+    (this repo's `<owner>/<name>`), a task whose block names another repo is no task here: it is kept under "elsewhere", and a task it
+    blocks waits on it instead of stacking on it. A task naming no repo stays, so spec-check can fail it."""
     link = proj / "linear.json"
     feature = json.loads(link.read_text()).get("feature") if link.exists() else None
     if not feature:
@@ -117,7 +120,11 @@ def sync_tasks(proj, data):
     ids = [t["id"] for t in tasks]
     dupes = sorted({i for i in ids if ids.count(i) > 1})
     if dupes:
-        sys.exit(f"{feature}: task ids used twice: {', '.join(dupes)}")
+        sys.exit(f"{feature}: task ids used twice: {', '.join(dupes)}")  # over every repo's tasks: an id is unique across the Linear project
+    here = lambda t: not repo or not t["repo"] or t["repo"].casefold() == repo.casefold()
+    aside = sorted(({"linear": t["linear"], "id": t["id"], "repo": t["repo"], "title": t["title"], "status": t["linear_state"]}
+                    for t in tasks if not here(t)), key=lambda t: t["id"])
+    tasks = [t for t in tasks if here(t)]
     by_issue = {t["linear"]: t["id"] for t in tasks}
     states = {i["id"]: i.get("status") for i in data["issues"]}
     for t in tasks:  # a blocker outside this feature's tasks does not stack: it holds the task back until it is finished
@@ -134,7 +141,7 @@ def sync_tasks(proj, data):
               for i in data["issues"]}  # whole, stories too: a change of course snapshots them and undo puts them back
     fc_core.atomic_write((proj / "results" / "tasks.json"), json.dumps({"synced_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "feature": {"id": f["id"], "title": f.get("title", ""), "description": f.get("description") or ""}, "tasks": tasks,
-        "issues": issues}, indent=2))
+        "elsewhere": aside, "issues": issues}, indent=2))
     if any((proj / "tasks").glob("*.md")):
         fc_core.say(f"note: {proj / 'tasks'} still has task files; they are ignored, Linear is the record. Delete them.")
     return tasks
@@ -143,6 +150,10 @@ def sync_tasks(proj, data):
 def linear_cache(proj):
     path = proj / "results" / "tasks.json"
     return json.loads(path.read_text()) if path.exists() else {"feature": {}, "tasks": []}
+
+def elsewhere(proj):
+    """The tasks of this feature that the last sync set aside as another repo's: [{"linear", "id", "repo", "title", "status"}], by id."""
+    return linear_cache(proj).get("elsewhere") or []
 
 _cache_lock = threading.Lock()
 

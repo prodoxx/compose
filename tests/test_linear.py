@@ -126,6 +126,60 @@ class Sync(unittest.TestCase):
         with self.assertRaises(SystemExit):
             fc.fc_tasks.sync_tasks(self.proj, {"issues": []})
 
+class RepoSync(unittest.TestCase):
+    """A task's block names its repo; sync in one repo keeps that repo's tasks and sets the others aside."""
+    def setUp(self):
+        self.proj = Path(tempfile.mkdtemp()) / "feat"
+        self.proj.mkdir()
+        (self.proj / "linear.json").write_text('{"feature": "ENG-9"}')
+        p = mock.patch.object(fc.fc_core, "sh", return_value=subprocess.CompletedProcess([], 0, "", "")); p.start(); self.addCleanup(p.stop)
+
+    def issue(self, ident, tid, repo=None, blocked_by=(), status="Todo"):
+        return dict(issue(ident, "t", block(id=tid, test="true", **({"repo": repo} if repo else {})), blocked_by), status=status)
+
+    def payload(self, *issues):
+        return {"feature": {"id": "ENG-9", "title": "F", "description": ""}, "issues": list(issues)}
+
+    def test_a_task_reads_its_repo_and_one_without_reads_empty(self):
+        self.assertEqual(fc.fc_tasks.task_from_issue(self.issue("ENG-1", "001", repo="acme/api"))["repo"], "acme/api")
+        self.assertEqual(fc.fc_tasks.task_from_issue(self.issue("ENG-2", "002"))["repo"], "")
+
+    def test_sync_keeps_this_repo_and_sets_the_other_aside(self):
+        data = self.payload(self.issue("ENG-1", "001", repo="acme/api"), self.issue("ENG-2", "002", repo="ACME/API"), self.issue("ENG-3", "003", repo="acme/web"))
+        tasks = fc.fc_tasks.sync_tasks(self.proj, data, repo="acme/api")
+        self.assertEqual([t["id"] for t in tasks], ["001", "002"])
+        self.assertEqual(fc.fc_tasks.elsewhere(self.proj), [{"linear": "ENG-3", "id": "003", "repo": "acme/web", "title": "t", "status": "Todo"}])
+
+    def test_a_blocker_in_another_repo_holds_and_never_stacks(self):
+        data = self.payload(self.issue("ENG-1", "001", repo="acme/api", blocked_by=["ENG-3"]), self.issue("ENG-3", "003", repo="acme/web"))
+        (t,) = fc.fc_tasks.sync_tasks(self.proj, data, repo="acme/api")
+        self.assertEqual((t["after"], t["waits_on"]), ("", ["ENG-3 (Todo)"]))
+
+    def test_it_is_let_go_once_the_other_repo_merged_it(self):
+        data = self.payload(self.issue("ENG-1", "001", repo="acme/api", blocked_by=["ENG-3"]), self.issue("ENG-3", "003", repo="acme/web", status="Done"))
+        (t,) = fc.fc_tasks.sync_tasks(self.proj, data, repo="acme/api")
+        self.assertEqual(t["waits_on"], [])
+
+    def test_a_task_with_no_repo_stays_so_spec_check_can_fail_it(self):
+        tasks = fc.fc_tasks.sync_tasks(self.proj, self.payload(self.issue("ENG-1", "001")), repo="acme/api")
+        self.assertEqual([t["id"] for t in tasks], ["001"])
+
+    def test_an_id_used_in_two_repos_is_still_refused(self):
+        data = self.payload(self.issue("ENG-1", "001", repo="acme/api"), self.issue("ENG-3", "001", repo="acme/web"))
+        with self.assertRaises(SystemExit) as e:
+            fc.fc_tasks.sync_tasks(self.proj, data, repo="acme/api")
+        self.assertIn("task ids used twice: 001", str(e.exception.code))
+
+    def test_without_a_repo_sync_is_as_before(self):
+        data = self.payload(self.issue("ENG-1", "001", repo="acme/api"), self.issue("ENG-3", "003", repo="acme/web"))
+        self.assertEqual(len(fc.fc_tasks.sync_tasks(self.proj, data)), 2)
+        self.assertEqual(fc.fc_tasks.elsewhere(self.proj), [])
+
+    def test_a_story_with_an_unfinished_task_in_another_repo_does_not_roll_up(self):
+        children = [{"identifier": "ENG-1", "state": {"name": "In Review", "type": "started"}},
+                    {"identifier": "ENG-3", "state": {"name": "Todo", "type": "unstarted"}}]
+        self.assertNotIn(fc.fc_linear.rollup_state(children), ("In Review", "Done"))
+
 class RefreshBeforeRun(unittest.TestCase):
     """`run` reads the tasks again from Linear, so an edit made since the last sync reaches the implementer."""
     def setUp(self):

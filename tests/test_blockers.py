@@ -90,6 +90,14 @@ class OutsideBlockers(unittest.TestCase):
             {"id": "010", "kind": "code", "linear": "NEB-20", "waits_on": ["NEB-99 (In Review)"]}]}))
         self.assertEqual(self.released(), ({}, {"NEB-99": "no project of this repository has NEB-99 in its last sync"}))
 
+    def test_a_blocker_in_another_repo_says_which_repo_holds_it(self):
+        (self.app / "results" / "tasks.json").write_text(json.dumps({"feature": {"id": "NEB-2"}, "issues": {}, "tasks": [
+            {"id": "010", "kind": "code", "linear": "NEB-20", "waits_on": ["ENG-3 (Todo)"]}],
+            "elsewhere": [{"linear": "ENG-3", "id": "003", "repo": "acme/web", "title": "t", "status": "Todo"}]}))
+        proof, why = fc.fc_blockers.judge(self.repo, "main", "ENG-3", {"found": self.found}, fc.fc_tasks.elsewhere(self.app))
+        self.assertEqual((proof, why), (None, "ENG-3 is a task of acme/web: it holds until it is Done there"))
+        self.assertEqual(self.released(), ({}, {"ENG-3": "ENG-3 is a task of acme/web: it holds until it is Done there"}))
+
     def test_a_backup_branch_beside_the_layers_is_not_a_layer(self):
         self.heads, self.trunk = ["main", "found-layer-01", "found-layer-02", "found-layer-01-prerebase"], {"found-layer-02"}
         out, still = self.released()
