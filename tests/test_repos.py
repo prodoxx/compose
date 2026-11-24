@@ -96,6 +96,99 @@ class RepoList(unittest.TestCase):
         self.assertEqual(fc_repos.without_repo(self.CONTENT, "acme/none"), self.CONTENT)
         self.assertEqual(fc_repos.without_repo(None, "acme/none"), "")
 
+    def test_a_crlf_content_reads_like_an_lf_one(self):
+        text = self.CONTENT.replace("\n", "\r\n")
+        self.assertEqual(fc_repos.parse_list(text), [("acme/api", "the API"), ("acme/web", "the web app")])
+        self.assertEqual(fc_repos.parse_list("## Repos\r\n- acme/web\r\n"), [("acme/web", "")])
+
+    def test_a_closed_or_indented_heading_is_still_the_section(self):
+        for heading in ("## Repos ##", "## Repos ##\r", "   ## Repos", "  ## Repos  ##"):
+            self.assertEqual(fc_repos.parse_list(f"{heading}\n- acme/api: the API\n"), [("acme/api", "the API")], heading)
+        self.assertEqual(fc_repos.parse_list("    ## Repos\n- acme/api: the API\n"), [])
+        self.assertEqual(fc_repos.parse_list("## Repos#\n- acme/api: the API\n"), [])
+
+    def test_a_crlf_content_is_written_back_with_every_other_line_as_it_was(self):
+        text = self.CONTENT.replace("\n", "\r\n")
+        new = fc_repos.with_repo(text, "acme/engine", "the engine")
+        self.assertEqual(new, text.replace("- acme/web: the web app\r\n", "- acme/web: the web app\r\n- acme/engine: the engine\r\n"))
+        self.assertEqual(fc_repos.with_repo(new, "ACME/Engine", ""), new)
+        self.assertEqual(fc_repos.without_repo(text, "ACME/web"), text.replace("- acme/web: the web app\r\n", ""))
+        self.assertEqual(fc_repos.with_repo("Intro.\r\n", "acme/api", ""), "Intro.\r\n\r\n## Repos\r\n- acme/api\r\n")
+
+    def test_a_closed_or_indented_heading_is_written_into_not_duplicated(self):
+        for heading in ("## Repos ##", "  ## Repos"):
+            text = f"{heading}\n- acme/api: the API\n\n## Links\n"
+            self.assertEqual(fc_repos.with_repo(text, "acme/web", "the web"), f"{heading}\n- acme/api: the API\n- acme/web: the web\n\n## Links\n")
+            self.assertEqual(fc_repos.without_repo(text, "acme/api"), f"{heading}\n\n## Links\n")
+
+
+class PathMap(unittest.TestCase):
+    def setUp(self):
+        self.repo = Path(tempfile.mkdtemp()).resolve()
+        for p in (mock.patch.object(fc.fc_core, "main_checkout", lambda path: Path(path)),
+                  mock.patch.object(fc.fc_config, "CONFIG_PATH", Path(tempfile.mkdtemp()).resolve() / ".compose" / "config.json")):
+            p.start(); self.addCleanup(p.stop)
+
+    def test_a_recorded_repo_is_found_under_any_case(self):
+        fc_repos.record_path("acme/api", self.repo)
+        self.assertEqual(fc_repos.path_of("ACME/api"), self.repo)
+        self.assertEqual(fc_repos.paths(), {"acme/api": str(self.repo)})
+
+    def test_the_map_sits_beside_the_config_and_follows_it(self):
+        self.assertEqual(fc_repos.PATHS_FILE(), fc.fc_config.CONFIG_PATH.parent / "repos.json")
+
+    def test_recording_in_another_case_replaces_the_entry(self):
+        fc_repos.record_path("acme/api", self.repo)
+        other = self.repo / "other"
+        other.mkdir()
+        fc_repos.record_path("Acme/API", other)
+        self.assertEqual(fc_repos.paths(), {"Acme/API": str(other)})
+
+    def test_the_main_checkout_is_what_is_stored(self):
+        main = self.repo / "main"
+        main.mkdir()
+        with mock.patch.object(fc.fc_core, "main_checkout", return_value=main) as asked:
+            fc_repos.record_path("acme/api", self.repo / "worktree")
+        asked.assert_called_once_with(self.repo / "worktree")
+        self.assertEqual(fc_repos.paths(), {"acme/api": str(main)})
+
+    def test_each_workspace_has_its_own_map(self):
+        fc_repos.record_path("acme/api", self.repo)
+        with mock.patch.object(fc.fc_config, "WORKSPACE", "work"):
+            self.assertIsNone(fc_repos.path_of("acme/api"))
+            fc_repos.record_path("acme/web", self.repo)
+            self.assertEqual(fc_repos.paths(), {"acme/web": str(self.repo)})
+        self.assertEqual(json.loads(fc_repos.PATHS_FILE().read_text()),
+                         {"default": {"acme/api": str(self.repo)}, "work": {"acme/web": str(self.repo)}})
+
+    def test_a_folder_that_is_gone_reads_as_unknown_and_prune_drops_it(self):
+        fc_repos.record_path("acme/api", self.repo)
+        fc_repos.record_path("acme/web", self.repo / "missing")
+        self.assertIsNone(fc_repos.path_of("acme/web"))
+        self.assertEqual(fc_repos.prune_paths(), ["acme/web"])
+        self.assertEqual(fc_repos.paths(), {"acme/api": str(self.repo)})
+
+    def test_prune_keeps_the_other_workspaces_and_writes_nothing_when_all_is_live(self):
+        fc_repos.record_path("acme/api", self.repo)
+        with mock.patch.object(fc.fc_config, "WORKSPACE", "work"):
+            fc_repos.record_path("acme/web", self.repo / "missing")
+        before = fc_repos.PATHS_FILE().read_text()
+        self.assertEqual(fc_repos.prune_paths(), [])
+        self.assertEqual(fc_repos.PATHS_FILE().read_text(), before)
+
+    def test_no_file_reads_as_empty_and_prune_creates_none(self):
+        self.assertEqual((fc_repos.paths(), fc_repos.path_of("acme/api"), fc_repos.prune_paths()), ({}, None, []))
+        self.assertFalse(fc_repos.PATHS_FILE().exists())
+
+    def test_an_unreadable_file_reads_as_empty_and_is_rewritten_whole(self):
+        fc_repos.PATHS_FILE().parent.mkdir(parents=True, exist_ok=True)
+        for junk in ("{not json", "[]", '{"default": ["x"]}', '{"default": {"acme/api": 3}}'):
+            fc_repos.PATHS_FILE().write_text(junk)
+            self.assertEqual(fc_repos.paths(), {}, junk)
+        fc_repos.PATHS_FILE().write_text("{not json")
+        fc_repos.record_path("acme/api", self.repo)
+        self.assertEqual(json.loads(fc_repos.PATHS_FILE().read_text()), {"default": {"acme/api": str(self.repo)}})
+
 
 if __name__ == "__main__":
     unittest.main()

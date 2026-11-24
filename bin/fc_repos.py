@@ -1,10 +1,12 @@
-import json
+import json, re
 import urllib.parse
-import fc_core, fc_plan
+from pathlib import Path
+import fc_config, fc_core, fc_plan
 
 # A project can hold code in several repos. Each is named `<owner>/<name>` from its origin URL, and the project's content lists them
 # in a `## Repos` section, one bullet per repo: `- <owner>/<name>: <one line on what lives there>`. Nothing here asks Linear or reads
-# a path map: it turns a URL into a name and a text into a list, so the commands that do ask build on one definition of both.
+# a path map: it turns a URL into a name and a text into a list, so the commands that do ask build on one definition of both. The path
+# map, below them, is the one place this module touches the machine: where each repo is checked out, per workspace.
 
 def name_from_url(url):
     """`<owner>/<name>` from a git remote URL, the same for its ssh, scp-like, https and `.git` forms; a subgroup keeps its whole path and
@@ -42,16 +44,20 @@ def same(a, b):
 
 def section(lines):
     """(start, end) of the `Repos` section, a heading of that text at any level to the next heading of its level or above (a hand edit may
-    write `### Repos`), outside fenced code; None when the content has none."""
-    found = list(fc_plan.headings(lines))
+    write `### Repos`, close it as `## Repos ##` or indent it by up to three spaces, and an editor may end every line with `\\r`), outside
+    fenced code; None when the content has none."""
+    flat = [l.rstrip("\r") for l in lines]
+    flat = [l.lstrip(" ") if len(l) - len(l.lstrip(" ")) <= 3 else l for l in flat]
+    found = list(fc_plan.headings(flat))
     for n, (i, level) in enumerate(found):
-        if lines[i][level:].strip().casefold() == "repos":
+        if re.sub(r"(^|\s)#+$", "", flat[i][level:].strip()).strip().casefold() == "repos":
             return i, next((j for j, lv in found[n + 1:] if lv <= level), len(lines))
     return None
 
 def bullet(line):
     """(name, about) of a list line `- owner/name: about` (or `*`, the name in backticks, the colon optional), None for any other line:
     a name counts only with a `/` and no space."""
+    line = line.rstrip("\r")
     if line[:2] not in ("- ", "* "):
         return None
     name, _, about = line[2:].partition(":")
@@ -71,12 +77,14 @@ def with_repo(content, name, about):
     lines = (content or "").split("\n")
     span = section(lines)
     if span is None:
-        body = (content or "").rstrip("\n")
-        return (body + "\n\n" if body else "") + f"## Repos\n{new}\n"
+        eol = "\r\n" if "\r\n" in (content or "") else "\n"
+        body = (content or "").rstrip("\r\n")
+        return (body + eol * 2 if body else "") + f"## Repos{eol}{new}{eol}"
     listed = [(i, b[0]) for i in range(span[0] + 1, span[1]) if (b := bullet(lines[i]))]
     if any(same(n, name) for _, n in listed):
         return content
-    lines.insert((listed[-1][0] if listed else span[0]) + 1, new)
+    after = listed[-1][0] if listed else span[0]
+    lines.insert(after + 1, new + ("\r" if lines[after].endswith("\r") else ""))
     return "\n".join(lines)
 
 def without_repo(content, name):
@@ -87,3 +95,48 @@ def without_repo(content, name):
         return content or ""
     keep = [l for i, l in enumerate(lines) if not (span[0] < i < span[1] and (b := bullet(l)) and same(b[0], name))]
     return "\n".join(keep)
+
+# ---------- where each repo is on this machine: `{"<workspace>": {"<owner>/<name>": "<main checkout>"}}` ----------
+
+def PATHS_FILE():
+    """The path map's file, beside the config file; a function so a test that points the config elsewhere takes the map with it."""
+    return fc_config.CONFIG_PATH.parent / "repos.json"
+
+def read_all():
+    """Every workspace's map as written; {} for a file that is missing, unreadable or not an object of objects of strings."""
+    try:
+        data = json.loads(PATHS_FILE().read_text())
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {w: {n: p for n, p in m.items() if isinstance(p, str)} for w, m in data.items() if isinstance(m, dict)}
+
+def write_all(data):
+    PATHS_FILE().parent.mkdir(parents=True, exist_ok=True)
+    fc_core.atomic_write(PATHS_FILE(), json.dumps(data, indent=2) + "\n")
+
+def paths():
+    """The active workspace's map, name to the path it was recorded with; {} when it has none."""
+    return read_all().get(fc_config.WORKSPACE, {})
+
+def record_path(name, repo):
+    """Remember that `name` is checked out at the main checkout of `repo`, replacing an entry of that name in any case."""
+    data = read_all()
+    mine = {n: p for n, p in data.get(fc_config.WORKSPACE, {}).items() if not same(n, name)}
+    mine[name] = str(fc_core.main_checkout(repo))
+    write_all({**data, fc_config.WORKSPACE: mine})
+
+def path_of(name):
+    """Where `name` is checked out on this machine, None when it is unknown or its folder is gone."""
+    found = next((Path(p) for n, p in paths().items() if same(n, name)), None)
+    return found if found and found.is_dir() else None
+
+def prune_paths():
+    """Drop the active workspace's entries whose folder is gone and return their names; the file is untouched when none is."""
+    data = read_all()
+    mine = data.get(fc_config.WORKSPACE, {})
+    gone = [n for n, p in mine.items() if not Path(p).is_dir()]
+    if gone:
+        write_all({**data, fc_config.WORKSPACE: {n: p for n, p in mine.items() if n not in gone}})
+    return gone

@@ -1,6 +1,6 @@
 import json, os, re, shutil, subprocess, sys, urllib.error, urllib.request
 from pathlib import Path
-import fc_auth, fc_checks, fc_config, fc_core, fc_harness, fc_models, fc_textmodel, fc_steps, fc_tasks, fc_linear, fc_providers, fc_herdr, fc_fleet, fc_worktree, fc_layers, fc_crew, fc_pin
+import fc_auth, fc_checks, fc_config, fc_core, fc_harness, fc_models, fc_textmodel, fc_steps, fc_tasks, fc_linear, fc_providers, fc_herdr, fc_fleet, fc_worktree, fc_layers, fc_crew, fc_pin, fc_repos
 
 
 TRAIL_INIT = ["trail", "init", "--no-agents", "--no-global", "--no-build"]  # Claude Code wiring only, nothing outside the repo
@@ -225,6 +225,7 @@ def start_checks(repo, stack=True, tree=True, hint="commit or discard them", for
 
 def cmd_doctor(a):
     """Check every tool and skill file compose depends on; print every line first, then exit 1 when a required one is missing.
+    Drops the repos of the path map (fc_repos) whose folder is gone and says so, one `repos: dropped <name> (its folder is gone)` line each.
     Warns, never stops, when a key still sits in config.json or .env: it differs from the key auth.json holds, so it was left
     there - remove the one you do not want. herdr's loud toasts or sounds are one optional row of check_deps, fixed by `compose setup`.
     Then the preflight run and verify repeat at their start (start_problems): a `PROBLEM:` line with its fix for each key its
@@ -235,6 +236,8 @@ def cmd_doctor(a):
         print("WARNING: gh is not logged in: compose bug reports are saved, not filed on GitHub (run: gh auth login)")
     for name, path in fc_auth.old_keys(fc_config.CONFIG_PATH, fc_config.ENV_FILE):
         print(f"WARNING: {name} in {fc_core.tilde(path)} differs from the key auth.json holds, so it was kept: remove the one you do not want")
+    for name in fc_repos.prune_paths():
+        print(f"repos: dropped {name} (its folder is gone)")
     wt, missing = None, []
     if getattr(a, "project", None):  # the tree is the named project's; without one (and under `update`) there is none to check
         pick = fc_core.all_projects(Path(a.repo).resolve()).get(a.project)
