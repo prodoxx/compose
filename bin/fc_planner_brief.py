@@ -110,3 +110,27 @@ def with_prd(brief, prd):
     if not prd:
         return brief
     return brief + f"\nThe PRD ({prd['url']}): the product this feature serves; plan within its goals and never against its non-goals or anti-goals.\n{(prd.get('content') or '').strip()}\n"
+
+REPOS_RULES = """Every task's compose block carries `repo: <owner>/<name>` on the line after `id:`, naming the one repo its files are in; a change in two repos is two tasks.
+`files:`, `protected:`, `reads:`, `delete:` and `test:` are relative to the task's repo, and a task reads nothing from another repo.
+What one repo needs from another (a route, its request and response, a message shape) is written once on the story and repeated under `## Interfaces` of the task on each side.
+A task that needs another repo's task gets a "blocked by" link to it: it waits until that task is merged, and never stacks on it.
+A story that needs a repo that is not on this machine: report `needs-user "<repo> is not on this machine"` and cut no task in it.
+"""
+
+def with_repos(brief, known):
+    """The brief with the project's repos, when the list was read and holds any (`known` is fc_repos.Known, None when it was not read):
+    one repo is named in a line, several are listed with where each is on this machine and the rules for naming one on every task.
+    The planner reads each repo at its path and writes in none."""
+    if not known or not known.listed:
+        return brief
+    if len(known.listed) == 1:
+        name = known.listed[0][0]
+        return brief + f"\nRepo: this Linear project has one repo, {name}. Every task's compose block carries `repo: {name}` on the line after `id:`.\n"
+    def line(name, about):
+        own = known.own and name.casefold() == known.own.casefold()
+        path = known.paths.get(name)
+        where = f"this repo, {path}" if own and path else "this repo" if own else path or "not on this machine"
+        return f"- {name} ({where})" + (f": {about}" if about else "")
+    lines = "\n".join(line(n, a) for n, a in known.listed)
+    return brief + f"\nRepos: this Linear project covers these repos. You may read each one at its path; you write in none.\n{lines}\n{REPOS_RULES}"

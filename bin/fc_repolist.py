@@ -111,6 +111,12 @@ def ensure(repo):
     fc_core.atomic_write(path, json.dumps({**json.loads(path.read_text()), "repo": name, "listed": project}, indent=2) + "\n")
     return lines
 
+def unread(repo):
+    """Why the project's list cannot be read from this repo, None when it can: it takes a Linear key and a Linear project in the repo's link."""
+    if not fc_config.LINEAR_KEY:
+        return "no Linear key"
+    return None if fc_core.read_link(repo).get("project") else "no Linear project linked"
+
 def known(repo, p=None):
     """This repo's name, the project's list as Linear serves it, and where each listed repo is checked out on this machine; `p`, the
     project when the caller has read it already."""

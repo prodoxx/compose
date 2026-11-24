@@ -1,7 +1,7 @@
 import argparse, fcntl, json, re, sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-import fc_core, fc_config, fc_claude, fc_tasks, fc_herdr, fc_fleet, fc_worktree, fc_change, fc_crew, fc_crewpick, fc_toolbug, fc_testred, fc_planner_brief, fc_prd, fc_retro
+import fc_core, fc_config, fc_claude, fc_tasks, fc_herdr, fc_fleet, fc_worktree, fc_change, fc_crew, fc_crewpick, fc_toolbug, fc_testred, fc_planner_brief, fc_prd, fc_retro, fc_repolist
 
 
 # ---------- groundwork: the boilerplate brief, then one test-writing teammate per task on a shared contract ----------
@@ -161,7 +161,7 @@ def cmd_planner(a):
     issue = a.issue or feature
     role = "planner" if issue.lower() == feature.lower() else re.sub(r"[^a-z0-9_-]+", "-", f"planner-{issue.lower()}").strip("-")  # a story's planner runs beside the feature's
     brief = fc_planner_brief.PLANNER_BRIEF.format(slug=proj.name, wt=wt, issue=issue, name=fc_herdr.agent_name(proj.name, role))
-    print(fc_planner_brief.with_prd(brief, _prd(wt)) + (f"\nProject notes from the team lead:\n{extra.strip()}\n" if extra.strip() else ""))
+    print(fc_planner_brief.with_repos(fc_planner_brief.with_prd(brief, _prd(wt)), _known(wt)) + (f"\nProject notes from the team lead:\n{extra.strip()}\n" if extra.strip() else ""))
 
 def _prd(wt):
     """The repo's PRD for the planner brief, or None: with no Linear key, no link, or Linear down the brief goes out without it."""
@@ -170,6 +170,18 @@ def _prd(wt):
     try:
         return fc_prd.read_prd(wt)
     except fc_prd.LOOKUP_ERRORS:
+        return None
+
+def _known(wt):
+    """The project's repos for the planner brief (fc_repos.Known), or None: the repo is listed in the project first, as every command that
+    reads the list does; with no Linear key or link, or Linear down (said on stderr), the brief goes out without them."""
+    if fc_repolist.unread(wt):
+        return None
+    try:
+        fc_repolist.ensure(wt)
+        return fc_repolist.known(wt)
+    except (RuntimeError, OSError) as e:
+        print(f"planner: the project's repos were not read ({e}); the brief goes out without them", file=sys.stderr)
         return None
 
 def cmd_toolsmith(a):

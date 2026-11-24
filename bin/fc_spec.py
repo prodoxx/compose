@@ -417,7 +417,7 @@ def cmd_spec_check(a):
         checks, base = [], "HEAD"
     else:
         proj = fc_core.project_dir(a)
-        unread = None if fc_config.LINEAR_KEY and fc_core.read_link(repo).get("project") else "no Linear key" if not fc_config.LINEAR_KEY else "no Linear project linked"
+        unread = fc_repolist.unread(repo)
         def asked(fn):
             try:
                 return fn(repo)

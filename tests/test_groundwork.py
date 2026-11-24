@@ -85,6 +85,55 @@ class Groundwork(unittest.TestCase):
             with mock.patch.object(fc.fc_briefs.fc_prd, "read_prd", **kw), mock.patch.object(fc.fc_briefs.fc_config, "LINEAR_KEY", "k"):
                 self.assertNotIn("The PRD (", self.planner())
 
+    def test_one_repo_adds_one_line(self):
+        k = fc.fc_repos.Known("acme/api", [("acme/api", "the API")], {"acme/api": "/r/api"})
+        self.assertTrue(fc.fc_briefs.fc_planner_brief.with_repos("BRIEF", k).endswith(
+            "\nRepo: this Linear project has one repo, acme/api. Every task's compose block carries `repo: acme/api` on the line after `id:`.\n"))
+
+    def test_several_repos_are_listed_with_paths_and_the_rules(self):
+        k = fc.fc_repos.Known("acme/api", [("acme/api", "the API"), ("acme/web", "the web app"), ("acme/engine", "the engine")], {"acme/api": "/r/api", "acme/web": "/r/web"})
+        out = fc.fc_briefs.fc_planner_brief.with_repos("BRIEF", k)
+        for line in ("- acme/api (this repo, /r/api): the API", "- acme/web (/r/web): the web app", "- acme/engine (not on this machine): the engine",
+                     "a change in two repos is two tasks", "never stacks on it"):
+            self.assertIn(line, out)
+        self.assertTrue(out.startswith("BRIEF"))
+
+    def test_a_repo_with_no_about_is_written_without_the_colon_and_this_repo_is_found_in_any_case(self):
+        k = fc.fc_repos.Known("Acme/API", [("acme/api", ""), ("acme/web", "")], {"acme/api": "/r/api", "acme/web": "/r/web"})
+        out = fc.fc_briefs.fc_planner_brief.with_repos("BRIEF", k)
+        self.assertIn("\n- acme/api (this repo, /r/api)\n", out)
+        self.assertIn("\n- acme/web (/r/web)\n", out)
+
+    def test_no_listed_repo_leaves_the_brief_as_it_was(self):
+        self.assertEqual(fc.fc_briefs.fc_planner_brief.with_repos("BRIEF", fc.fc_repos.Known("acme/api", [], {})), "BRIEF")
+
+    def test_the_planner_command_prints_the_repos(self):
+        k = fc.fc_repos.Known("acme/api", [("acme/api", "the API"), ("acme/web", "the web app")], {"acme/api": "/r/api"})
+        with mock.patch.object(fc.fc_briefs.fc_config, "LINEAR_KEY", "k"), mock.patch.object(fc.fc_core, "read_link", return_value={"project": "https://linear.app/p"}), \
+                mock.patch.object(fc.fc_repolist, "ensure") as ensure, mock.patch.object(fc.fc_repolist, "known", return_value=k) as known:
+            brief = self.planner()
+        self.assertIn("Repos: this Linear project covers these repos.", brief)
+        self.assertIn("- acme/web (not on this machine): the web app", brief)
+        self.assertEqual((ensure.call_args.args[0], known.call_args.args[0]), (self.repo, self.repo))
+
+    def test_the_planner_command_goes_without_the_repos_when_the_list_cannot_be_read(self):
+        for key, link in (("", {"project": "https://linear.app/p"}), ("k", {})):
+            with mock.patch.object(fc.fc_briefs.fc_config, "LINEAR_KEY", key), mock.patch.object(fc.fc_core, "read_link", return_value=link), \
+                    mock.patch.object(fc.fc_repolist, "ensure") as ensure, mock.patch.object(fc.fc_repolist, "known") as known:
+                brief = self.planner()
+            self.assertIn("You are the planner teammate", brief)
+            self.assertNotIn("this Linear project", brief)
+            ensure.assert_not_called(); known.assert_not_called()
+
+    def test_the_planner_command_goes_without_the_repos_when_linear_cannot_be_asked(self):
+        err = io.StringIO()
+        with mock.patch.object(fc.fc_briefs.fc_config, "LINEAR_KEY", "k"), mock.patch.object(fc.fc_core, "read_link", return_value={"project": "https://linear.app/p"}), \
+                mock.patch.object(fc.fc_repolist, "ensure", side_effect=RuntimeError("linear down")), mock.patch("sys.stderr", err):
+            brief = self.planner()
+        self.assertIn("You are the planner teammate", brief)
+        self.assertNotIn("this Linear project", brief)
+        self.assertIn("linear down", err.getvalue())
+
     MCP_TOOLS = ("save_issue", "get_issue", "list_issues", "save_comment", "get_project", "list_issue_labels", "create_issue_label",
                  "save_document", "mcp__claude_ai_Linear")
 

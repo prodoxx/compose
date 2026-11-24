@@ -211,6 +211,15 @@ class Ensure(Fake):
         self.assertEqual(self.link()["listed"], URL)
 
 
+class Unread(Fake):
+    def test_the_list_is_read_with_a_key_and_a_linked_project_and_the_reason_is_named_without_either(self):
+        self.assertIsNone(fc_repolist.unread(self.repo))
+        with mock.patch.object(fc.fc_config, "LINEAR_KEY", ""):
+            self.assertEqual(fc_repolist.unread(self.repo), "no Linear key")
+        (self.repo / ".compose" / "linear.json").write_text(json.dumps({"team": "Engineering"}))
+        self.assertEqual(fc_repolist.unread(self.repo), "no Linear project linked")
+
+
 class About(unittest.TestCase):
     def setUp(self):
         self.repo = Path(tempfile.mkdtemp()).resolve()
