@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fc_cost, fc_mcp  # noqa: E402
-import fc_core, fc_proc, fc_readguard, fc_libapi, fc_green, fc_gate, fc_config, fc_compact, fc_transcript, fc_snapshot, fc_compactlog, fc_tasks, fc_linear, fc_linear_cmd, fc_prd, fc_delivery, fc_factorystate, fc_factoryturn, fc_lead, fc_factory, fc_claude, fc_models, fc_route, fc_quick, fc_herdr, fc_fleet, fc_worktree, fc_layers, fc_blockers, fc_stack, fc_change, fc_frame0, fc_f0pages, fc_ask, fc_decide, fc_hooks, fc_pin, fc_reports, fc_manager, fc_compactor, fc_crew, fc_toolbug, fc_init, fc_clean, fc_framelink, fc_figmatree, fc_figma, fc_briefs, fc_buildercheck, fc_reconcile, fc_format, fc_implement, fc_shrink, fc_jev, fc_accept, fc_fixround, fc_layergate, fc_detach, fc_verify, fc_taskreview, fc_ship, fc_prove, fc_run, fc_status, fc_tiers, fc_tierpin, fc_budget, fc_spec, fc_watch, fc_rewake, fc_history, fc_yolo, fc_bench, fc_setup, fc_update, fc_readiness, fc_retro, fc_reader, fc_stages, fc_waiting, fc_show, fc_repos  # noqa: E402
+import fc_core, fc_proc, fc_readguard, fc_libapi, fc_green, fc_gate, fc_config, fc_compact, fc_transcript, fc_snapshot, fc_compactlog, fc_tasks, fc_linear, fc_linear_cmd, fc_prd, fc_delivery, fc_factorystate, fc_factoryturn, fc_lead, fc_factory, fc_claude, fc_models, fc_route, fc_quick, fc_herdr, fc_fleet, fc_worktree, fc_layers, fc_blockers, fc_stack, fc_change, fc_frame0, fc_f0pages, fc_ask, fc_decide, fc_hooks, fc_pin, fc_reports, fc_manager, fc_compactor, fc_crew, fc_toolbug, fc_init, fc_clean, fc_framelink, fc_figmatree, fc_figma, fc_briefs, fc_buildercheck, fc_reconcile, fc_format, fc_implement, fc_shrink, fc_jev, fc_accept, fc_fixround, fc_layergate, fc_detach, fc_verify, fc_taskreview, fc_ship, fc_prove, fc_run, fc_status, fc_tiers, fc_tierpin, fc_budget, fc_spec, fc_watch, fc_rewake, fc_history, fc_yolo, fc_bench, fc_setup, fc_update, fc_readiness, fc_retro, fc_reader, fc_stages, fc_waiting, fc_show, fc_repos, fc_repolist  # noqa: E402
 
 DETACHED = fc_detach.DETACHED
 
@@ -92,7 +92,7 @@ def main():
                             ("resume", fc_run.cmd_resume, "continue a run or verify that stopped on PAYMENT REQUIRED"),
                             ("done", fc_status.cmd_done, "record tasks the team lead finished by hand: --only ids --note why"),
                             ("sync", fc_linear.cmd_sync, "store the feature and its tasks, read from Linear with the workspace key; --stdin reads them as JSON instead"),
-                            ("linear", fc_linear_cmd.cmd_linear, "read and write Linear with the workspace key: get | list | create | update | comment | cancel | labels | project | doc | next-task-id"),
+                            ("linear", fc_repolist.cmd_linear, "read and write Linear with the workspace key: get | list | create | update | comment | cancel | labels | project | repos | doc | next-task-id"),
                             ("tasks", fc_spec.cmd_tasks, "the task list to review before dispatch: ids, titles, files, after, tests; warns on shared files"),
                             ("route", fc_route.cmd_route, "route each task: a workflow and a depth, project policies first, Jev for the rest; --recalculate recomputes"),
                             ("quick", fc_quick.cmd_quick, "pin check-only on tasks, stories, or the feature, then route them"),
@@ -173,7 +173,7 @@ def main():
         if name == "sync":
             s.add_argument("--stdin", action="store_true", help="read the sync JSON from stdin instead of Linear")
         if name == "linear":
-            s.add_argument("action", choices=("get", "list", "create", "update", "comment", "cancel", "labels", "project", "doc", "next-task-id"))
+            s.add_argument("action", choices=("get", "list", "create", "update", "comment", "cancel", "labels", "project", "repos", "doc", "next-task-id"))
             s.add_argument("target", nargs="*")
             for flag in ("--body", "--comments", "--json", "--append", "--description", "--any-project", "--fresh"):
                 s.add_argument(flag, action="store_true")
@@ -185,6 +185,9 @@ def main():
                 s.add_argument(flag, action="append", help=text)
             for flag in ("--parent", "--search", "--state", "--priority", "--title", "--file", "--section", "--expect", "--create", "--into"):
                 s.add_argument(flag)
+            s.add_argument("--add", help="repos: list this <owner>/<name> in the project's ## Repos section")
+            s.add_argument("--about", help="repos --add: the one line on what lives in that repo")
+            s.add_argument("--drop", help="repos: take this <owner>/<name> out of the list")
             s.add_argument("--quote", help="cancel only: the product owner's words, verbatim; the cancel goes ahead under away or yolo, with them logged on the issue")
             s.add_argument("--subsections", choices=("keep", "drop"), help="with --section: keep the section's subsections and replace only its own text, or drop them; "
                            "without it a write that drops a subsection exits")

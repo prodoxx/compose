@@ -1,7 +1,8 @@
 import json, re
 import urllib.parse
+from collections import namedtuple
 from pathlib import Path
-import fc_config, fc_core, fc_plan
+import fc_config, fc_core, fc_plan, fc_tasks
 
 # A project can hold code in several repos. Each is named `<owner>/<name>` from its origin URL, and the project's content lists them
 # in a `## Repos` section, one bullet per repo: `- <owner>/<name>: <one line on what lives there>`. Nothing here asks Linear or reads
@@ -31,12 +32,7 @@ def origin_url(repo):
 
 def repo_name(repo):
     """The repo's name: `"repo"` in its Linear link when set (a fork or a renamed origin), else the one its origin URL gives."""
-    try:
-        link = json.loads(fc_core.repo_link(repo).read_text())
-    except (OSError, ValueError):
-        link = None
-    recorded = link.get("repo") if isinstance(link, dict) else None
-    return recorded if isinstance(recorded, str) and recorded else name_from_url(origin_url(repo))
+    return fc_core.recorded_repo(repo) or name_from_url(origin_url(repo))
 
 def same(a, b):
     """Whether two repo names are one repo: they compare without regard to case, though the list keeps the case it first saw."""
@@ -96,6 +92,24 @@ def without_repo(content, name):
     keep = [l for i, l in enumerate(lines) if not (span[0] < i < span[1] and (b := bullet(l)) and same(b[0], name))]
     return "\n".join(keep)
 
+def with_task_repo(description, name):
+    """The task's description with `repo: <name>` on the line after `id:` in its compose block, the first one, which is the block
+    `compose tasks` reads; None when that block already names a repo, has no `id:` line, or there is no block: nothing to write then.
+    A key counts the way the block is read, its spaces stripped."""
+    m = fc_tasks.TASK_BLOCK.search(description or "")
+    if not m:
+        return None
+    lines = m.group(1).split("\n")
+    keys = [l.split(":", 1)[0].strip() if ":" in l else None for l in lines]
+    if "repo" in keys or "id" not in keys:
+        return None
+    at = keys.index("id")
+    indent = lines[at][:len(lines[at]) - len(lines[at].lstrip())]
+    block = "\n".join([*lines[:at + 1], f"{indent}repo: {name}", *lines[at + 1:]])
+    return description[:m.start(1)] + block + description[m.end(1):]
+
+Known = namedtuple("Known", "own listed paths")  # this repo's name, the project's [(name, about)] list, {name: path} of the listed repos on this machine
+
 # ---------- where each repo is on this machine: `{"<workspace>": {"<owner>/<name>": "<main checkout>"}}` ----------
 
 def PATHS_FILE():
@@ -121,10 +135,13 @@ def paths():
     return read_all().get(fc_config.WORKSPACE, {})
 
 def record_path(name, repo):
-    """Remember that `name` is checked out at the main checkout of `repo`, replacing an entry of that name in any case."""
+    """Remember that `name` is checked out at the main checkout of `repo`. An entry of that name in another case keeps its key, the name
+    as first seen, and takes the new path."""
     data = read_all()
-    mine = {n: p for n, p in data.get(fc_config.WORKSPACE, {}).items() if not same(n, name)}
-    mine[name] = str(fc_core.main_checkout(repo))
+    old = data.get(fc_config.WORKSPACE, {})
+    key = next((n for n in old if same(n, name)), name)
+    mine = {n: p for n, p in old.items() if not same(n, name)}
+    mine[key] = str(fc_core.main_checkout(repo))
     write_all({**data, fc_config.WORKSPACE: mine})
 
 def path_of(name):

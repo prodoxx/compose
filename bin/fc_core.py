@@ -118,6 +118,27 @@ def repo_link(path):
     found = [d / ".compose" / "linear.json" for d in dict.fromkeys((c.main, c.top))]
     return next((f for f in found if f.exists()), found[0])
 
+def read_link(path):
+    """The repo's Linear link as a dict: {} for a missing or unreadable file or one that holds no object. The one parse of the link
+    file for what it says about the repo; the commands that need the project in it still exit on a missing file."""
+    try:
+        link = json.loads(repo_link(path).read_text())
+    except (OSError, ValueError):
+        return {}
+    return link if isinstance(link, dict) else {}
+
+def recorded_repo(path, listed=False):
+    """The repo's name as its Linear link records it, `"repo"`; None when it records none, or with `listed` when the link does not
+    also hold `"listed": true`."""
+    link = read_link(path)
+    name = link.get("repo")
+    return name if isinstance(name, str) and name and (not listed or link.get("listed") is True) else None
+
+def linked_repo(path):
+    """The recorded name once compose has listed the repo in its Linear project (`"listed": true`, written last, after the list and the
+    open tasks name it), else None: what tells a command the project's repo list already holds this repo, with no Linear call."""
+    return recorded_repo(path, listed=True)
+
 def project_config(proj):
     f = Path(proj) / "verify.json"
     return json.loads(f.read_text()) if f.exists() else {}

@@ -54,6 +54,17 @@ class Names(unittest.TestCase):
         with mock.patch.object(fc_repos.fc_core, "sh", return_value=mock.Mock(returncode=2, stdout="")):
             self.assertEqual(fc_repos.origin_url(self.repo), "")
 
+    def test_the_link_reader_gives_the_repo_only_once_it_is_listed(self):
+        link = Path(self.repo) / ".compose" / "linear.json"
+        self.assertEqual((fc.fc_core.recorded_repo(self.repo), fc.fc_core.linked_repo(self.repo)), ("fork/shop", None))
+        link.write_text(json.dumps({"project": "x", "repo": "fork/shop", "listed": True}))
+        self.assertEqual(fc.fc_core.linked_repo(self.repo), "fork/shop")
+        for junk in ("{not json", "[]", '{"listed": true}', '{"repo": "", "listed": true}', '{"repo": "a/b", "listed": "yes"}'):
+            link.write_text(junk)
+            self.assertIsNone(fc.fc_core.linked_repo(self.repo), junk)
+        link.unlink()
+        self.assertEqual((fc.fc_core.recorded_repo(self.repo), fc.fc_core.linked_repo(self.repo)), (None, None))
+
     def test_names_compare_without_case(self):
         self.assertTrue(fc_repos.same("JobscanCo/Jobscan", "jobscanco/jobscan"))
         self.assertFalse(fc_repos.same("acme/api", "acme/web"))
@@ -122,6 +133,28 @@ class RepoList(unittest.TestCase):
             self.assertEqual(fc_repos.without_repo(text, "acme/api"), f"{heading}\n\n## Links\n")
 
 
+TASK = "## Goal\nBuild it.\n\n```compose\nid: 001\nfiles: a.py\ntest: pytest a\n```\n"
+
+
+class TaskRepo(unittest.TestCase):
+    def test_a_task_that_names_a_repo_and_a_second_block_are_left_alone(self):
+        named = TASK.replace("id: 001\n", "id: 001\nrepo: acme/other\n")
+        self.assertIsNone(fc_repos.with_task_repo(named, "acme/api"))
+        two = TASK + "\n```compose\nid: 009\ntest: x\n```\n"
+        self.assertEqual(fc_repos.with_task_repo(two, "acme/api").count("repo: acme/api"), 1)
+        self.assertIsNone(fc_repos.with_task_repo("no block", "acme/api"))
+
+    def test_a_block_whose_first_line_is_not_id_gets_the_repo_after_its_id_line(self):
+        odd = "```compose\nfiles: a.py\nid: 001\ntest: x\n```\n"
+        self.assertEqual(fc_repos.with_task_repo(odd, "acme/api"), "```compose\nfiles: a.py\nid: 001\nrepo: acme/api\ntest: x\n```\n")
+
+    def test_the_repo_line_follows_the_id_line_s_indent_and_a_key_with_spaces_counts(self):
+        self.assertEqual(fc_repos.with_task_repo("```compose\n  id: 001\ntest: x\n```\n", "acme/api"), "```compose\n  id: 001\n  repo: acme/api\ntest: x\n```\n")
+        self.assertIsNone(fc_repos.with_task_repo("```compose\nid: 001\n repo : acme/web\n```\n", "acme/api"))
+        self.assertIsNone(fc_repos.with_task_repo("```compose\ntest: x\n```\n", "acme/api"))
+        self.assertIsNone(fc_repos.with_task_repo(None, "acme/api"))
+
+
 class PathMap(unittest.TestCase):
     def setUp(self):
         self.repo = Path(tempfile.mkdtemp()).resolve()
@@ -142,7 +175,7 @@ class PathMap(unittest.TestCase):
         other = self.repo / "other"
         other.mkdir()
         fc_repos.record_path("Acme/API", other)
-        self.assertEqual(fc_repos.paths(), {"Acme/API": str(other)})
+        self.assertEqual(fc_repos.paths(), {"acme/api": str(other)})  # the name as first seen, the path as last recorded
 
     def test_the_main_checkout_is_what_is_stored(self):
         main = self.repo / "main"

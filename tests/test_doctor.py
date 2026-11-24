@@ -297,6 +297,12 @@ class DoctorWarnings(unittest.TestCase):
             self.assertEqual(self.doctor(self.OK)[1].count("repos: dropped acme/web (its folder is gone)"), 0)
         self.assertEqual((code, lines.count("repos: dropped acme/web (its folder is gone)"), [l for l in lines if "acme/api" in l]), (0, 1, []))
 
+    def test_a_path_map_it_cannot_write_is_named_and_the_doctor_goes_on(self):
+        with mock.patch.object(fc.fc_repos, "prune_paths", side_effect=PermissionError("denied")):
+            code, lines = self.doctor(self.OK)
+        self.assertEqual((code, [l for l in lines if l.startswith("repos:")]), (0, [f"repos: could not update {fc.fc_repos.PATHS_FILE()} (denied)"]))
+        self.assertIn(self.READY, lines)
+
     def test_a_required_miss_still_prints_every_line_then_exits_1(self):
         self.herdr_config('[ui.toast]\ndelivery = "system"\n')
         keys = [("openrouter_api_key", self.home / "config.json"), ("TYPESAFE_API_KEY", self.home / ".env")]

@@ -236,8 +236,11 @@ def cmd_doctor(a):
         print("WARNING: gh is not logged in: compose bug reports are saved, not filed on GitHub (run: gh auth login)")
     for name, path in fc_auth.old_keys(fc_config.CONFIG_PATH, fc_config.ENV_FILE):
         print(f"WARNING: {name} in {fc_core.tilde(path)} differs from the key auth.json holds, so it was kept: remove the one you do not want")
-    for name in fc_repos.prune_paths():
-        print(f"repos: dropped {name} (its folder is gone)")
+    try:
+        for name in fc_repos.prune_paths():
+            print(f"repos: dropped {name} (its folder is gone)")
+    except OSError as e:  # a path map compose cannot write is worth a line, not the rest of the doctor
+        print(f"repos: could not update {fc_repos.PATHS_FILE()} ({e})")
     wt, missing = None, []
     if getattr(a, "project", None):  # the tree is the named project's; without one (and under `update`) there is none to check
         pick = fc_core.all_projects(Path(a.repo).resolve()).get(a.project)

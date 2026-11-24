@@ -29,6 +29,7 @@ fc_repos
 fc_evidence
 fc_ledger
 fc_linear_cmd
+fc_repolist
 fc_policy
 fc_routectx
 fc_routerec
