@@ -129,11 +129,13 @@ class Groundwork(unittest.TestCase):
         gone = SystemExit("compose cannot name this repo: it has no origin remote. Ask the user for its <owner>/<name>")
         for patched, why in (({"ensure": RuntimeError("linear down")}, "linear down"), ({"known": OSError("disk gone")}, "disk gone"), ({"ensure": gone}, str(gone))):
             kw = {name: {"side_effect": err} for name, err in patched.items()}
+            (self.proj / "linear.json").write_text(json.dumps({"feature": "NEB-9"}))
             out = io.StringIO()
             with mock.patch.object(fc.fc_briefs.fc_config, "LINEAR_KEY", "k"), mock.patch.object(fc.fc_core, "read_link", return_value={"project": "https://linear.app/p"}), \
-                    mock.patch.object(fc.fc_repolist, "ensure", **kw.get("ensure", {})), mock.patch.object(fc.fc_repolist, "known", **kw.get("known", {})), mock.patch("sys.stdout", out):
-                with self.assertRaises(SystemExit) as cm:
-                    self.planner()
+                    mock.patch.object(fc.fc_repolist, "ensure", **kw.get("ensure", {})), mock.patch.object(fc.fc_repolist, "known", **kw.get("known", {})), \
+                    self.patched()[0], self.patched()[1], mock.patch("sys.stdout", out), mock.patch("sys.stdin", io.StringIO("")):
+                with self.assertRaises(SystemExit) as cm:  # cmd_planner called here, so `out` is the stdout it prints to
+                    fc.fc_briefs.cmd_planner(SimpleNamespace(repo=str(self.repo), project="p", issue=None, extra="Spec: README.md"))
             self.assertEqual(cm.exception.code, f"planner: could not read the project's repos ({why}); fix that and run it again")
             self.assertEqual(out.getvalue(), "", why)
 
