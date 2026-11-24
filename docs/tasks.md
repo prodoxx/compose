@@ -66,9 +66,11 @@ More rules apply to the block and the issue around it:
 - The `after` field comes from the issue's "blocked by" links to other tasks of the feature in the same repo.
   Each linked task becomes the layer this task stacks on.
 - The `repo:` field, on the line after `id:`, is the `<owner>/<name>` of the repo that builds the task, one of the project's `## Repos`.
-  `compose linear project` writes it on a project's open tasks when this repo is the only one listed, and a planner writes it on each new task.
-  `spec-check` fails a task with no `repo:`, with one the project's list lacks, or with one that is not on this machine.
-  A "blocked by" link to a task of another repo never stacks: `run` holds the task until that task is Done or Canceled, and says `<id> is a task of <repo>: it holds until it is finished there`.
+  The first `compose linear project`, `spec-check` or `planner` from a checkout writes it on the project's open tasks that have none when this repo is then the only one listed, and names each ticket it wrote; it writes none when an open task already names another repo.
+  A planner writes it on each new task.
+  `spec-check` fails a task with no `repo:`, with one the project's list lacks, or with one that is not on this machine; a Done task is never checked for it.
+  Once any task of the feature names a repo, `sync` holds a task with no `repo:` that is not Done: it waits on `its repo (no repo: on the task)`, and `run` never starts it in a guessed repo.
+  A "blocked by" link to a task of another repo never stacks: `run` holds the task until that task is Done or Canceled, and says `<linear id> is a task of <repo>: it holds until it is finished there`.
 - Any other "blocked by" link (a design story, another feature's issue) does not stack.
   `run` holds the task until that blocker is Done or Canceled, or In Review with the Design label, as of the last `sync`.
   A blocker in any other state is let go when git shows its code in the trunk the run starts on: the task branch of the blocker, or the top layer of the project that builds it once all its tasks passed, is an ancestor of that trunk.
@@ -221,7 +223,9 @@ From `--stdin`, give such an issue the status `Canceled` (or `Cancelled`).
 
 `sync` refuses a feature other than the one `linear.json` names, a block without `id` or `test`, and an id used twice.
 `run`, `verify`, `resume`, `bench`, and `tasks` read what was last synced, so the team lead syncs right before each.
-With the project's repo list, `sync` keeps this repo's tasks and prints `  elsewhere: <id> <linear id> in <repo>` for each task of another repo.
+`sync` keeps the tasks that name this repo and prints `  elsewhere: <id> <linear id> in <repo>` for each task of another repo, whether or not the project lists this repo yet.
+This repo's name is `"repo"` in `.compose/linear.json` when set, else its origin's `<owner>/<name>`, so a fork whose origin is not the canonical name sets `"repo"` to the canonical one.
+A repo with no name at all (no origin and no `"repo"`) keeps every task.
 
 The CLI writes to Linear only to keep states true, and only when the active workspace has a Linear key.
 The team lead writes everything else on Linear with `compose linear`.

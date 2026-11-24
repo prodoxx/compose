@@ -110,7 +110,7 @@ Like the team lead, the planner's tab is denied edits, so it plans and never wri
 
 One product delivery plan in Linear sets the order across features, in parallel tracks; `compose delivery reconcile` makes Linear follow it and proposes anything destructive.
 
-The factory (`/compose:factory`) runs in the background: it builds every ready story in delivery plan order at a day pace you set, pauses work a plan change rests on, and offers the next thing to plan while it builds, ahead into later waves.
+The factory (`/compose:factory`) runs in the background: it builds every ready story whose tasks are all in this repo, in delivery plan order at a day pace you set (a story with tasks in another repo too is built by hand, each repo its own part), pauses work a plan change rests on, and offers the next thing to plan while it builds, ahead into later waves.
 At night (`/compose:factory night`) it keeps building inside the end time and dollar budget you set, answers questions on approved tickets with a one-time frontier answerer, prepares questions for your next planning session (a ticket is prepared again only when its own title or description changes, never because its feature was edited, and a ticket whose prep failed twice is given up until its own text changes), and greets you with one morning digest.
 
 You can also start it yourself from the engineering manager with `/compose:planner <issue or Linear project link>`.
@@ -161,7 +161,7 @@ Work lives at five levels in Linear:
 
 You can hand `compose` a link to any of these levels, and it creates the missing ones.
 It asks for the repo's Linear project link once and keeps it in `.compose/linear.json` in the repo's main checkout, which every worktree of the repo reads.
-The first `compose linear project`, `spec-check` or `planner` after that also lists the repo on the project and records its path in `~/.compose/repos.json`.
+Each `compose linear project`, `spec-check` or `planner` after that lists the repo on the project when it is missing there and records its path in `~/.compose/repos.json`.
 Each task moves to In Progress when it is dispatched, In Review when its layer passes, and Done when its PR merges.
 
 ## What a miss teaches

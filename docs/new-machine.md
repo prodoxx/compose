@@ -86,7 +86,7 @@ Offline, `COMPOSE_NO_PREFLIGHT=1` skips the key calls, the fast-model check, the
 
 A repo needs no setup ahead of time.
 The first run in a repo asks for its Linear project and writes `.compose/linear.json` in the repo's main checkout, which stays out of git and serves every worktree of the repo.
-The first `compose linear project`, `spec-check` or `planner` after that also lists the repo on the project and records its path in `~/.compose/repos.json`.
+Each `compose linear project`, `spec-check` or `planner` after that lists the repo on the project when it is missing there and records its path in `~/.compose/repos.json`.
 
 ## Update
 
