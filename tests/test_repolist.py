@@ -26,6 +26,7 @@ class Fake(unittest.TestCase):
         (self.repo / ".compose").mkdir()
         (self.repo / ".compose" / "linear.json").write_text(json.dumps({"project": URL, "team": "Engineering"}))
         self.calls, self.content, self.issues = [], "", {}
+        self.overwrite, self.refuse = None, set()  # another writer's content served after a project write; issues whose next write fails
         for mod, name, value in ((fc.fc_config, "LINEAR_KEY", KEY), (fc.fc_linear, "linear_gql", self.gql), (fc.fc_linear_cmd, "await_write", mock.Mock()),
                                  (fc.fc_core, "main_checkout", lambda path: Path(path)), (fc_repos, "origin_url", lambda repo: "git@github.com:acme/api.git"),
                                  (fc_repolist, "about", lambda repo: "the API"),
@@ -36,9 +37,12 @@ class Fake(unittest.TestCase):
         q = " ".join(query.split())
         self.calls.append((q, variables))
         if "projectUpdate" in q:
-            self.content = variables["in"]["content"]
+            self.content = variables["in"]["content"] if self.overwrite is None else self.overwrite(variables["in"]["content"])
             return {"projectUpdate": {"success": True}}
         if "issueUpdate" in q:
+            if variables["id"] in self.refuse:
+                self.refuse.discard(variables["id"])
+                raise RuntimeError(f"Linear refused {variables['id']}")
             self.issues[variables["id"]] = variables["in"]["description"]
             return {"issueUpdate": {"success": True}}
         if "project(id" in q:
@@ -86,7 +90,7 @@ class Ensure(Fake):
         self.assertEqual(self.issues["ENG-2"], "## A story\nNo block.")
         self.assertEqual(lines, ["repos: added acme/api to Shop", "repos: wrote repo: acme/api on 1 open task(s)"])
         link = self.link()
-        self.assertEqual((link["repo"], link["listed"], link["project"]), ("acme/api", True, URL))
+        self.assertEqual((link["repo"], link["listed"], link["project"]), ("acme/api", URL, URL))
         self.assertEqual(fc_repos.path_of("acme/api"), self.repo)
 
     def test_a_second_run_asks_linear_nothing(self):
@@ -143,7 +147,7 @@ class Ensure(Fake):
         (self.repo / ".compose" / "linear.json").write_text(json.dumps({"project": URL, "team": "Engineering", "feature": "ENG-9"}))
         self.assertEqual(fc_repolist.ensure(self.repo), [])
         self.assertEqual([q for q, _ in self.calls if "projectUpdate" in q], [])
-        self.assertEqual(self.link(), {"project": URL, "team": "Engineering", "feature": "ENG-9", "repo": "ACME/Api", "listed": True})  # as the list first wrote it
+        self.assertEqual(self.link(), {"project": URL, "team": "Engineering", "feature": "ENG-9", "repo": "ACME/Api", "listed": URL})  # as the list first wrote it
         self.assertEqual(fc_repos.paths(), {"ACME/Api": str(self.repo)})
 
     def test_a_null_content_gets_the_list(self):
@@ -161,7 +165,50 @@ class Ensure(Fake):
             fc_repolist.ensure(self.repo)
         self.assertNotIn("listed", self.link())
         self.assertEqual(fc_repolist.ensure(self.repo)[0], "repos: added acme/api to Shop")
-        self.assertTrue(self.link()["listed"])
+        self.assertEqual(self.link()["listed"], URL)
+
+    def test_a_link_marked_for_its_project_asks_linear_nothing_and_an_old_true_mark_runs_again(self):
+        (self.repo / ".compose" / "linear.json").write_text(json.dumps({"project": URL, "team": "Engineering", "repo": "acme/api", "listed": URL}))
+        self.assertEqual((fc_repolist.ensure(self.repo), self.calls), ([], []))
+        (self.repo / ".compose" / "linear.json").write_text(json.dumps({"project": URL, "team": "Engineering", "repo": "acme/api", "listed": True}))
+        self.assertEqual(fc_repolist.ensure(self.repo), ["repos: added acme/api to Shop"])
+        self.assertEqual(self.link()["listed"], URL)
+
+    def test_a_link_pointed_at_another_project_after_marking_lists_the_repo_there(self):
+        fc_repolist.ensure(self.repo)
+        other = "https://linear.app/acme/project/the-right-one-def456"
+        (self.repo / ".compose" / "linear.json").write_text(json.dumps({**self.link(), "project": other}))
+        self.content, self.calls[:] = "Other project.", []
+        self.assertEqual(fc_repolist.ensure(self.repo), ["repos: added acme/api to Shop"])
+        self.assertEqual([v for _, v in self.calls][0], {"slug": "def456"})
+        self.assertEqual((self.content, self.link()["listed"]), ("Other project.\n\n## Repos\n- acme/api: the API\n", other))
+
+    def test_a_list_write_another_writer_replaced_leaves_the_link_unmarked_and_names_no_task(self):
+        self.content, self.issues, self.overwrite = "Intro.", {"ENG-1": TASK}, lambda new: "Intro.\n\n## Repos\n- acme/web: the web app\n"
+        with self.assertRaises(RuntimeError) as e:
+            fc_repolist.ensure(self.repo)
+        self.assertIn("Shop", str(e.exception))
+        self.assertEqual((self.issues["ENG-1"], "listed" in self.link(), fc_repos.paths()), (TASK, False, {}))
+
+    def test_a_fresh_read_that_shows_a_second_repo_names_no_task(self):
+        self.content, self.issues = "Intro.", {"ENG-1": TASK}
+        self.overwrite = lambda new: new.replace("- acme/api: the API\n", "- acme/web: the web app\n- acme/api: the API\n")
+        self.assertEqual(fc_repolist.ensure(self.repo), ["repos: added acme/api to Shop"])
+        self.assertEqual((self.issues["ENG-1"], self.link()["listed"]), (TASK, URL))
+
+    def test_a_task_write_that_fails_midway_is_finished_by_the_next_run(self):
+        self.issues, self.refuse = {f"ENG-{i}": TASK.replace("001", f"00{i}") for i in range(1, 4)}, {"ENG-2"}
+        with mock.patch.object(fc.fc_linear_cmd, "drop_get_cache") as dropped, self.assertRaises(RuntimeError):
+            fc_repolist.ensure(self.repo)
+        dropped.assert_called_once()  # ENG-1 was written, so a cached `get` of it is stale
+        self.assertNotIn("listed", self.link())
+        self.assertIn("id: 001\nrepo: acme/api\n", self.issues["ENG-1"])
+        self.assertNotIn("repo:", self.issues["ENG-3"])
+        self.calls.clear()
+        self.assertEqual(fc_repolist.ensure(self.repo), ["repos: wrote repo: acme/api on 2 open task(s)"])
+        self.assertEqual([v["id"] for q, v in self.calls if "issueUpdate" in q], ["ENG-2", "ENG-3"])
+        self.assertEqual([d.count("repo: acme/api") for d in self.issues.values()], [1, 1, 1])
+        self.assertEqual(self.link()["listed"], URL)
 
 
 class About(unittest.TestCase):
@@ -173,12 +220,26 @@ class About(unittest.TestCase):
             self.assertEqual(fc_repolist.about(self.repo), "The API of the shop")
         self.assertEqual(sh.call_args.args[0], ["gh", "repo", "view", "--json", "description", "-q", ".description"])
 
-    def test_without_one_the_readme_s_first_paragraph_cut_to_120_characters(self):
-        (self.repo / "README.md").write_text("# Shop\n\nThe shop's API:\norders and " + "x" * 200 + "\n\nMore.\n")
+    def readme(self, text):
+        (self.repo / "README.md").write_text(text)
+        with mock.patch.object(fc.fc_core, "sh", return_value=mock.Mock(returncode=1, stdout="")):
+            return fc_repolist.about(self.repo)
+
+    def test_without_one_the_readme_s_first_paragraph_cut_to_120_characters_on_a_word(self):
+        words = "The shop's API:\norders " + " ".join(["and payments"] * 20)
+        (self.repo / "README.md").write_text("# Shop\n\n" + words + "\n\nMore.\n")
         for sh in (mock.Mock(returncode=1, stdout=""), mock.Mock(returncode=0, stdout="\n"), mock.Mock(side_effect=OSError("no gh"))):
             with mock.patch.object(fc.fc_core, "sh", sh):
                 got = fc_repolist.about(self.repo)
-            self.assertEqual(got, ("The shop's API: orders and " + "x" * 200)[:120])
+            self.assertEqual(got, "The shop's API: orders " + " ".join(["and payments"] * 7) + " and")
+            self.assertLessEqual(len(got), 120)
+        self.assertEqual(self.readme("x" * 200 + "\n"), "x" * 120)  # one word longer than the line is cut where the line ends
+        self.assertEqual(self.readme("y" * 118 + " z\n"), "y" * 118 + " z")  # a last word that ends on the 120th character stays
+
+    def test_badges_images_and_html_are_not_the_readme_s_paragraph(self):
+        for junk in ("[![CI](https://x/badge.svg)](https://x)", "![logo](logo.png)", '<h1 align="center">Shop</h1>', "  <p>\n<img src=x>\n</p>"):
+            self.assertEqual(self.readme(f"{junk}\n\n# Shop\n\nThe shop's API.\n"), "The shop's API.", junk)
+        self.assertEqual(self.readme("[the docs](docs.md) say what it is.\n"), "[the docs](docs.md) say what it is.")
 
     def test_with_neither_it_is_empty(self):
         with mock.patch.object(fc.fc_core, "sh", return_value=mock.Mock(returncode=1, stdout="")):
@@ -228,7 +289,9 @@ class Command(Fake):
         self.assertEqual(self.fails(fc_repolist.cmd_linear, self.args("repos", drop="ACME/api")), "this repo is linked to the project: unlink it before dropping it from the list")
         self.assertEqual(self.fails(fc_repolist.cmd_linear, self.args("repos", add="acme/x", drop="acme/y")), "repos takes one of --add, --drop")
         self.assertEqual(self.fails(fc_repolist.cmd_linear, self.args("repos", about="words")), "--about goes with --add")
-        self.assertEqual(self.fails(fc_repolist.cmd_linear, self.args("repos", add="engine")), "--add takes <owner>/<name>, not 'engine'")
+        for bad in ("engine", "a//b", "/a/b", "a/b/", "acme/my engine", "acme/\tx"):
+            self.assertEqual(self.fails(fc_repolist.cmd_linear, self.args("repos", add=bad)), f"--add takes <owner>/<name>, such as acme/api, not {bad!r}", bad)
+        self.assertEqual(self.fails(fc_repolist.cmd_linear, self.args("repos", drop="a//b")), "--drop takes <owner>/<name>, such as acme/api, not 'a//b'")
         self.assertEqual(self.fails(fc_repolist.cmd_linear, self.args("get", "ENG-1", add="acme/x")), "--add, --about and --drop belong to compose linear repos")
         self.assertEqual([q for q, _ in self.calls if "Update" in q], [])
 

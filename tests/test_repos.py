@@ -57,9 +57,10 @@ class Names(unittest.TestCase):
     def test_the_link_reader_gives_the_repo_only_once_it_is_listed(self):
         link = Path(self.repo) / ".compose" / "linear.json"
         self.assertEqual((fc.fc_core.recorded_repo(self.repo), fc.fc_core.linked_repo(self.repo)), ("fork/shop", None))
-        link.write_text(json.dumps({"project": "x", "repo": "fork/shop", "listed": True}))
+        link.write_text(json.dumps({"project": "x", "repo": "fork/shop", "listed": "x"}))
         self.assertEqual(fc.fc_core.linked_repo(self.repo), "fork/shop")
-        for junk in ("{not json", "[]", '{"listed": true}', '{"repo": "", "listed": true}', '{"repo": "a/b", "listed": "yes"}'):
+        for junk in ("{not json", "[]", '{"listed": "x", "project": "x"}', '{"repo": "", "listed": "x", "project": "x"}', '{"repo": "a/b", "listed": true, "project": "x"}',
+                     '{"repo": "a/b", "listed": "x", "project": "y"}', '{"repo": "a/b", "listed": ""}', '{"repo": "a/b", "listed": null, "project": null}'):
             link.write_text(junk)
             self.assertIsNone(fc.fc_core.linked_repo(self.repo), junk)
         link.unlink()

@@ -17,7 +17,7 @@ ABOUT_CHARS = 120
 
 def about(repo):
     """One line on what lives in the repo, for its bullet: its GitHub description, else the first paragraph of its README that is not a
-    heading, cut to ABOUT_CHARS; "" with neither, which lists the repo by name alone."""
+    heading, a badge row, an image or HTML, cut to ABOUT_CHARS on a word; "" with neither, which lists the repo by name alone."""
     try:
         p = fc_core.sh(["gh", "repo", "view", "--json", "description", "-q", ".description"], repo, check=False, timeout=20)
         text = " ".join(p.stdout.split()) if p.returncode == 0 else ""
@@ -29,8 +29,12 @@ def about(repo):
         readme = (Path(repo) / "README.md").read_text(errors="replace")
     except OSError:
         return ""
-    para = next((b for b in re.split(r"\n\s*\n", readme) if b.strip() and not b.lstrip().startswith("#")), "")
-    return " ".join(para.split())[:ABOUT_CHARS]
+    para = next((b for b in re.split(r"\n\s*\n", readme) if b.strip() and not b.lstrip().startswith(("#", "[!", "![", "<"))), "")
+    text = " ".join(para.split())
+    if len(text) <= ABOUT_CHARS:
+        return text
+    cut = text[:ABOUT_CHARS + 1].rsplit(" ", 1)[0]  # the words that fit; a first word longer than the line is cut where the line ends
+    return cut if " " in text[:ABOUT_CHARS + 1] else text[:ABOUT_CHARS]
 
 def content_of(pid):
     return fc_linear.linear_gql(CONTENT, {"id": pid})["project"]["content"]
@@ -62,21 +66,26 @@ def name_open_tasks(repo, p, name):
             break
         after = page["pageInfo"]["endCursor"]
     written = 0
-    for issue in tasks:
-        new = fc_repos.with_task_repo(issue["description"], name)
-        if new is not None:
-            write_task(issue, new)
-            written += 1
-    if written:
-        fc_linear_cmd.drop_get_cache(argparse.Namespace(repo=repo))  # a cached `get` would serve the body from before the write
+    try:
+        for issue in tasks:
+            new = fc_repos.with_task_repo(issue["description"], name)
+            if new is not None:
+                write_task(issue, new)
+                written += 1
+    finally:
+        if written:  # a cached `get` would serve the body from before the write, also when a later write failed
+            fc_linear_cmd.drop_get_cache(argparse.Namespace(repo=repo))
     return written
 
 def ensure(repo):
     """List this repo in its Linear project, and while it is the project's only repo name it on every open task, then mark the link file
-    `"listed": true`; return the lines it printed. The mark is written last, so a run that died earlier does it all again, every write
-    already made is skipped, and once marked the command asks Linear nothing."""
+    `"listed": "<the project's URL>"`; return the lines it printed. The mark is written last, so a run that died earlier does it all again,
+    every write already made is skipped, and once marked for the project the link points at the command asks Linear nothing.
+    The list is read again after it is written, and the tasks are named only from that read: two repos listing themselves at once, or a
+    hand edit between the read and the write, can drop a bullet, and neither run may then believe it is the project's only repo."""
     if fc_core.linked_repo(repo):
         return []
+    project = fc_core.read_link(repo).get("project")
     name = fc_repos.repo_name(repo)
     if not name:
         sys.exit(f'compose cannot name this repo: it has no origin remote. Ask the user for its <owner>/<name> and add "repo": "<owner>/<name>" to {fc_core.repo_link(repo)}')
@@ -88,7 +97,10 @@ def ensure(repo):
     if listed_as(content, name) is None:
         new = fc_repos.with_repo(content, name, about(repo))
         write_content(p, content, new)
-        content = new
+        content = content_of(p["id"])
+        if listed_as(content, name) is None:
+            raise RuntimeError(f"another write to the content of {p['name']} replaced its list before {name} showed in it: "
+                               "run compose linear project again")
         say(f"repos: added {name} to {p['name']}")
     listed = fc_repos.parse_list(content)
     name = listed_as(content, name) or name
@@ -96,7 +108,7 @@ def ensure(repo):
         say(f"repos: wrote repo: {name} on {n} open task(s)")
     fc_repos.record_path(name, repo)
     path = fc_core.repo_link(repo)
-    fc_core.atomic_write(path, json.dumps({**json.loads(path.read_text()), "repo": name, "listed": True}, indent=2) + "\n")
+    fc_core.atomic_write(path, json.dumps({**json.loads(path.read_text()), "repo": name, "listed": project}, indent=2) + "\n")
     return lines
 
 def known(repo, p=None):
@@ -123,8 +135,8 @@ def verb_repos(a):
     if a.about and not a.add:
         sys.exit("--about goes with --add")
     name = a.add or a.drop
-    if name and ("/" not in name or any(c.isspace() for c in name) or name.startswith("/") or name.endswith("/")):
-        sys.exit(f"--{'add' if a.add else 'drop'} takes <owner>/<name>, not {name!r}")
+    if name and (len(name.split("/")) < 2 or not all(name.split("/")) or any(c.isspace() for c in name)):
+        sys.exit(f"--{'add' if a.add else 'drop'} takes <owner>/<name>, such as acme/api, not {name!r}")
     if a.drop and (own := fc_repos.repo_name(a.repo)) and fc_repos.same(a.drop, own):
         sys.exit("this repo is linked to the project: unlink it before dropping it from the list")
     p = fc_linear_cmd.linear_project(a.repo)

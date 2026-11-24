@@ -128,15 +128,17 @@ def read_link(path):
     return link if isinstance(link, dict) else {}
 
 def recorded_repo(path, listed=False):
-    """The repo's name as its Linear link records it, `"repo"`; None when it records none, or with `listed` when the link does not
-    also hold `"listed": true`."""
+    """The repo's name as its Linear link records it, `"repo"`; None when it records none, or with `listed` when the link's `"listed"`
+    is not its `"project"`."""
     link = read_link(path)
-    name = link.get("repo")
-    return name if isinstance(name, str) and name and (not listed or link.get("listed") is True) else None
+    name, project = link.get("repo"), link.get("project")
+    marked = isinstance(project, str) and project and link.get("listed") == project
+    return name if isinstance(name, str) and name and (not listed or marked) else None
 
 def linked_repo(path):
-    """The recorded name once compose has listed the repo in its Linear project (`"listed": true`, written last, after the list and the
-    open tasks name it), else None: what tells a command the project's repo list already holds this repo, with no Linear call."""
+    """The recorded name once compose has listed the repo in the Linear project the link points at (`"listed": "<that project's URL>"`,
+    written last, after the list and the open tasks name it), else None: what tells a command the project's repo list already holds this
+    repo, with no Linear call. A link pointed at another project since, or an older `"listed": true`, reads as not listed, so it runs again."""
     return recorded_repo(path, listed=True)
 
 def project_config(proj):
