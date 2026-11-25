@@ -26,6 +26,7 @@ fc_plan
 fc_layout
 fc_repos
 fc_linear
+fc_planstate
 fc_evidence
 fc_ledger
 fc_linear_cmd

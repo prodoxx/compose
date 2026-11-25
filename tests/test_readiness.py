@@ -273,6 +273,13 @@ class StoryReadiness(unittest.TestCase):
                          {"ready": True, "specced": True, "unblocked": True, "has_tasks": False, "judge": "jev", "missing": [], "cached": False, "error": None})
         self.assertEqual(self.updates, [])
 
+    def test_a_story_whose_plan_is_being_written_is_judged_like_a_todo_one_and_a_started_one_is_not(self):
+        self.tree = tree(state="Planning")
+        self.assertTrue(fc_readiness.story_readiness(self.repo, "ENG-7")["ready"])
+        self.tree = tree(state="In Progress")
+        self.assertFalse(fc_readiness.story_readiness(self.repo, "ENG-7")["ready"])
+        self.assertEqual(self.judge.call_count, 1)
+
     def test_missing_items_become_tagged_open_questions_and_their_own_lines_stay(self):
         self.tree = tree(story=STORY + "\n## Open questions\n\n* Which card brands?\n* Old one? (readiness check, 2026-10-01)\n")
         self.verdict["missing"] = [{"item": "scope", "issue": "ENG-7", "question": "Where does ENG-7 stop: what is in it and what is left out?"}]

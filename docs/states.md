@@ -127,6 +127,8 @@ stateDiagram-v2
     direction LR
     state "Todo / Backlog" as Todo
     [*] --> Todo: the planner creates the task issue
+    Todo --> Planning: a planner starts on a feature or a story
+    Planning --> InProgress: a task of it is dispatched
     Todo --> InProgress: dispatched
     InProgress --> InProgress: failed, the failure as a comment
     InProgress --> InReview: passed or hand_done, with a comment
@@ -136,6 +138,11 @@ stateDiagram-v2
     Done --> [*]
     Canceled --> [*]
 ```
+
+A feature or a story is in Planning while its plan is being written: `compose planner` moves the issue it plans there from Todo or Backlog, and nowhere else.
+A team with no Planning state gets one, unstarted, between Todo and In Progress.
+Planning is as open as Todo: readiness judges the story, the factory can start it, and it leaves Planning by the roll-up below.
+A task issue is never in Planning.
 
 The roll-up rules, per story and then per feature:
 

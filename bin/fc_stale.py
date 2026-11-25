@@ -40,7 +40,7 @@ def stale(issue):
         gaps.append('it still says "Not shaped yet" and it is shaped (it has criteria, an Intent or a Plan, and no `needs-shaping` label): remove that line')
     if any(DEEP_DIVE_OWED.match(NOT_SHAPED.sub(r"\1", l)) for l in desc.splitlines()) and fc_change.map_section(desc, "Tech doc") and not waits:
         gaps.append('it still says "Needs a deep dive" and its tech doc is linked under `## Tech doc`: remove that line (the `deep-dive` label stays: it is how the planner and readiness know to read the tech doc)')
-    if status.lower() not in ("", "todo", "backlog"):
+    if status.lower() not in ("", *fc_tasks.OPEN):
         for q in fc_linear.open_questions(desc):
             if READINESS_TAG.search(q):
                 gaps.append(f'"{q}" is a readiness check\'s question, and readiness judges only a Todo or Backlog story while this one is {status}: '

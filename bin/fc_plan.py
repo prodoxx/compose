@@ -165,7 +165,7 @@ def with_plan_link(description, title, url):
     return description.rstrip("\n") + "\n\n## Notes\n\n" + line + "\n"
 
 def start_today(lanes):
-    starts = [s for l in lanes for s in l["stories"] if s["state"].lower() in {"todo", "backlog"}
+    starts = [s for l in lanes for s in l["stories"] if s["state"].lower() in fc_tasks.OPEN
               and all(fc_tasks.blocker_finished(b["state"], b["labels"]) for b in s["blockers"])]
     if not starts:
         return "Nothing can start now."

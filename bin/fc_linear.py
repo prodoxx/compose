@@ -70,7 +70,7 @@ def linear_sync_payload(proj):
 # Every call goes through fc_linearapi: paced with every other compose process on the machine, and a rate limit holds the
 # fleet as long as Linear says. Every call here is best effort: a Linear outage prints one line and the run goes on.
 LINEAR_ISSUE = """query($id: String!) { issue(id: $id) { id identifier description state { name type }
-  team { states { nodes { id name type } } } parent { identifier } children { nodes { identifier state { name type } } } } }"""
+  team { id states { nodes { id name type position } } } parent { identifier } children { nodes { identifier state { name type } } } } }"""
 _linear_warned = []
 
 WRITES = [0]  # the mutations this process sent: a caller tells by it whether a step wrote to Linear
@@ -340,12 +340,12 @@ def task_holds(issue, feature=None):
     return out
 
 def ready_ids(issues, parent=None):
-    """The identifiers, in input order, of the issues that can start now: state Todo or Backlog and every `blocks`
+    """The identifiers, in input order, of the issues that can start now: state Todo, Backlog or Planning (fc_tasks.OPEN) and every `blocks`
     blocker freed (Done or Canceled, In Review carrying the Design label, or In Review under the same `parent`: a story
     verified in its feature's stack frees its siblings), none of their tasks waiting on another story's (task_holds), and
     none carries the needs-shaping label."""
     return [i["identifier"] for i in issues
-            if fc_tasks.state_name(i["state"]).lower() in ("todo", "backlog")
+            if fc_tasks.state_name(i["state"]).lower() in fc_tasks.OPEN
             and NEEDS_SHAPING not in [l["name"].lower() for l in i["labels"]["nodes"]]
             and all(freed(r["issue"], (r["issue"].get("parent") or {}).get("identifier"), parent)
                     for r in i["inverseRelations"]["nodes"] if r["type"] == "blocks")

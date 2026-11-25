@@ -12,7 +12,7 @@ PLANNING_HOURS = 24  # a planning conversation older than this no longer holds o
 PRD_FIRST = ("event factory=prd-missing  (no PRD and no product delivery plan yet: plan the PRD with the product owner from compose prd seed "
              "(sections/0q.md), then the delivery plan from it; nothing is dispatched before they exist)")
 PRD_OFFER = "event factory=prd-missing  (no PRD yet: offer to plan it with the product owner from compose prd seed (sections/0q.md); building goes on)"
-OPEN = ("todo", "backlog")
+OPEN = fc_tasks.OPEN
 FREED = ("in review", "done", "canceled")
 SHAPING = "needs-shaping"
 FULL_READ_SECONDS = 600  # a plan whose project shows no change is kept this long; then it is read in full, for what the stamp misses

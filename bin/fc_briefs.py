@@ -1,7 +1,7 @@
 import argparse, fcntl, json, re, sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-import fc_core, fc_config, fc_claude, fc_tasks, fc_herdr, fc_fleet, fc_worktree, fc_change, fc_crew, fc_crewpick, fc_toolbug, fc_testred, fc_planner_brief, fc_prd, fc_retro, fc_repolist
+import fc_core, fc_config, fc_claude, fc_tasks, fc_herdr, fc_fleet, fc_worktree, fc_change, fc_crew, fc_crewpick, fc_toolbug, fc_testred, fc_planner_brief, fc_prd, fc_retro, fc_repolist, fc_planstate
 
 
 # ---------- groundwork: the boilerplate brief, then one test-writing teammate per task on a shared contract ----------
@@ -162,6 +162,8 @@ def cmd_planner(a):
     role = "planner" if issue.lower() == feature.lower() else re.sub(r"[^a-z0-9_-]+", "-", f"planner-{issue.lower()}").strip("-")  # a story's planner runs beside the feature's
     brief = fc_planner_brief.PLANNER_BRIEF.format(slug=proj.name, wt=wt, issue=issue, name=fc_herdr.agent_name(proj.name, role))
     repos = _known(wt)
+    if fc_config.LINEAR_KEY and (a.issue or (proj / "linear.json").exists()):  # the issue is real: its board shows the plan is being written
+        fc_planstate.linear_planning(issue)
     print(fc_planner_brief.with_repos(fc_planner_brief.with_prd(brief, _prd(wt)), repos) + (f"\nProject notes from the team lead:\n{extra.strip()}\n" if extra.strip() else ""))
 
 def _prd(wt):

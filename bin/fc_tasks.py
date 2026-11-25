@@ -385,6 +385,8 @@ def yolo_by(y):
 
 
 CANCELED = ("canceled", "cancelled")
+PLANNING = "Planning"  # the Linear state of an issue whose plan is being written (fc_planstate.linear_planning)
+OPEN = ("todo", "backlog", PLANNING.lower())  # the states of an issue nothing has started building: a plan being written starts no build
 
 def state_name(state):
     """The name compose reads a Linear state by (`{"name", "type"}`): Canceled for every state of the canceled type, so Duplicate, Won't Do

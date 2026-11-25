@@ -260,7 +260,7 @@ def story_readiness(repo, story, refresh=False, write=True):
     chain = story_chain(tree)
     node = chain["story"]
     out = _result(node, has_tasks=bool(chain["tasks"]), repos=task_repos(chain["tasks"]))  # read on every call: the cache keeps verdicts only
-    if (node["state"]["name"] or "").lower() not in ("todo", "backlog"):
+    if (node["state"]["name"] or "").lower() not in fc_tasks.OPEN:
         return out
     feature = (chain["feature"] or {}).get("identifier")
     holds = [r["issue"]["identifier"] for r in node["inverseRelations"]["nodes"]
