@@ -179,9 +179,11 @@ class PrBody(FakeCommits):
                           "Decisions C1, C2 on NEB-9.\n\nThe toggle is lost on reload, so r\\[\"state\"\\] resets. Later text.\n\n## Acceptance criteria\n\n* it flips"},
                "NEB-20": {"title": "Open the menu", "description": "Card C4 (compose 6). Fixes o/r#6."}}
 
-    def body(self, tasks, units, layers=None, **results):
+    def body(self, tasks, units, layers=None, routes=None, **results):
         issues = {**{k: {**v, "parentId": "NEB-9"} for k, v in self.STORIES.items()},
                   "NEB-1": {"parentId": "NEB-10"}, "NEB-2": {"parentId": "NEB-10"}, "NEB-3": {"parentId": "NEB-20"}}
+        for key, desc in (routes or {}).items():  # the Route section compose wrote on the task issue
+            issues[key]["description"] = desc
         results = {"tasks": {"feature": self.FEATURE, "tasks": [], "issues": issues}, "001": {"attempts": 1}, "002": {"attempts": 3}, **results}
         for name, data in results.items():
             (self.proj / "results" / f"{name}.json").write_text(json.dumps(data))
@@ -260,6 +262,51 @@ class PrBody(FakeCommits):
         s = self.body(["001"], self.TASK_COMMITS[:1], verify={"passed": True, "rounds": [{"checks": [{"cmd": "make all", "exit": 0}]}]})
         self.assertEqual(s["How it was tested"], ["- Unit tests: the toggle survives a reload", "- Project checks: `make all`", "- compose verify passed",
                          "<details><summary>Commands to rerun</summary>", f"- Build 001: `python3 -m unittest tests.toggle`", "</details>"])
+
+    @staticmethod
+    def route(depth, reason="Jev: depth FAST (p 0.90, confidence 0.90); 1 file under src (0 new), 1 criterion, 0 shared with other open tasks; no Bug label", checks="none"):
+        return (f"Build it.\n\n## Route\n\n* workflow: test-first\n* depth: {depth}\n* decided by: jev\n* confidence: 0.90\n"
+                f"* reason: {reason}\n* verification requirements: {checks}\n* context hash: h\n")
+
+    def risk_body(self, routes, tasks=("001", "002"), units=None):
+        return self.body(list(tasks), units or self.TASK_COMMITS, routes=routes)
+
+    AUTH = "Jev: depth STANDARD (p 0.70, confidence 0.80); 3 files under src (0 new), 2 criteria, 0 shared with other open tasks; no Bug label; floor DEEP from Auth"
+
+    def test_risk_is_each_tasks_route_and_the_layer_takes_the_riskiest(self):
+        s = self.risk_body({"NEB-1": self.route("DEEP", self.AUTH, "login e2e"), "NEB-2": self.route("FAST")})
+        self.assertEqual(list(s), ["Why", "What changed", "Risk", "How it was tested", "Tickets"])
+        self.assertEqual(s["Risk"], ["**High**",
+                                     "- Build 001: High, the Auth policy covers its files and requires login e2e",
+                                     "- Build 002: Low, little relies on what it changes and how to build it was clear"])
+        s = self.risk_body({"NEB-1": self.route("STANDARD"), "NEB-2": self.route("FAST")})
+        self.assertEqual(s["Risk"][:2], ["**Medium**", "- Build 001: Medium, it changes existing behavior its own tests cover"])
+        s = self.risk_body({"NEB-1": self.route("DEEP")}, tasks=["001"], units=self.TASK_COMMITS[:1])
+        self.assertEqual(s["Risk"], ["**High**", "- Build 001: High, much relies on what it changes, or how to build it was unclear"])
+
+    def test_a_layer_whose_tasks_carry_no_route_has_no_risk_section(self):
+        self.assertNotIn("Risk", self.body(["001", "002"], self.TASK_COMMITS))
+
+    def test_the_team_leads_risk_bullets_follow_the_routes(self):
+        self.pr_file("001", "# Keep it\n\n## Why\nIt broke.\n\n## What changed\n- Keep it\n\n"
+                            "## Risk\n- A reload before the setting is saved shows the old theme once\n\n## How it was tested\n- Unit tests: it survives a reload\n")
+        s = self.risk_body({"NEB-1": self.route("FAST")}, tasks=["001"], units=self.TASK_COMMITS[:1])
+        self.assertEqual(s["Risk"], ["**Low**", "- Build 001: Low, little relies on what it changes and how to build it was clear",
+                                     "- A reload before the setting is saved shows the old theme once"])
+        self.pr_file("001", "# Keep it\n\n## Why\nIt broke.\n\n## What changed\n- Keep it\n\n## Risk\n- Only the toggle\n")
+        self.assertEqual(self.risk_body({}, tasks=["001"], units=self.TASK_COMMITS[:1])["Risk"], ["- Only the toggle"])  # no route: their bullets alone
+
+    def test_a_pr_file_with_risk_out_of_place_or_not_bullets_is_refused(self):
+        room = 72
+        for text, why in (("# T\n\n## Why\nW.\n\n## Risk\n- r\n\n## What changed\n- c\n", "nothing else"),
+                          ("# T\n\n## Why\nW.\n\n## What changed\n- c\n\n## How it was tested\n- t\n\n## Risk\n- r\n", "nothing else"),
+                          ("# T\n\n## Why\nW.\n\n## What changed\n- c\n\n## Risk\nprose\n", "`## Risk` must be a `- ` bullet"),
+                          ("# T\n\n## Why\nW.\n\n## What changed\n- c\n\n## Risk\n- **High**\n", "compose adds the level")):
+            with self.subTest(text):
+                self.pr_file("x", text)
+                with self.assertRaises(ValueError) as e:
+                    fc.fc_stack.pr_text(self.proj / "pr" / "x.md", room)
+                self.assertIn(why, str(e.exception))
 
     def test_a_groundwork_layer_says_in_one_sentence_what_it_prepares_with_no_issues_tests_or_tickets(self):
         s = self.body(["groundwork", "groundwork"], [[("Ignore build output", ["a.txt"], "Keeps dist out of review.")], [("Pin the toolchain", ["b.txt"], "")]])

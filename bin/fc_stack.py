@@ -2,7 +2,7 @@
 generated from its commits and stories."""
 import json, os, re, subprocess, sys
 from pathlib import Path
-import fc_core, fc_config, fc_tasks, fc_worktree, fc_layers
+import fc_core, fc_config, fc_tasks, fc_worktree, fc_layers, fc_prrisk
 
 
 TITLE_CHARS = 72  # a PR title's length before its ` (i/n)` suffix, the Jira-key prefix included
@@ -161,8 +161,9 @@ def reviewer_command(cmd, repo):
 def layer_body(repo, proj, l, metas, layers=(), written=None):
     """A layer's PR body: `## Why` (layer_why), `## What changed` (one line per task, the subject of its first commit that is
     not one of its test commits, else its title; one per groundwork commit), `## How it was tested` (how_tested) and
-    `## Tickets` (its tasks' Linear links), each left out when empty. `written` (pr_text's Why, What changed and How it was tested
-    lines) replaces the first two, its Why followed by the issue_lines, and its How it was tested bullets lead how_tested's.
+    `## Tickets` (its tasks' Linear links), each left out when empty; `## Risk` (fc_prrisk.risk_lines) sits after What changed. `written`
+    (pr_text's Why, What changed, How it was tested and Risk lines) replaces the first two, its Why followed by the issue_lines,
+    its How it was tested bullets lead how_tested's, and its Risk bullets follow the routes' lines.
     `layers` is the whole stack, bottom first, so an issue's `Fixes` lands on the layer that completes it; without
     it, every task not in this layer is still to come. The layer's size stays on its `layer` line, out of the body."""
     res = Path(proj) / "results"
@@ -181,7 +182,8 @@ def layer_body(repo, proj, l, metas, layers=(), written=None):
     why, changed = ([*written[0], *issue_lines(proj, l, metas, list(layers))], written[1]) if written else \
         (layer_why(proj, l, metas, list(layers)), [f"- {x}" for x in changed])
     tested = how_tested(repo, tasks, read("verify"), written[2] if written else [])
-    sections = [("Why", why), ("What changed", changed),
+    risk = fc_prrisk.risk_lines(tasks, (read("tasks") or {}).get("issues") or {}, written[3] if written else [])
+    sections = [("Why", why), ("What changed", changed), ("Risk", risk),
                 ("How it was tested", tested), ("Tickets", [f"- {linear_url(proj, m['linear'])}" for m in tasks])]
     return "\n\n".join(f"## {h}\n" + "\n".join(lines) for h, lines in sections if lines)
 
@@ -235,8 +237,9 @@ TESTED_CHARS = 160  # one How it was tested bullet: what was checked and why, no
 def pr_text(path, room):
     """The team lead's text for a layer's PR from its file, or None when there is none: line 1 `# <title>` (at most `room`
     characters, no ticket key or `(i/n)`), then `## Why` (prose, no issue lines), `## What changed` (`- ` bullets) and, optionally,
-    `## How it was tested` (`- ` bullets of at most TESTED_CHARS, what each test proves; compose adds the commands and the verify
-    line), nothing else. Returns (title, Why lines, What changed lines, How it was tested lines, [] when left out); anything else
+    `## Risk` (`- ` bullets: what could break and where to look; compose adds the level, fc_prrisk) and `## How it was tested`
+    (`- ` bullets of at most TESTED_CHARS, what each test proves; compose adds the commands and the verify line), nothing else.
+    Returns (title, Why lines, What changed lines, How it was tested lines, Risk lines; [] for a section left out); anything else
     raises ValueError with the reason, never a guess."""
     if not path.exists():
         return None
@@ -249,15 +252,20 @@ def pr_text(path, room):
     if len(title) > room:
         raise ValueError(f"the title is {len(title)} characters, at most {room}")
     heads = [i for i, x in enumerate(lines) if x.startswith("#")][1:]
-    if [lines[i] for i in heads] not in (["## Why", "## What changed"], ["## Why", "## What changed", "## How it was tested"]) \
-            or any(x.strip() for x in lines[1:heads[0]]):
-        raise ValueError("after the title it must be `## Why`, `## What changed` and optionally `## How it was tested`, nothing else")
+    names = [lines[i][3:] for i in heads]
+    if names not in (["Why", "What changed"], ["Why", "What changed", "Risk"], ["Why", "What changed", "How it was tested"],
+                     ["Why", "What changed", "Risk", "How it was tested"]) or any(x.strip() for x in lines[1:heads[0]]):
+        raise ValueError("after the title it must be `## Why`, `## What changed`, then optionally `## Risk` and `## How it was tested`, nothing else")
     strip = lambda part: "\n".join(part).strip().splitlines()
-    why, changed, tested = [*(strip(lines[a + 1:b]) for a, b in zip(heads, [*heads[1:], len(lines)])), []][:3]
+    part = dict(zip(names, (strip(lines[a + 1:b]) for a, b in zip(heads, [*heads[1:], len(lines)]))))
+    why, changed, tested, risk = part["Why"], part["What changed"], part.get("How it was tested", []), part.get("Risk", [])
     if not why or not changed:
         raise ValueError("`## Why` and `## What changed` must not be empty")
-    if len(heads) == 3 and not tested:
-        raise ValueError("`## How it was tested` must not be empty; leave the section out for compose's own")
+    for name in ("Risk", "How it was tested"):
+        if name in part and not part[name]:
+            raise ValueError(f"`## {name}` must not be empty; leave the section out for compose's own")
+    if problem := fc_prrisk.written_problem(risk):
+        raise ValueError(problem)
     if any(ISSUE_LINE_RE.match(x) for x in why):
         raise ValueError("`## Why` names an issue to fix; compose adds the Fixes and Part of lines")
     for name, part in (("What changed", changed), ("How it was tested", tested)):
@@ -267,7 +275,7 @@ def pr_text(path, room):
         raise ValueError(f"a `## How it was tested` bullet is {len(long) - 2} characters, at most {TESTED_CHARS}: say what it checks, compose adds the command")
     if any(re.search(r"compose verify", x, re.I) for x in tested):
         raise ValueError("`## How it was tested` names compose verify; compose adds that line")
-    return title, why, changed, [x for x in tested if x.strip()]
+    return title, why, changed, [x for x in tested if x.strip()], [x for x in risk if x.strip()]
 
 def layer_pr(repo, proj, l, n, metas, layers=()):
     """A layer's PR title and body, and where they came from: the team lead's file `pr/<name>.md` (pr_names, pr_text) gives the
@@ -281,7 +289,8 @@ def layer_pr(repo, proj, l, n, metas, layers=()):
     shown = f".compose/{Path(proj).name}/pr/{name}.md"
     try:
         written = pr_text(path, TITLE_CHARS - len(title_prefix(proj)))
-        source = (f"written: {shown}" if written[3] else f"written: {shown}, How it was tested generated: add it to the file") \
+        missing = [name for name, lines in (("Risk", written[4]), ("How it was tested", written[3])) if not lines] if written else []
+        source = (f"written: {shown}" + (f", {' and '.join(missing)} generated: add {'it' if len(missing) == 1 else 'them'} to the file" if missing else "")) \
             if written else f"generated: write {shown}"
     except ValueError as e:
         written, source = None, f"generated: {shown} refused: {e}"
