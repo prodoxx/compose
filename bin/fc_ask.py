@@ -174,12 +174,29 @@ def format_problems(bodies, ids):
             f"{i} lists lettered options: ask it open and put the options in its recommendation"
             for i in ids if i not in found or not found[i]["recommendation"] or MENU.search(found[i]["question"])]
 
+ISSUE = re.compile(r"\b[A-Z][A-Z0-9]*-\d+\b")  # a Linear issue id anywhere in a line
+LOOSE_ID = re.compile(r"(?<![\w-])([A-Za-z]{1,3}\d+(?:-\d+)?)(?![\w-])")  # `Q10`, `C1-8` standing alone; never the tail of `NEB-179`
+
+def loose_ids(proj, message):
+    """The question ids a needs-user names outside the `<n> questions <ids>` form: the ones open on the map of an issue it names or on
+    the feature's, or, when no map can be read, every `Q<n>` (the planner's numbering). Such an ask would reach the waiting list with no
+    ids, and no `compose decide` could close it."""
+    tokens = list(dict.fromkeys(LOOSE_ID.findall(message)))
+    if not tokens:
+        return []
+    feature = (json.loads((proj / "linear.json").read_text()) if (proj / "linear.json").exists() else {}).get("feature")
+    bodies = map_bodies(ISSUE.findall(message) + ([feature] if feature else []))
+    if bodies:
+        open_ids = open_ids_in(bodies)
+        return [t for t in tokens if t in open_ids]
+    return [t for t in tokens if re.fullmatch(r"Q\d+", t)]
+
 class Refused(Exception):
     """A report that must not go out, but is no error of the reporter's command: it is told why, and the attempt is recorded."""
 
 def ask_gate(proj, message, hop=""):
     """What `report needs-user` sends: the message (a verified link and the text fallback added, repeats marked). Exits with the reason
-    when a page link is missing, doubled, or does not answer; raises Refused when a question is decided or asked already, or is not on the map as an open question with a recommendation. A question
+    when a page link is missing, doubled, or does not answer, or when it names an open question outside the questions form; raises Refused when a question is decided or asked already, or is not on the map as an open question with a recommendation. A question
     is asked once per `hop` (whom the reporter reports to): a teammate's ask to its team lead does not use up the team lead's ask to the engineering manager.
     A line to the engineering manager (`hop == "manager"`) is at most NEEDS_USER_MAX characters, a page link not counted."""
     if hop == "manager" and (n := len(SESSION_URL.sub("", message))) > NEEDS_USER_MAX:
@@ -197,6 +214,13 @@ def ask_gate(proj, message, hop=""):
         message += f" {ASK_FALLBACK}"
     ids = question_ids(message)
     if not ids:
+        if named := loose_ids(proj, message):
+            head, any_issue = ASK_HEAD.match(message), ISSUE.search(message)
+            issue = head[2] if head else any_issue[0] if any_issue else "<issue>"
+            n = len(named)
+            sys.exit(f"not reported: {', '.join(named)} {'is an open question' if n == 1 else 'are open questions'} named outside the "
+                          f'questions form, so the answer could not close the ask. Report it as "<issue>: <n> questions <ids>; recommendation '
+                          f'<one line>": "{issue}: {n} question{"" if n == 1 else "s"} {", ".join(named)}; recommendation <one line>".')
         return message
     reminder = message.lower().startswith("reminder:")
     head = ASK_HEAD.match(message)

@@ -206,6 +206,27 @@ class Ask(unittest.TestCase):
         self.assertEqual(len(self.sent()), 1)
         self.assertFalse((self.proj / "results" / "crew" / "shop-architect.refused").exists())
 
+    def test_an_ask_that_names_an_open_question_outside_the_questions_form_is_refused(self):
+        for msg in ("NEB-1 Q2: which auth? Recommendation: Clerk", "NEB-1: Q2 which auth, Clerk or our own?", "Q2 on NEB-1: auth; recommendation Clerk"):
+            with self.subTest(msg):
+                with self.assertRaises(SystemExit) as e:  # a form mistake the reporter fixes, as a line too long is
+                    self.ask_on_map("## Not yet specified\n" + QUESTION, msg=msg)
+                out = str(e.exception.code)
+                self.assertIn('"<issue>: <n> questions <ids>; recommendation <one line>"', out)
+                self.assertIn("Q2", out.split("not reported", 1)[1])
+                self.assertEqual(self.sent(), [])
+
+    def test_an_ask_that_names_no_open_question_goes_out_as_written(self):
+        self.ask_on_map("## Not yet specified\n" + QUESTION, msg="NEB-1: I need the Figma token for file 469:43959 in H2")
+        self.assertEqual(len(self.sent()), 1)
+
+    def test_without_linear_an_ask_naming_a_q_number_outside_the_form_is_refused(self):
+        with self.assertRaises(SystemExit) as e:
+            self.report("NEB-1 Q10: treat it as no resume? Recommendation: newest becomes the default")
+        out = str(e.exception.code)
+        self.assertIn('"<issue>: <n> questions <ids>; recommendation <one line>"', out)
+        self.assertEqual(self.sent(), [])
+
     def test_a_question_not_written_on_the_map_is_refused(self):
         out = self.ask_on_map("## Not yet specified\n- Q9: something else - Recommendation: x - y\n")
         self.assertIn("Q2 is not written under Not yet specified on NEB-1", out)
