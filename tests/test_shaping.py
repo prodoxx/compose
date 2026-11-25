@@ -33,6 +33,16 @@ class ShapingIsTheBrainstormingSkill(unittest.TestCase):
         self.assertEqual((row[1], row[3]), (".claude/plugins/cache/*/superpowers/*/skills/brainstorming/SKILL.md", "required"))
         self.assertIn("superpowers", fc_steps.CLAUDE_ONLY)
 
+    def test_a_teammate_s_questions_are_asked_through_the_skill_not_a_paraphrase_of_it(self):
+        relay = (ROOT / "sections" / "0h.md").read_text()
+        sys.path.insert(0, str(ROOT / "bin"))
+        import fc_decide  # noqa: E402
+        self.assertIn("invoke superpowers:brainstorming", relay)
+        self.assertIn("superpowers:brainstorming", fc_decide.ASK_STYLE)
+        for rule in ("only when they are stuck", "the recommendation first", "open first", "no options listed"):  # held back what the skill offers
+            with self.subTest(rule):
+                self.assertNotIn(rule, relay + fc_decide.ASK_STYLE)
+
     def test_skill_and_docs_no_longer_say_shaping_runs_only_on_request(self):
         for f in ("SKILL.md", "README.md", "docs/how-it-works.md", "sections/0h.md", "commands/planner.md"):
             with self.subTest(f):

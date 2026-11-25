@@ -43,9 +43,7 @@ ANSWER = re.compile(rf"^\s*({fc_ask.CARD_ID}|D\d+)(?:\s*[:=.]\s*(.+?))?\s*$")  #
 TAG = re.compile(r"\s*\([^()]*\)\s*$")  # the tag a decision line ends with
 APPROVAL = re.compile(r"^(?:the )?(?:design|stories|tech doc|PRD)\b[^.]{0,60}?\b(?:is |are )?approved\.?$", re.I)  # a go line the skill writes: refused while questions are open
 KEEP = re.compile(r"^(?:keep\b|[A-Z]+\d+ stands\b)", re.I)  # a change-of-course answer that leaves the replaced line standing
-ASK_STYLE = ("ask the product owner one question per message, brainstorming style (sections/0b.md): one plain sentence, open first, "
-             "with no counter and no options listed after it; the recommendation and the options it weighs only when they are stuck "
-             "or ask what you think")
+ASK_STYLE = ("ask the product owner one question at a time as superpowers:brainstorming's The Conversation says (invoke the skill and follow it, sections/0h.md): the feature's why is known, so each recommendation and why above is the proposal and reason you put to them")
 NEW_FORM = '`compose decide --project {slug} --new "<decision>" --quote "<their words>" --closes <id>`'
 
 def map_issue(proj, a):
