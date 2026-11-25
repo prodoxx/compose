@@ -540,7 +540,7 @@ def verify_rounds(repo, proj, cfg, a, rounds, t0, left_out=()):
                 fc_core.say(note)
             break
     sha = fc_core.sh(["git", "rev-parse", "HEAD"], repo, check=False).stdout.strip()  # the verified top, read before the layers are stood: that moves the worktree
-    layered = fc_layergate.layer_pass(cfg["main_repo"], proj, a) if ok and cfg.get("main_repo") and not left_out and not getattr(a, "review_only", False) and cfg.get("layer_checks", True) else []
+    layered = fc_layergate.layer_pass(cfg["main_repo"], proj, a, (rounds[-1].get("review") or {}).get("confirmed") or ()) if ok and cfg.get("main_repo") and not left_out and not getattr(a, "review_only", False) and cfg.get("layer_checks", True) else []
     ok = ok and not layered
     final = {"rounds": rounds, "passed": ok, "rejected_fixes": rejected, "seconds": round(time.time() - t0, 1), "cost": fc_core.LEDGER.snapshot(), "head": sha}
     if layered:

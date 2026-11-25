@@ -2,7 +2,7 @@
 tree, bottom up, and every layer that fails is named. `fc_ship` runs it for a submit, `fc_verify` for a verify. Imports only lower modules."""
 import hashlib, json, re, subprocess, time
 from pathlib import Path
-import fc_core, fc_proc, fc_tasks, fc_worktree, fc_layers, fc_stack, fc_green, fc_gate, fc_jev
+import fc_core, fc_proc, fc_tasks, fc_worktree, fc_layers, fc_stack, fc_green, fc_gate, fc_jev, fc_prrisk
 
 def at_root(value, olds, root):
     """`value` with every absolute path under one of `olds` (the project worktree, the main checkout) moved under `root`, in
@@ -221,13 +221,18 @@ def layer_refusals(repo, proj, layers, trunk, wt, fresh=False, again="compose st
     fc_core.say(f"layers ok    {len(layers)} layer(s): every check on the top, the cheap ones below, each layer's own tasks' tests" + (f"; {accepted} failing test(s) already red on the base accepted" if accepted else ""))
     return []
 
-def layer_pass(main, proj, a):
+def layer_pass(main, proj, a, findings=()):
     """The per-layer gate a submit runs, run by a passing verify (#456): the review layers are stood as a submit would stand them (held tasks left
     out) and each is checked on its own tree, bottom up, by layer_refusals, so every layer that fails (lint on a stub a later task implements,
     a test whose setup arrives above it) is named now, in one run, and not one per `compose stack --submit`. Returns the refusals, one per layer
-    that fails, [] when all pass or the layers did not stand (the STOP line says why; the submit stops there too). Nothing is pushed or registered."""
-    found = []
-    gate = lambda repo, proj, layers, trunk, wt: found.extend(layer_refusals(repo, proj, layers, trunk, wt, getattr(a, "fresh", False), again="compose verify"))
+    that fails, [] when all pass or the layers did not stand (the STOP line says why; the submit stops there too). Nothing is pushed or registered.
+    When every layer passes and the project has its review on, each layer's risk is judged for its PR (fc_prrisk.assess), told the review's
+    confirmed `findings`."""
+    found, fresh = [], getattr(a, "fresh", False)
+    def gate(repo, proj, layers, trunk, wt):
+        found.extend(layer_refusals(repo, proj, layers, trunk, wt, fresh, again="compose verify"))
+        if not found and fc_core.project_config(proj).get("review", True):
+            fc_prrisk.assess(repo, proj, layers, fc_stack.pr_names(layers), fc_stack.layer_base(repo, proj, trunk), fc_tasks.code_tasks(fc_tasks.load_tasks(proj)), findings, fresh)
     fc_layers.STACK_STOP = ""
     if not fc_stack.register_stack(main, proj, fc_core.current_branch(main), check_only=True, gate=gate):
         fc_core.say("layers not checked: the layers did not stand (see the line above); a submit stops there too")

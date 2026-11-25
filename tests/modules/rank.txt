@@ -33,7 +33,6 @@ fc_repolist
 fc_policy
 fc_routectx
 fc_routerec
-fc_prrisk
 fc_readguard
 fc_routecost
 fc_tierpin
@@ -64,6 +63,7 @@ fc_perms
 fc_steps
 fc_layers
 fc_blockers
+fc_prrisk
 fc_stack
 fc_change
 fc_stale

@@ -28,6 +28,10 @@ Verify reads `.compose/<project>/verify.json`.
 Every layer is checked even after one fails, so the refusal names each layer that fails on its own tree, and one fix covers them all.
 When the failing command is green on the top layer, the refusal says `it passes on the top layer: this layer needs a commit from above it`.
 A full `verify` runs the same gate once its stages pass (a smoke run, `--review-only`, and a verify with no open layers do not): it stands the review layers as a submit would, with the tasks a submit would hold left out, runs the layers' checks, and prints `layers FAIL  N of M layer(s) fail on their own tree` with each refusal, so a layer that only fails on its own tree is found by the verify and not by a separate submit for each one.
+When every layer passes and the project's review is on, the same run judges how risky each layer is to merge: one call to the review model per layer, on that layer's own diff, told the tasks it holds and the review findings still open on its files.
+Each answer prints as a `risk` line (`risk   medium  layer 2 of 3 (...)  <one sentence>`) and is kept in `results/risk.json`, where `compose stack` reads it for the PR's `## Risk Assessment`.
+The levels are no-mistakes' own: low is well-bounded or straightforward, medium is safe to merge first with follow-ups, high should not be merged without a person's explicit approval.
+A layer whose tree and the tree below it are unchanged is not judged again (`--fresh` judges all), and a call that fails prints `risk   not assessed` and never fails the verify.
 It pushes and registers nothing, moves the `layer-NN` branches the way `compose stack` does, and a command green on a layer's tree is not run again by the submit that follows.
 `"layer_checks": false` in verify.json turns it off.
 If the layers cannot stand (a conflict, a base ahead of its remote), verify prints `layers not checked` and the verdict stays the stages'.

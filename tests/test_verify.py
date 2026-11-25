@@ -113,6 +113,40 @@ class LayerPassVerify(unittest.TestCase):
         self.assertEqual(refusals.call_args.args[1:], (Path("/p"), ["l1", "l2"], "main", "/wt", True))
         self.assertEqual(refusals.call_args.kwargs, {"again": "compose verify"})
 
+    def layer_pass_risk(self, refused, review=True):
+        """layer_pass on two standing layers whose gate refuses `refused`, in a project with its review on or off; the fc_prrisk.assess mock."""
+        proj = Path(tempfile.mkdtemp()) / "feat"; proj.mkdir()
+        (proj / "verify.json").write_text(json.dumps({"review": review}))
+        layers = [{"branch": "compose/p-layer-01", "tasks": ["001"]}, {"branch": "compose/p-layer-02", "tasks": ["002"]}]
+        def stand(repo, proj, trunk, **kw):
+            kw["gate"](repo, proj, layers, trunk, "/wt")
+            return [layers]
+        with mock.patch.object(fc.fc_core, "current_branch", return_value="main"), mock.patch.object(fc.fc_stack, "register_stack", side_effect=stand), \
+                mock.patch.object(fc.fc_layergate, "layer_refusals", return_value=refused), mock.patch.object(fc.fc_stack, "layer_base", return_value="origin/main"), \
+                mock.patch.object(fc.fc_tasks, "load_tasks", return_value=[{"id": "001", "kind": "code"}]), mock.patch.object(fc.fc_tasks, "code_tasks", side_effect=lambda ts: ts), \
+                mock.patch.object(fc.fc_layergate.fc_prrisk, "assess") as assess:
+            self.assertEqual(fc.fc_layergate.layer_pass("/main", proj, type("A", (), {"fresh": True})(), [{"file": "a.py"}]), refused)
+        return proj, layers, assess
+
+    def test_layer_pass_has_each_layers_risk_judged_once_every_layer_passes(self):
+        proj, layers, assess = self.layer_pass_risk([])
+        assess.assert_called_once_with("/main", proj, layers, ["001", "002"], "origin/main", [{"id": "001", "kind": "code"}], [{"file": "a.py"}], True)
+
+    def test_layer_pass_judges_no_risk_for_layers_that_fail_or_a_project_with_its_review_off(self):
+        self.layer_pass_risk(["r1"])[2].assert_not_called()
+        self.layer_pass_risk([], review=False)[2].assert_not_called()
+
+    def test_a_passing_verify_hands_the_last_rounds_confirmed_findings_to_the_layer_pass(self):
+        found = [{"file": "a.py", "severity": "medium", "note": "n"}]
+        proj = Path(tempfile.mkdtemp()) / "feat"; proj.mkdir()
+        with mock.patch.object(fc.fc_verify, "run_stages", return_value=(True, {"checks": [], "review": {"confirmed": found}}, "")), mock.patch.object(fc_ledger, "verify_record"), \
+                mock.patch.object(fc.fc_verify, "verify_failed"), mock.patch.object(fc.fc_linear, "linear_reconcile"), mock.patch.object(fc.fc_core, "say"), \
+                mock.patch.object(fc.fc_worktree, "review_base", return_value="main"), mock.patch.object(fc.fc_worktree, "dirty_paths", return_value=set()), mock.patch.object(fc.fc_worktree, "ready_checkout"), \
+                mock.patch.object(fc.fc_verify.fc_reroute, "after_round", return_value=([], {})), mock.patch.object(fc.fc_layergate, "layer_pass", return_value=[]) as layers, \
+                mock.patch.object(fc.fc_core, "sh", return_value=subprocess.CompletedProcess([], 0, "headsha\n", "")), contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
+            fc.fc_verify.verify_rounds(Path(tempfile.mkdtemp()), proj, {"main_repo": "/main"}, type("A", (), {"fix": 0, "skip_review": True})(), [], time.time(), ())
+        self.assertEqual(layers.call_args.args[3], found)
+
     def test_layer_pass_says_when_the_layers_did_not_stand_and_fails_nothing(self):
         said = []
         with mock.patch.object(fc.fc_core, "current_branch", return_value="main"), mock.patch.object(fc.fc_stack, "register_stack", return_value=[]), mock.patch.object(fc.fc_core, "say", said.append):
