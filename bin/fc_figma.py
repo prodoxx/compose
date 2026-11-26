@@ -1,7 +1,7 @@
 import argparse, json, os, re, sys, time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-import fc_core, fc_config, fc_tasks, fc_linear, fc_models, fc_textmodel, fc_herdr, fc_fleet, fc_crew, fc_init, fc_figmaplan, fc_figmanodes, fc_figmashots, fc_figmascope, fc_framelink, fc_figmatree, fc_figmaauth
+import fc_core, fc_config, fc_tasks, fc_linear, fc_models, fc_textmodel, fc_herdr, fc_fleet, fc_crew, fc_init, fc_figmaplan, fc_figmanodes, fc_figmashots, fc_figmascope, fc_framelink, fc_designmatch, fc_figmatree, fc_figmaauth
 
 
 FIGMA_CONNECTOR = ("Figma tools: the authenticated Figma connector, `mcp__claude_ai_Figma__*` or the Figma plugin's `mcp__plugin_figma_figma__*` (the same server; use whichever ToolSearch finds), is for WRITES ONLY: `use_figma` (and the `create_session` it needs), never a read-only script, and never `whoami`, `get_libraries`, `search_design_system`, or `create_new_file`. Load it in one ToolSearch select call.\n"
@@ -301,9 +301,9 @@ def store_figma(proj, key):
     data["figma"] = key
     fc_core.atomic_write(path, json.dumps(data))
 
-FIGMA_FLAGS = {"figma": ("check", "tree"), "plan": ("check",), "pages": ("check",), "modes": ("check",), "need_pages": ("check",), "need_modes": ("check",),
-               "library": ("publish",), "keys": ("publish",), "withdraw": ("publish",), "only": ("tree", "judge"), "node": ("tree",), "depth": ("tree",),
-               "bindings": ("tree",), "screens": ("tree",), "out": ("tree",), "force": ("tree", "judge")}  # flag -> the actions that read it
+FIGMA_FLAGS = {"figma": ("check", "tree", "match"), "plan": ("check",), "pages": ("check",), "modes": ("check",), "need_pages": ("check",), "need_modes": ("check",),
+               "library": ("publish",), "keys": ("publish",), "withdraw": ("publish",), "only": ("tree", "judge", "match"), "node": ("tree", "match"), "depth": ("tree",),
+               "bindings": ("tree",), "screens": ("tree",), "out": ("tree",), "force": ("tree", "judge"), "page": ("match",), "root": ("match",)}  # flag -> the actions that read it
 
 def refuse_unused_flags(a):
     """Exit when `a` holds a flag the action does not read: a flag that changes nothing and says nothing tells its caller the wrong thing."""
@@ -314,21 +314,11 @@ def refuse_unused_flags(a):
 def code_nodes(proj, wt, meta):
     """Write each of a code task's `figma_nodes:` into its clone as `.figma/<node>.json`, Framelink JSON made self-contained as
     `figma tree` saves it, kept out of git, so a brief names a node instead of carrying it. Their absolute paths.
+    The same documents are kept in the project (fc_designmatch.task_docs), which verify holds the build to.
     A failed fetch raises RuntimeError: the task never starts."""
     if not meta.get("figma_nodes"):
         return []
-    key, where = fc_framelink.node_file(proj, meta)
-    if not key:
-        raise RuntimeError("figma_nodes needs a Figma file: a figma: line on the task, or compose figma check --figma <url or key>")
-    docs = []
-    for node in meta["figma_nodes"]:
-        try:
-            docs.append(json.loads(fc_framelink.framelink_fetch(key, node=node.replace("-", ":"))))
-        except ValueError:
-            raise RuntimeError(f"framelink fetch of node {node} in file {key} (from {where}) is not JSON")
-        except RuntimeError as e:
-            raise RuntimeError(f"figma file {key} is {where}: {e}")
-    fc_figmanodes.self_contained(docs)
+    docs = [doc for _, doc in fc_designmatch.task_docs(proj, meta, fresh=True)]
     (wt / ".figma").mkdir()
     (wt / ".git" / "info").mkdir(exist_ok=True)
     with open(wt / ".git" / "info" / "exclude", "a") as f:
@@ -352,11 +342,13 @@ def figma_capabilities(a, proj, pages_now):
 
 def cmd_figma(a):
     """`figma check` stores the target Figma file key, proves Framelink reads it, and records the plan's capabilities; `figma tree` saves a
-    task's node tree from Framelink; `figma judge` gates a design task with Jev on that tree; `figma publish` says whether a library
-    publish is pending before anyone asks for one."""
+    task's node tree from Framelink; `figma judge` gates a design task with Jev on that tree; `figma match` measures a built page against
+    a code task's nodes; `figma publish` says whether a library publish is pending before anyone asks for one."""
     refuse_unused_flags(a)
     caller = Path(a.repo).resolve()
     proj = fc_core.project_dir(a)
+    if a.action == "match":
+        return fc_designmatch.figma_match(a, proj)
     if a.action == "tree":
         return fc_figmatree.figma_tree(a, proj, fc_figmatree.caller_projects(caller) if a.only and not getattr(a, "out", None) else ())
     if a.action == "publish":

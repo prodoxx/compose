@@ -142,7 +142,7 @@ def main():
                             ("budget", fc_budget.cmd_budget, "set a project's frontier spend limit: compose budget --project <slug> frontier <dollars>"),
                             ("models", fc_models.cmd_models, "--probe: clear the day's cached model probes and probe the crew models again"),
                             ("frame0", fc_f0pages.cmd_frame0_pages, "up | draw | export | save | down the project's own Frame0 (wireframes in .compose/<project>/design.f0): nothing of Frame0 runs until up; draw runs a JSON list of frame0 tool calls in one go; export writes pages as PNG files; pages | move | delete | links | lint list, reorder, remove, and check its pages"),
-                            ("figma", fc_figma.cmd_figma, "check | tree | judge | publish: store the target Figma file key, prove Framelink reads it, record the plan's limits; save a task's node tree; judge it with Jev; say whether a library publish is pending"),
+                            ("figma", fc_figma.cmd_figma, "check | tree | judge | match | publish: store the target Figma file key, prove Framelink reads it, record the plan's limits; save a task's node tree; judge it with Jev; measure a built page against a code task's nodes; say whether a library publish is pending"),
                             ("teardown", fc_crew.cmd_teardown, "close the project's implementer, verify, and finished teammate tabs (the team lead's done does this)"),
                             ("guard", fc_hooks.cmd_guard, "Claude Code PreToolUse hook: the team lead writes no code (reads the hook event on stdin)"),
                             ("rewake", fc_rewake.cmd_rewake, "Claude Code Stop hook: judge each team lead or engineering manager turn for compaction and park the watches after it; the first event wakes the session"),
@@ -403,8 +403,8 @@ def main():
             s.add_argument("--drop-dangling", action="store_true", help="links: clear the links to pages that are gone")
             s.add_argument("--dry-run", action="store_true", help="move | delete | links: show the changes without making them")
         if name == "figma":
-            s.add_argument("action", choices=("check", "tree", "judge", "publish"))
-            s.add_argument("--figma", help="check: the target Figma file's url or key, stored in linear.json; tree: read this file instead of the stored one (not stored)")
+            s.add_argument("action", choices=("check", "tree", "judge", "match", "publish"))
+            s.add_argument("--figma", help="check: the target Figma file's url or key, stored in linear.json; tree and match: read this file instead of the stored one (not stored)")
             s.add_argument("--plan", help="check: a plan tier the product owner names (starter, pro, org, enterprise): stores the limits compose's design flow depends on, as predicted")
             s.add_argument("--pages", help="check: pages per file the probe measured (a count or unlimited); with --modes and no --plan it sets the tier too")
             s.add_argument("--modes", help="check: modes per collection the probe measured (a count or unlimited); with --pages and no --plan it sets the tier too")
@@ -413,8 +413,10 @@ def main():
             s.add_argument("--library", help="publish: the library file's url or key (stored after the first use)")
             s.add_argument("--keys", help="publish: comma-separated component keys the consumer file needs")
             s.add_argument("--withdraw", action="store_true", help="publish: withdraw the open ask (the product owner will not publish); the line reads none until a publish shows")
-            s.add_argument("--only", help="judge: comma-separated design task ids; tree: one task id (a design task saves its gate tree and screens; any other task only names the file key)")
-            s.add_argument("--node", help="tree: comma-separated node ids to fetch through Framelink")
+            s.add_argument("--only", help="judge: comma-separated design task ids; tree: one task id (a design task saves its gate tree and screens; any other task only names the file key); match: one code task id, whose figma_nodes: are measured")
+            s.add_argument("--node", help="tree: comma-separated node ids to fetch through Framelink; match: the node ids to measure instead of the task's")
+            s.add_argument("--page", help="match: the page to measure, a bp page id or a part of its url (default: the open page that shows most of the node's text)")
+            s.add_argument("--root", help="match: a CSS selector of the element that holds the built node (default: the whole body)")
             s.add_argument("--depth", type=int, help="tree: how deep Framelink walks (default: all)")
             s.add_argument("--force", action="store_true", help="judge: judge a task whose result was accepted by hand, replacing that result; tree: replace the gate tree of a design task of another project")
             s.add_argument("--bindings", help="tree: a file (or - for stdin) with what the write script returned, appended to the tree")

@@ -162,7 +162,7 @@ def record_task(repo, proj, meta, events):
     return ok
 
 def verify_record(proj, repo, report):
-    """Record one verify round's evidence: checks, e2e, review on the feature issue, scoped and acceptance on each task issue in
+    """Record one verify round's evidence: checks, e2e, review on the feature issue, scoped, acceptance and design on each task issue in
     one batch; True when all saved. An acceptance row the round reused from an earlier verify is on its issue already and
     still counts (the task's files are unchanged since), so it is not written again."""
     path = proj / "linear.json"
@@ -207,5 +207,6 @@ def verify_record(proj, repo, report):
                 continue
             r = "error" if row.get("judge_error") or row["choice"] is None else "pass" if row["choice"] == "MET" or row.get("proven_by") else "dismissed" if row.get("dismissed") else "fail" if row.get("confirmed") else "unclear"
             acceptance.append(tev([ids[texts.index(row["criterion"])]], "acceptance", r, f"{row['choice']}: p_met {row['p_met']}, p_not_met {row['p_not_met']}" + (f", proven by test event {row['proven_by']}" if row.get("proven_by") else "")))
-        oks.append(record_task(repo, proj, t, scoped + acceptance))
+        design = [tev([], "design", d["result"], d["detail"]) for d in (report.get("design") or {}).get("tasks", []) if d["task"] == t["id"] and not d.get("reused")]
+        oks.append(record_task(repo, proj, t, scoped + acceptance + design))
     return all(oks)

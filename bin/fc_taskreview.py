@@ -62,7 +62,7 @@ def cmd_dismiss(a, proj, repo):
         record = fc_review.keep_dismissal(proj, finding, reason)
         fc_core.say(f"review dismissed {record['id']} {finding.get('file')}{':' + str(finding['line']) if finding.get('line') else ''} [{finding.get('severity')}]: {reason}")
         task = [finding["task"]] if finding.get("task") else []  # an acceptance criterion's dismissal names its task
-        events.append(fc_ledger.event("", sha, task, [], "acceptance" if task else "review", "dismiss", "dismissed", None, f"{record['id']} {finding.get('file')}: {reason}"))
+        events.append(fc_ledger.event("", sha, task, [], finding.get("phase") or ("acceptance" if task else "review"), "dismiss", "dismissed", None, f"{record['id']} {finding.get('file')}: {reason}"))
     if feature and fc_ledger.record(feature, events) is False:
         fc_core.say("review FAIL  the dismissal is kept in dismissed.json but not saved on Linear: " + ", ".join(e["event_id"] for e in events))
         sys.exit(1)

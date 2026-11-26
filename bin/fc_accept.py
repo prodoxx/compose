@@ -368,7 +368,7 @@ def jev_sufficiency(cfg, proj, repo, acceptance=None):
             continue
         try:
             rows = [r for r in fc_ledger.counted(repo, proj, meta, fc_evidence.task_rows(meta["linear"], feature, meta["id"]))
-                    if r["phase"] not in ("sufficiency", "cost")]
+                    if r["phase"] not in ("sufficiency", "cost", "design")]  # a design row is about the node, never proof of a criterion
             shown = rows[-JEV_EVENTS:]
             questions = sufficiency_questions(meta, shown)
             state = {"task": meta.get("title", ""), "criteria": fc_tasks.parse_criteria(meta["body"]), "events": shown}

@@ -35,6 +35,15 @@ def acceptance_id(row):
     """The id of an acceptance row, what `review --dismiss` takes."""
     return finding_id(acceptance_finding(row))
 
+def design_finding(row):
+    """The dismissable finding of a design mismatch (fc_designjudge): its file names the task and its note the node's element and the
+    property, so its id holds while the node keeps that element, whatever words a model gives the mismatch."""
+    return {"file": f"design of task {row['task']}", "line": None, "severity": "high", "note": f"{row['element']} {row['property']}", "task": row["task"], "phase": "design"}
+
+def design_id(row):
+    """The id of a design mismatch, what `review --dismiss` takes."""
+    return finding_id(design_finding(row))
+
 def dismissed_file(proj):
     """Where the findings the team lead dismissed are kept: the project's dismissed.json, a list of {id, file, note, severity, reason, at}."""
     return Path(proj) / "dismissed.json"
@@ -55,7 +64,7 @@ def keep_dismissal(proj, finding, reason):
     return record
 
 def last_confirmed(proj):
-    """{id: finding} for every confirmed or held finding, and every acceptance criterion left neither MET nor proven by a test nor dismissed, of the
+    """{id: finding} for every confirmed or held finding, every confirmed design mismatch, and every acceptance criterion left neither MET nor proven by a test nor dismissed, of the
     project's last verify and reviews (results/verify.json, smoke.json, review.json, review-*.json), the ones a dismissal may name."""
     found = {}
     results = Path(proj) / "results"
@@ -68,6 +77,8 @@ def last_confirmed(proj):
         for r in ((last[0].get("acceptance") or {}).get("criteria") or []) if last else []:
             if r.get("choice") != "MET" and not r.get("proven_by") and not r.get("dismissed"):
                 found[acceptance_id(r)] = acceptance_finding(r)
+        for r in ((last[0].get("design") or {}).get("failed") or []) if last else []:
+            found[design_id(r)] = design_finding(r)
         reviews = [r.get("review") for r in last] if "rounds" in data else [data.get("review")]
         for rv in reviews:
             for i in (rv or {}).get("confirmed", []) + (rv or {}).get("held", []):

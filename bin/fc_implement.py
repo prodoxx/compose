@@ -267,7 +267,8 @@ def run_task(repo, proj, task, attempts, model=None, reset_files=False, tag=""):
               f"{context}{body}\n\n"
               f"Files you may edit: {abs_files}.\n"
               f"Files you must NOT edit: {abs_protected}.\n" +
-              (f"Files this task reads, read-only (a `.reads/<rev>/` file is that path as of the commit): {', '.join(reads)}.\n" if reads else "") + (f"Figma nodes this task builds, as Framelink JSON (read, never edit): {', '.join(nodes)}.\n" if nodes else "") + ground_note +
+              (f"Files this task reads, read-only (a `.reads/<rev>/` file is that path as of the commit): {', '.join(reads)}.\n" if reads else "") + (f"Figma nodes this task builds, as Framelink JSON (read, never edit): {', '.join(nodes)}. Build each node's look, not only its words: "
+               "verify compares your code with it, element by element: fill, border, radius, padding, gap, font size, weight, line height and colour, and the variant of each component it places.\n" if nodes else "") + ground_note +
               f"Done means this command exits 0: {meta['test']}\n"
               "Do not run it, or any other test or build: compose runs the test after your turn ends and sends you what failed. "
               "Read the test file, edit, and end your turn.\n" +

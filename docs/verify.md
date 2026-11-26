@@ -106,9 +106,24 @@ A start stops while a target differs from the record or an env file sets one the
    When a fix round changes nothing for criteria that block (`acceptance_gate`), verify says so and names the dismissal, before it ends with "Unresolved after the fix budget".
    A verdict that judged nothing (a judge error, an unusable reply) is never kept, and `--fresh` rejudges every task.
    Then jev judges whether each task's evidence proves each criterion ([Evidence](#evidence)); that never changes the verdict.
-4. **e2e** has jev drive a real browser to each case's goal.
+4. **design** compares the code of every task that has `figma_nodes:` with the node it names.
+   The acceptance stage hunts for a line that breaks a criterion, so a build with none of the node's styling passes every criterion about words; this stage asks for a match with the design.
+   It reads the Framelink JSON `run` kept for the task in `results/figma/nodes/<file key>-<node>.json` (fetched again only when it is missing), so the build is held to the design the implementer was given.
+   Each visible element of the node becomes one line of facts: its fill, stroke, radius, padding and gap, a text's font, size, weight, line height and colour, and a component instance's variant.
+   The fast model reads those facts next to the task's own files as they are at the verified tip and lists each property the code plainly sets otherwise or does not set at all.
+   A class, token or component whose value the code does not show is never a mismatch.
+   A row must name an element of the node, a value its facts hold, and a line the code holds, or it is dropped; a second call must then confirm it, like a review finding.
+   A confirmed mismatch fails the stage whatever `acceptance_gate` says, since no test covers the look, and goes to the fix round with the design's value.
+   Each one is printed with an `id` (a hash of its task, element and property), and `compose review --project <name> --dismiss <id> --reason "<why the code carries it>"` dismisses a false one.
+   A node that cannot be read, or a model that cannot be asked, is a `TOOL ERROR` and fails the stage: a design nobody compared is no pass.
+   The verdict is kept in `results/design/<id>.json`, keyed by the node's facts, the code and the questions, and reused while they are the same; `--fresh` asks again.
+   The stage reads code, not pixels.
+   For each task whose rendered build no e2e case measures it prints `unmeasured [<id>] the rendered build was not measured against node <node>, only its code was read`.
+   With `--skip-review` it prints `design warn  figma_nodes on task <id>: build not compared to the design`, so a pass never reads as a match by silence.
+   An e2e case measures the rendered build when its `assert` is `compose figma match` ([Measuring a build against its Figma node](#measuring-a-build-against-its-figma-node)).
+5. **e2e** has jev drive a real browser to each case's goal.
    Then the case's `assert` checks the real DOM or log.
-5. **fix** sends confirmed findings to the fix model.
+6. **fix** sends confirmed findings to the fix model.
    Protected files are reverted, and the stages rerun for up to `--fix` rounds before they escalate.
    A confirmed finding in a file a lower layer's task lists and the top task does not is held for the team lead: it is printed as `held` and still fails the review, but no fix round starts for it, because a fix commits on the top layer and the round would be reverted for the lower layer's file.
    Dismiss it when it is false, else cut a top task that lists the file.
@@ -144,7 +159,7 @@ One case on the same path without an override covers it.
 A case that must force the variant says why in `"url_override": "<reason>"`; an empty reason is itself reported.
 
 `compose verify --project <name> --review-only` runs right after `run`.
-It runs the review and the jev acceptance, with no checks, e2e, or fix rounds, and records `results/review.json`.
+It runs the review, the jev acceptance and the design stage, with no checks, e2e, or fix rounds, and records `results/review.json`.
 Findings then arrive while the stack is fresh, as tasks to fix, instead of after the whole pipeline.
 
 `compose verify --project <name> --prototype` runs right after `run` too.
@@ -191,7 +206,7 @@ If that read fails too, it writes anyway, and the reader still keeps one row per
 | `commit_sha` | The commit the row was recorded on; empty when it has none |
 | `task_ids` | The tasks the row covers; empty when it covers none in particular |
 | `criterion_id` | `<task id>.<order>:<first 8 hex of the sha256 of the criterion text>` for each criterion covered; empty means all of the task's criteria |
-| `phase` | `red`, `attempt`, `final`, `case`, `checks`, `scoped`, `e2e`, `review`, `acceptance`, `sufficiency`, `done`, or `cost` |
+| `phase` | `red`, `attempt`, `final`, `case`, `checks`, `scoped`, `e2e`, `review`, `acceptance`, `design`, `sufficiency`, `done`, or `cost` |
 | `source` | `run`, `prove`, `verify`, or `done` |
 | `result` | `pass`, `fail`, `fail_expected`, `error`, `skipped`, `unclear`, `dismissed`, `proven`, `unproven`, or `contradicted` |
 | `fails_on_base` | `true` for a test that must fail before the change, `false` for one that passes, else `null` |
@@ -210,10 +225,10 @@ An `error` is a tool error or a jev that gave up: it is never a `pass`, and neve
 | `run` | `red`, `attempt` (one per test run), and `final`, when a task finishes | the task issue |
 | `verify --prove` | `case`, one per e2e case | the feature issue |
 | `verify` | `checks`, `e2e`, and `review` | the feature issue |
-| `verify` | `scoped` and `acceptance` (one per criterion), then `sufficiency` | each task issue |
+| `verify` | `scoped`, `acceptance` (one per criterion) and `design` (one per task with `figma_nodes:`), then `sufficiency` | each task issue |
 | `compose done` | `done` | the task issue |
 
-`verify` writes a task's `scoped` and `acceptance` rows in one comment per task, and writes nothing for a task whose rows are all reused from an earlier verify: its rows are on the issue already.
+`verify` writes a task's `scoped`, `acceptance` and `design` rows in one comment per task, and writes nothing for a task whose rows are all reused from an earlier verify: its rows are on the issue already.
 
 ### What counts for a task
 
@@ -318,6 +333,30 @@ A review whose confirmation call fails, with no confirmed high, is the same: the
 A case with a `driver` command runs the project's own browser driver instead of jev.
 That driver still gets the stage's browser in `BU_CDP_URL`.
 When no case needs a browser, for example drivers of a terminal app, set `"e2e_browser": false`: the stage then launches none and sets no `BU_CDP_URL`.
+
+## Measuring a build against its Figma node
+
+`compose figma match --project <name> --only <task id>` measures the page a `bp` browser shows against the task's `figma_nodes:`.
+It is made to be an e2e case's `assert`, and needs no script:
+
+```json
+{"name": "resume card matches its design", "url": "http://127.0.0.1:$E2E_PORT/resume", "goal": "Stop on the resume page with no resume uploaded.",
+ "assert": "compose figma match --project <name> --only 012"}
+```
+
+The goal brings the page to the state the node shows (the node is one state: Empty, not Uploading).
+The assert reads the browser on `BP_PORT`, which the e2e stage sets, and measures every shown element: what the browser computed, in px and sRGB, whatever the code wrote (a `rem`, an `oklch()` colour, a Tailwind class).
+A text of the node is the built element that shows its words.
+A frame is, of the built elements that hold every text under it and no other text of the node, the one that carries most of its properties, so one `div` may stand for a frame and the wrapper frame around it.
+It compares only what the design gives an element: a frame's fill, stroke, radius, padding and gap, and a text's font, size, weight, line height and colour.
+A stroke may be a border, an outline or a zero-offset `box-shadow` ring, and a gap is the space between the children however the build makes it.
+Lengths may differ by 1px, a font size by 0.5px, a colour channel by 2.
+Any other difference is a row of the table it prints (element, property, design, built, built element), and it exits 1, so the case fails like any failed assert and the table goes to the fix round.
+Stdout shows the first 20 rows; the whole table is in `results/design/<task id>.match.txt`.
+When under half the node's texts are on the page it prints a line starting `ASSERT FAILED`, which `--prove` reads as "feature missing".
+It says what it did not measure: a frame with no text under it cannot be found on the page, and sizes, positions, effects, images and icons are not compared.
+`--node <ids>` measures those nodes instead of the task's (with `--figma <url or key>` for a file other than the stored one), `--page <id or part of the url>` picks the page when several are open (default: the one that shows most of the node's text), and `--root <css selector>` limits the measuring to one element.
+Outside verify, `bp launch <url>` on a port of your own and the same command measure a page by hand.
 
 ## A browser of your own
 

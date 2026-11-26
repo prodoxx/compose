@@ -228,6 +228,7 @@ route: check-only
   An optional `figma:` line (file key or url) names the task's own Figma file when not the stored one.
 - A task that calls another module's values or types, or ports data from an older commit, names the file on `reads: <paths, or commit:path>`: the implementer's read guard allows its own files and the context pack only, and `reads:` adds read-only access (a `commit:path` entry is written into the clone as `.reads/<commit>/<path>`, kept out of git).
 - A code task that builds a Figma node names it on `figma_nodes: <node ids>`; `run` writes the node's Framelink JSON into its clone, so the brief never carries it.
+  One of its criteria states values measured on the node (a hex fill, a px padding), verify's design stage compares its code with the node, and an e2e case with `compose figma match` as its `assert` measures the rendered screen.
 
 ## Rules
 - Fact-check before you say it.

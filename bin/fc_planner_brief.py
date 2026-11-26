@@ -55,6 +55,7 @@ Every title, description, and criterion you write follows sections/0w.md: plain 
    - one or two files in `files:` (a named lockfile does not count), one test command, at most five acceptance criteria
    - `route: check-only` and no `protected:` by default: `test:` is the check that shows the work exists (the unit's test file, the build, a lint, a probe); a task whose files a Verification policies glob matches, or that the product owner asked a test for, names its test path under `protected:` instead and gets a writer
    - test command runs only its own test: its file, or a name filter (-t, -k, -run, --grep) whenever another open task writes to the same test file, so its gate never fails on cases that land later
+   - a task with `figma_nodes:` states the node's look in one criterion, with values measured on the node: the wrapper's fill as a hex, its border, radius or padding in px, the variant of each component it places; verify compares its code with the node, and criteria of words alone build a bare element
    - description under 2500 characters
    - branch at most 350 lines, added plus deleted
    - no documents: no .md, .txt, .rst, or docs/ files

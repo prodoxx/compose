@@ -132,6 +132,11 @@ So a criterion may name what a screen shows (no label cut off, the total aligned
 A code task names the Figma nodes it builds on a `figma_nodes:` line, like `figma_nodes: 7-21, 9-144`, and its brief never carries their JSON.
 `run` fetches each node through Framelink as the task starts, from the `figma:` file or the project's stored one.
 It writes them into the task's clone as `.figma/<node>.json`, kept out of git, and the implementer may read them.
+It keeps the same JSON in the project, in `results/figma/nodes/<file key>-<node>.json`, and verify holds the build to it.
+Verify's design stage compares the task's code with each node, element by element, and a confirmed mismatch fails verify ([verify](verify.md#stages)).
+An e2e case whose `assert` is `compose figma match --project <slug> --only <id>` measures the rendered page against the node as well ([verify](verify.md#measuring-a-build-against-its-figma-node)).
+So one acceptance criterion of the task states the node's look with values measured on it: the wrapper's fill as a hex, its border, radius or padding in px, and the variant of each component it places.
+`compose spec-check` fails an open task with `figma_nodes:` whose criteria hold no hex colour and no px value: criteria of words alone ("shows 'Upload your resume'") are met by a bare element.
 A task's file is its own `figma:` line or the project's stored file, and nothing else.
 A `figma:` line on a story or a feature is not inherited by its tasks: a task is its own brief and compose block, so what it reads never depends on an issue above it that the task does not show.
 A story whose code tasks build from a second file puts `figma:` on each of those tasks.

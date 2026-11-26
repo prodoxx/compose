@@ -1,6 +1,6 @@
 import ast, json, re, sys
 from pathlib import Path
-import fc_config, fc_core, fc_reads, fc_readguard, fc_routerec, fc_stale, fc_tasks, fc_linear, fc_worktree, fc_change, fc_status, fc_repos, fc_repolist
+import fc_config, fc_core, fc_reads, fc_readguard, fc_routerec, fc_stale, fc_tasks, fc_linear, fc_worktree, fc_change, fc_status, fc_repos, fc_repolist, fc_designmatch
 
 
 def ordered(tasks, a, b):
@@ -394,6 +394,10 @@ def spec_check(data, checks=(), defined=None, scripts=None, repos=None, bases=No
                     gaps.append("empty `files:`")
                 if not meta["protected"] and not meta["delete"] and meta.get("route") != "check-only" and meta["kind"] != "hand":  # no test to write: it deletes, its check is the proof, or it is built by hand
                     gaps.append("empty `protected:`")
+                built = (meta.get("linear_state") or "").lower() in ("in review", "done")  # a built task is judged on its code, not on a brief nobody builds from again
+                if meta["figma_nodes"] and not built and not any(fc_designmatch.MEASURED.search(b) for b in bullets):  # criteria of words alone let a build with none of the node's styling pass (#496)
+                    gaps.append(f"`figma_nodes:` and no acceptance criterion states a value measured on node {', '.join(meta['figma_nodes'])}: add one with the wrapper's fill "
+                                "as a hex and its border, radius or padding in px (and the variant of each component it places), so the look is in the brief")
             gaps += [f"`reads:` {e} must be {fc_reads.invalid(e)}" for e in meta.get("reads") or [] if fc_reads.invalid(e)]
             gaps += missing_after_text({meta["id"]: loose[meta["id"]]} if meta["id"] in loose else {})
             after = next((t["after"] for t in tasks if t["id"] == meta["id"]), "")

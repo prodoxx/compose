@@ -100,6 +100,7 @@ fc_figmanodes
 fc_figmashots
 fc_figmascope
 fc_framelink
+fc_designmatch
 fc_figmatree
 fc_figma
 fc_testred
@@ -122,6 +123,7 @@ fc_shrink
 fc_jev
 fc_review
 fc_accept
+fc_designjudge
 fc_reroute
 fc_depth
 fc_detach

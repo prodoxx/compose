@@ -939,3 +939,23 @@ class RepoRulesCli(unittest.TestCase):
         lines, e, calls = self.spec_check(stdin=json.dumps(payload(issue("ENG-5", "003"))))
         self.assertEqual(([c for c in calls if c[0] in ("ensure", "known")], e.code), ([], 0))
         self.assertFalse(any("repo list" in l for l in lines), lines)
+
+
+class FigmaNodeCriteria(unittest.TestCase):
+    """#496: a task that names a Figma node, with criteria about words alone, built a bare element and passed."""
+    WORDS = "- Empty shows 'Upload your resume', the hint and 'Upload resume'\n- 'Upload resume' opens the file picker"
+
+    def gaps(self, issue):
+        return check([issue])[issue["id"]][2]
+
+    def test_a_task_with_figma_nodes_and_criteria_of_words_alone_is_a_gap(self):
+        gaps = self.gaps(task("ENG-3", "001", crit=self.WORDS, figma_nodes="7-21"))
+        self.assertEqual(len(gaps), 1)
+        self.assertIn("`figma_nodes:` and no acceptance criterion states a value measured on node 7-21", gaps[0])
+
+    def test_a_criterion_with_a_measured_value_a_task_without_nodes_and_a_built_task_pass(self):
+        self.assertEqual(self.gaps(task("ENG-3", "001", crit=self.WORDS + "\n- The card has a #FFFFFF fill, a 1px #E5E7EB border and 24px padding", figma_nodes="7-21")), [])
+        self.assertEqual(self.gaps(task("ENG-3", "001", crit=self.WORDS)), [])
+        for state in ("In Review", "Done"):
+            with self.subTest(state):
+                self.assertEqual(self.gaps({**task("ENG-3", "001", crit=self.WORDS, figma_nodes="7-21"), "status": state}), [])

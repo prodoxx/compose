@@ -1,7 +1,7 @@
 import itertools, json, os, re, shutil, subprocess, sys, tempfile, time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-import fc_core, fc_proc, fc_config, fc_tasks, fc_ledger, fc_linear, fc_models, fc_herdr, fc_fleet, fc_worktree, fc_layers, fc_change, fc_routecost, fc_implement, fc_green, fc_gate, fc_init, fc_jev, fc_accept, fc_reroute, fc_costevent, fc_review, fc_history, fc_load, fc_trailpack, fc_update, fc_fixround, fc_layergate, fc_keepout
+import fc_core, fc_proc, fc_config, fc_tasks, fc_ledger, fc_linear, fc_models, fc_herdr, fc_fleet, fc_worktree, fc_layers, fc_change, fc_routecost, fc_implement, fc_green, fc_gate, fc_init, fc_jev, fc_accept, fc_reroute, fc_costevent, fc_review, fc_history, fc_load, fc_trailpack, fc_update, fc_fixround, fc_layergate, fc_keepout, fc_designjudge
 
 CHECK_TIMEOUT = 900  # seconds a check may run; past it the check fails, named as a timeout
 
@@ -298,6 +298,7 @@ def run_stages(repo, proj, cfg, a, tests=None):
         for r in acc.get("unclear", []):
             if gate:
                 findings.append(f"[high] acceptance criterion not proven, judged {r['choice']} and not confirmed as a violation (task {r['task']}): {r['criterion']}")
+    ok &= fc_designjudge.stage(repo, proj, cfg, a, report, findings)  # a task with figma_nodes: its code against the node; gates like the review
     if e2e:
         ok &= e2e.result()
     pool.shutdown()
@@ -369,12 +370,13 @@ def cmd_verify(a):
             fc_core.sh(["git", "checkout", "-q", "--detach", fc_core.current_branch(repo)], wt, check=False)  # free the top branch again
 
 def fix_answers(repo, fixed, report, install=None):
-    """Whether a fix round answers something reproduced: it removes the line a confirmed review finding quotes, an e2e case
+    """Whether a fix round answers something reproduced: it removes the line a confirmed review finding or design mismatch quotes, an e2e case
     failed (the next round reruns it), a check that failed passes when run again, or it changes the file a confirmed finding
     names and adds a test of its own that fails without the fix and passes with it (a fix that only adds code, a guard)."""
     diff = fc_core.sh(["git", "--literal-pathspecs", "diff", "-U0", "HEAD", "--", *fixed], repo, check=False).stdout
     removed = " ".join(" ".join(l[1:] for l in diff.splitlines() if l.startswith("-") and not l.startswith("---")).split())
     quotes = [" ".join(str(i.get("evidence") or "").split()) for i in (report.get("review") or {}).get("confirmed", [])]
+    quotes += [" ".join(r["code"].split()) for r in (report.get("design") or {}).get("failed", [])]  # the line a design mismatch quotes: a restyle rewrites it
     failed = lambda rs: [r for r in rs if r["exit"] and not r.get("tool_error")]
     ran = [r["cmd"] for r in report.get("checks", []) + report.get("scoped", [])]
     named = [str(i.get("file") or "").lstrip("./") for i in (report.get("review") or {}).get("confirmed", [])]
