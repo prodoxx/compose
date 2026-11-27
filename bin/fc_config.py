@@ -64,6 +64,7 @@ FACTORY = dict(FACTORY_DEFAULTS)  # `factory` from the config over FACTORY_DEFAU
 COMPACT_DEFAULTS = {"judged": True, "minimum": 40000, "budget": 150000, "ceiling": 150000, "idle_seconds": 180, "cooldown": 20000}
 COMPACT = dict(COMPACT_DEFAULTS)  # `compact` from the config over COMPACT_DEFAULTS: when a session is compacted at a task boundary
 LINEAR_KEY = None  # the active workspace's Linear API key, set by apply_config; never printed or passed in argv
+LINEAR_STATES = {}  # `linear_states` from the config: the workspace's own names for the Linear states compose works by (fc_states reads and checks it)
 WORKSPACE = "default"
 CREW_EFFORT = {}  # the same keys -> Claude Code --effort, for entries written as {"model": ..., "effort": ...}
 CREW_FALLBACK = {}  # the same keys -> [(model, effort), ...] to try in order when the entry's own model fails its availability probe
@@ -157,7 +158,7 @@ def compact_off():
 def apply_config(move=True, harness=None):
     """Point models, keys, and env at the active workspace. Its key wins over the shell and the jev .env, and every
     OpenRouter caller (pi, OpenCode, the fast-model review, jev's e2e text helper) bills to it."""
-    global DEFAULT_MODEL, FALLBACK_MODEL, FALLBACK_AFTER, TEST_READER, REVIEW_MODEL, READINESS_MODEL, NIGHT_MODEL, OPENROUTER_KEY, CREW_MODELS, CREW_EFFORT, CREW_FALLBACK, LINEAR_KEY, WORKSPACE, PARALLEL, CLAUDE_PARALLEL, LOAD, FACTORY, COMPACT, PROVIDERS, TIERS, PRICES, HARNESS
+    global DEFAULT_MODEL, FALLBACK_MODEL, FALLBACK_AFTER, TEST_READER, REVIEW_MODEL, READINESS_MODEL, NIGHT_MODEL, OPENROUTER_KEY, CREW_MODELS, CREW_EFFORT, CREW_FALLBACK, LINEAR_KEY, LINEAR_STATES, WORKSPACE, PARALLEL, CLAUDE_PARALLEL, LOAD, FACTORY, COMPACT, PROVIDERS, TIERS, PRICES, HARNESS
     if move:
         for line in fc_auth.move_keys(CONFIG_PATH, ENV_FILE, AUTH_PATH):  # old keys leave config.json and .env first, stdout stays clean
             print(line, file=sys.stderr)
@@ -189,6 +190,7 @@ def apply_config(move=True, harness=None):
             sys.exit(f"{CONFIG_PATH}: load.{k} must be a number above 0, not {LOAD[k]!r}")
     if "high" in LOAD and "low" in LOAD and LOAD["low"] >= LOAD["high"]:
         sys.exit(f"{CONFIG_PATH}: load.low must be below load.high")
+    LINEAR_STATES = st.get("linear_states") or {}
     FACTORY = {**FACTORY_DEFAULTS, **st.get("factory", {})}
     for k, least in (("day_tickets", 1), ("turn_seconds", 10), ("offer_snooze_minutes", 1)):
         if type(FACTORY[k]) is not int or FACTORY[k] < least:
@@ -392,6 +394,8 @@ def cmd_workspace(a):
         lin = "set" if entry.get("linear") else "inherits default" if n != "default" and dlin else "not set"
         print(f"{'*' if n == current else ' '} {n:16} openrouter key {state}, linear key {lin}")
     _, st = settings(cfg)
+    for ours, own in (st.get("linear_states") or {}).items() if isinstance(st.get("linear_states"), dict) else ():
+        print(f"linear state {ours} is {' or '.join(own) if isinstance(own, list) else own} in {current}")
     m = st.get("models", {})
     print(f"implementer {m.get('implementer', DEFAULT_MODEL)}\nfallback    {m.get('fallback', FALLBACK_MODEL)} after {m.get('fallback_after', FALLBACK_AFTER)} failed attempts\n"
           f"test reader {m.get('test_reader', TEST_READER)}\nfix         {m.get('fix', '(implementer)')}")

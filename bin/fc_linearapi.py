@@ -2,7 +2,7 @@
 learns the hour's budget from Linear's reply headers, and a rate limit one call runs into holds the whole fleet as long as Linear says.
 The key is the active workspace's `linear_api_key`; it goes in a header, never argv or a results file."""
 import http.client, json, os, socket, sys, threading, time, urllib.error, urllib.request
-import fc_config, fc_pace
+import fc_config, fc_pace, fc_states
 
 LINEAR_URL = "https://api.linear.app/graphql"
 
@@ -138,14 +138,15 @@ def linear_gql(query, variables):
     run, so it holds every process off Linear, waits as long as Linear says (while that fits in the time left) and runs again,
     saying so on stderr. A read that failed in transit (a timeout, a reset, a 5xx) is run again after each of
     LINEAR_TRANSIENT_WAITS while that fits in the time left, and raises LinearNoAnswer when none of its tries is answered: one
-    blip of the network must not end a long job. A write is never run again, since it may have landed."""
+    blip of the network must not end a long job. A write is never run again, since it may have landed. Every state in the answer
+    carries compose's name for it (fc_states.read), whatever the workspace's team calls it."""
     deadline = time.monotonic() + LINEAR_CALL_SECONDS
     write = query.lstrip().startswith("mutation")
     limited = transient = 0
     while True:
         fc_pace.wait("linear", linear_pace, deadline - time.monotonic(), "Linear")
         try:
-            return _within(deadline - time.monotonic(), lambda: _linear_post(query, variables, limited))
+            return fc_states.read(_within(deadline - time.monotonic(), lambda: _linear_post(query, variables, limited)))
         except LinearRateLimited as e:
             fc_pace.hold("linear", e.wait)
             if e.wait > deadline - time.monotonic() or limited == LINEAR_RETRIES:

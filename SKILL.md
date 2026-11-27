@@ -34,6 +34,7 @@ If it exits naming `compose cannot name this repo`, ask the user for `<owner>/<n
 `compose init` ignores `.compose/`, `graft/`, and `.trail/` in every checkout before anything else.
 You create and edit issues and write judgment comments with `compose linear` (`get <id> [--body] [--comments]`, `list --parent <id> | --search "<terms>"`, `create`, `update <id>`, `comment <id>`, `labels`, `project`, `doc`), never a Linear MCP tool; the CLI moves task, story, and feature states and writes the routine run comments, all with the workspace's Linear key.
 The Linear key is required: without it `compose doctor` fails and `compose linear` stops with the line that stores one.
+compose names the states Backlog, Todo, Planning, In Progress, In Review and Done whatever the team calls them: a workspace's `linear_states` holds the team's own names, `compose linear` prints and takes compose's, and the CLI moves issues to the team's.
 `get` and `list` print one compact line per issue (`<id> <state> <label> <title>`); add `--body` or `--comments` to `get` only when needed.
 Write bodies come from `--file <path>` or stdin, never from the command line.
 `update` writes the body only with `--section "<heading>"`, `--append`, or `--description`; `--file` alone exits and writes nothing.

@@ -1,5 +1,5 @@
 import json, os, re, sys, threading, time
-import fc_core, fc_config, fc_tiers
+import fc_core, fc_config, fc_states, fc_tiers
 
 
 # ---------- tasks ----------
@@ -117,6 +117,9 @@ def sync_tasks(proj, data, repo=None, several=False):
     if data["feature"].get("id") != feature:
         sys.exit(f"sync got feature {data['feature'].get('id')!r}, but {link} says {feature!r}")
     linked = json.loads(link.read_text())
+    # A payload read from Linear by hand names each state as the team does: here it takes compose's name, as a read by the CLI already has.
+    ours = lambda b: {**b, "status": fc_states.canonical(b.get("status"))} if isinstance(b, dict) and b.get("status") else b
+    data = {**data, "issues": [{**ours(i), **({"blockedBy": [ours(b) for b in i["blockedBy"]]} if i.get("blockedBy") else {})} for i in data["issues"]]}
     stories, design_epic = set(linked.get("stories") or []), linked.get("design_epic")
     if stories:  # a project scoped to stories sees those stories and their children, nothing else under the feature; the design epic's issues stay
         missing = [i["id"] for i in data["issues"] if i["id"] not in stories and "parentId" not in i]

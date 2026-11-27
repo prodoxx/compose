@@ -144,6 +144,9 @@ A team with no Planning state gets one, unstarted, between Todo and In Progress.
 Planning is as open as Todo: readiness judges the story, the factory can start it, and it leaves Planning by the roll-up below.
 A task issue is never in Planning.
 
+These are compose's names for the states.
+A team that calls them something else, such as Ready for Dev, Dev In Progress, PR In Review and Staged, is named in its workspace's `linear_states`, see [Linear state names](workspaces.md#linear-state-names).
+
 The roll-up rules, per story and then per feature:
 
 - Done when every child that is not Canceled is Done.

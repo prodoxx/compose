@@ -88,6 +88,7 @@ Everything else you edit by hand.
 | `claude_parallel` | a whole number of 1 or more | `3` | The cap on Claude Code sessions among those agents. |
 | `branch_prefix` | a string | `compose/` | The start of every new project's branch. |
 | `max_stack_prs` | a whole number | `10` | The most PRs one stack opens; adjacent layers fold past it. |
+| `linear_states` | a map of compose's state to the team's name, or a list of names | none | The team's own names for the Linear states compose works by, see [Linear state names](workspaces.md#linear-state-names). |
 | `notify.ntfy` | an `http://` or `https://` topic URL | none (off) | Sends a phone notification for a gate only you can clear, see [Phone notifications](#phone-notifications). |
 
 A command's own flag always wins over the config.
@@ -256,7 +257,7 @@ A workspace is one set of keys plus optional overrides.
 A name under `workspaces` holds the same keys as the top level, and the active one is merged over the top level one level deep:
 
 - For a plain value (`parallel`, `claude_parallel`, `branch_prefix`, `max_stack_prs`), the workspace's value replaces the top-level one.
-- For `models`, `env`, `providers` and `notify`, the workspace's entries replace the top-level entries of the same name, and the top-level entries it does not name stay.
+- For `models`, `env`, `providers`, `notify` and `linear_states`, the workspace's entries replace the top-level entries of the same name, and the top-level entries it does not name stay.
 - That is one level only.
   A workspace's `models.crew` replaces the whole top-level `models.crew`, and a workspace's `providers.ollama` replaces the whole top-level `providers.ollama`, so give it its own `base_url` and `models`.
 
@@ -337,6 +338,9 @@ A bad entry stops the command with one line that names the entry.
 | `providers.<name>.models must be a list of model ids` | Make `models` a list of strings, or remove it. |
 | `<model> is not in providers.<name>.models: <the list>` | Add the model to the list, or use one that is in it. |
 | `parallel must be a whole number of 1 or more` | Same for `claude_parallel`. |
+| `linear_states.<name>: compose has no such state` | Use one of Backlog, Todo, Planning, In Progress, In Review, Done as the key. |
+| `linear_states.<name> must be the team's name for <state>, or a list of names` | Give the state a name, or a list of names with the one compose writes first. |
+| `linear_states.<name>: '<team name>' already stands for <state>` | A team's state is one of compose's states, not two: remove it from one entry. |
 | `models.tiers.<tier>: tiers are cheap, standard, frontier` | Rename the tier. |
 | `prices must be an object of model id to 2 or 4 numbers, not <value>` | Make `prices` a map of model id to a list of 2 or 4 numbers. |
 | `prices.<model> must be 2 or 4 numbers` | Give that model 2 numbers (input, output) or 4 (input, output, cache write, cache read). |

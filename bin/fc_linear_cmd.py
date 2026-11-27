@@ -2,7 +2,7 @@
 import hashlib, json, os, re, select, sys, time, urllib.parse
 from pathlib import Path
 
-import fc_core, fc_config, fc_labels, fc_layout, fc_linear, fc_plan, fc_tasks
+import fc_core, fc_config, fc_labels, fc_layout, fc_linear, fc_plan, fc_states, fc_tasks
 
 
 def issue_line(issue):
@@ -84,7 +84,7 @@ def label_ids(team, names, types=None):
 def state_and_labels(team, a, types=None):
     out = {}
     if a.state:
-        s = next((s for s in team["states"]["nodes"] if s["name"].lower() == a.state.lower()), None)
+        s = next((s for s in team["states"]["nodes"] if s["name"].lower() == fc_states.canonical(a.state).lower()), None)
         if not s:
             sys.exit(f"team {team['name']} has no state '{a.state}'")
         out["stateId"] = s["id"]
@@ -298,7 +298,8 @@ def verb_list(a):
     if a.search:
         f["searchableContent"] = {"contains": a.search}
     if a.state:
-        f["state"] = {"name": {"eqIgnoreCase": a.state}}
+        named = [{"name": {"eqIgnoreCase": n}} for n in fc_states.names(a.state)]  # the team's own names for it too
+        f["state"] = named[0] if len(named) == 1 else {"or": named}
     if a.label:
         f["labels"] = {"some": fc_labels.list_filter(a.label, fc_labels.types_map(a.repo))}
     query = "query($after: String, $f: IssueFilter) { issues(first: 100, after: $after, filter: $f) { pageInfo { hasNextPage endCursor } nodes { identifier title state { name } labels { nodes { name } } } } }"

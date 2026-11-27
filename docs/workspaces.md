@@ -151,6 +151,40 @@ It moves tasks to In Progress and In Review, rolls up the stories and the featur
 Without the key, `compose doctor` fails and `compose linear` stops with the line that stores one.
 A Linear error never stops a run.
 
+## Linear state names
+
+compose reads and moves Linear issues by six state names: Backlog, Todo, Planning, In Progress, In Review and Done.
+A team that names its states another way is described once, in the workspace that holds its Linear key:
+
+```json
+"workspaces": {
+  "jobscan": {
+    "linear_states": {
+      "Todo": "Ready for Dev",
+      "In Progress": "Dev In Progress",
+      "In Review": "PR In Review",
+      "Done": "Staged"
+    }
+  }
+}
+```
+
+Each key is compose's state and each value is the team's name for it.
+With this table a dispatched task moves to Dev In Progress, a passed one to PR In Review, and `compose clean` moves merged work to Staged.
+The lines compose prints on a move name the state as the board shows it.
+Everything else in compose, its docs and its agents keeps saying Todo, In Progress, In Review and Done, and `compose linear` prints and takes those names; `--state` takes the team's name too.
+
+A value may be a list of names.
+compose moves an issue to the first name in the list that the team has, and reads every name in the list as that state.
+`"Done": ["Done", "Staged"]` reads a Staged issue as finished and still moves merged work to Done.
+
+- A state of the team's own that already carries compose's name is read by it with no entry: with `"Done": "Staged"`, an issue a person moved on to Done is finished, and compose leaves it there.
+- A state no entry names keeps its own name, and compose never moves an issue to it.
+- A canceled state needs no entry: compose knows it by its type, whatever it is called.
+- A team in the same workspace that has compose's own names is read and moved as before.
+- Planning is found by name, and made when the team has none; name the team's own planning state under `"Planning"` to use that one.
+- `compose workspace` lists the active workspace's table.
+
 ## Crew models
 
 `models.crew` picks each teammate's model by role, then `default`.

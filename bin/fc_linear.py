@@ -1,7 +1,7 @@
 import json, re, sys
 from pathlib import Path
 from typing import Callable, Optional
-import fc_core, fc_config, fc_layout, fc_linearapi, fc_plan, fc_repos, fc_tasks
+import fc_core, fc_config, fc_layout, fc_linearapi, fc_plan, fc_repos, fc_states, fc_tasks
 
 
 # A connection costs its `first` times what it holds, and the API key's hour is 3,000,000 points shared by the whole fleet: 50 relations and 20
@@ -88,7 +88,8 @@ def linear_issue(ident):
     return issue
 
 def linear_move(issue, state):
-    """Move an issue to the team state named `state` (case-insensitive). No-op when it is already there."""
+    """Move an issue to the team state named `state` (case-insensitive), compose's name for it: the line says the team's own.
+    No-op when it is already there."""
     if (issue["state"]["name"] or "").lower() == state.lower():
         return False
     match = [n for n in issue["team"]["states"]["nodes"] if n["name"].lower() == state.lower()]
@@ -96,7 +97,7 @@ def linear_move(issue, state):
         raise RuntimeError(f"{issue['identifier']}: the team has no {state!r} state")
     linear_gql("mutation($id: String!, $s: String!) { issueUpdate(id: $id, input: {stateId: $s}) { success } }",
                {"id": issue["id"], "s": match[0]["id"]})
-    fc_core.say(f"linear {issue['identifier']} -> {state}")
+    fc_core.say(f"linear {issue['identifier']} -> {fc_states.shown(match[0], state)}")
     return True
 
 def linear_comment(issue, body):

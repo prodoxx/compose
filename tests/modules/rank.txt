@@ -13,6 +13,7 @@ fc_pace
 fc_transcript
 fc_snapshot
 fc_compactlog
+fc_states
 fc_linearapi
 fc_labels
 fc_load
